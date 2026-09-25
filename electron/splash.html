@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Topset</title>
+    <style>
+      :root {
+        --bg: #0a0a0c;
+        --surface: #121216;
+        --surface-2: #17171c;
+        --surface-3: #1e1e24;
+        --border: #26262e;
+        --fg: #e8e8ec;
+        --muted: #6f6f7d;
+        --accent: #e5365a;
+        --shimmer: #202027;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+        -webkit-user-select: none;
+        user-select: none;
+        overflow: hidden;
+      }
+
+      .skeleton {
+        position: relative;
+        overflow: hidden;
+        background: var(--surface-2);
+        border-radius: 6px;
+      }
+      .skeleton::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        transform: translateX(-100%);
+        background: linear-gradient(90deg, transparent, var(--shimmer), transparent);
+        animation: shimmer 1.3s ease-in-out infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .skeleton::after {
+          animation: none;
+        }
+      }
+      @keyframes shimmer {
+        100% {
+          transform: translateX(100%);
+        }
+      }
+
+      /* Top bar */
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        height: 48px;
+        padding: 0 16px;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+      .mark {
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        white-space: nowrap;
+      }
+      .mark span {
+        color: var(--accent);
+      }
+      .topbar .skeleton {
+        height: 12px;
+      }
+      .tab {
+        width: 70px;
+      }
+
+      /* Body: sidebar + grid */
+      .body {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+      }
+      .sidebar {
+        width: 200px;
+        flex-shrink: 0;
+        border-right: 1px solid var(--border);
+        padding: 14px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .sidebar .skeleton {
+        height: 28px;
+        width: 100%;
+      }
+      .sidebar .skeleton:nth-child(3) {
+        width: 70%;
+      }
+
+      .main {
+        flex: 1;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-width: 0;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+      }
+      .row .skeleton {
+        height: 22px;
+        flex: 1;
+      }
+      .row .skeleton:nth-child(1) {
+        flex: 0 0 140px;
+      }
+
+      .row:nth-of-type(1) .skeleton {
+        opacity: 0.9;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="topbar">
+      <div class="mark"><span>T</span>opset</div>
+      <div class="skeleton tab"></div>
+      <div class="skeleton tab"></div>
+      <div class="skeleton tab"></div>
+    </div>
+    <div class="body">
+      <div class="sidebar">
+        <div class="skeleton"></div>
+        <div class="skeleton"></div>
+        <div class="skeleton"></div>
+        <div class="skeleton"></div>
+        <div class="skeleton"></div>
+        <div class="skeleton"></div>
+      </div>
+      <div class="main" id="rows"></div>
+    </div>
+    <script>
+      // Built in script, not markup: one row template beats fourteen near-identical divs.
+      const rows = document.getElementById("rows");
+      const cols = [140, 90, 90, 90, 90, 90, 90, "auto"];
+      for (let r = 0; r < 14; r++) {
+        const row = document.createElement("div");
+        row.className = "row";
+        for (const w of cols) {
+          const cell = document.createElement("div");
+          cell.className = "skeleton";
+          if (w !== "auto") cell.style.flex = `0 0 ${w}px`;
+          cell.style.animationDelay = `${(r % 5) * 0.08}s`;
+          row.appendChild(cell);
+        }
+        rows.appendChild(row);
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,336 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Coach {
+  id       String    @id @default(cuid())
+  /// What the coach signs in with. Lowercase; Topset never sends mail, so it isn't an email.
+  username String    @unique
+  name     String
+  /// Coach-wide preferences as JSON — see src/lib/settings.ts for the shape and defaults.
+  settings String    @default("{}")
+  /// Sign-in for the Topset server (the hosted app). Null for a coach who never signed up,
+  /// and on every desktop copy — the server keeps these, sync never carries them.
+  passwordHash String?
+  isAdmin      Boolean  @default(false)
+  /// Bumped on the server whenever this coach's athletes log something, so a desktop
+  /// app can tell nothing changed without reading every set. Server-only, never synced.
+  athleteVersion Int    @default(0)
+  /// Set when the admin turns the account off: no sign-in, no sync, no athlete links.
+  /// The data stays, and the admin can turn it back on. Server-only.
+  disabledAt     DateTime?
+  /// A one-time code from the admin for setting a new password, as a hash. Server-only.
+  resetCodeHash  String?
+  resetExpiresAt DateTime?
+  athletes Athlete[]
+  sessions CoachSession[]
+}
+
+/// A signed-in desktop app. Only a hash of its token is kept.
+model CoachSession {
+  id         String   @id @default(cuid())
+  coachId    String
+  coach      Coach    @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@index([coachId])
+}
+
+/// A one-time code the admin hands a new coach to create their account with.
+model Invite {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  note      String?
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+  usedBy    String?
+}
+
+model Athlete {
+  id       String  @id @default(cuid())
+  coachId  String
+  coach    Coach   @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  name     String
+  unit     Unit    @default(KG)
+  squat1RM Float?
+  bench1RM Float?
+  dead1RM  Float?
+  /// Secret for the athlete's check-in link. Null until the coach hands one out; a new one
+  /// replaces the old, so a lost phone is one click away from locked out.
+  accessToken String? @unique
+  /// Weekdays the athlete app asks for a readiness check-in, 0 = Monday … 6 = Sunday,
+  /// comma-separated ("0,3"). Empty: never asked.
+  readinessDays String @default("")
+  blocks   Block[]
+  programs Program[]
+  meets    Meet[]
+  bodyweights BodyweightLog[]
+  readiness   ReadinessLog[]
+
+  @@index([coachId])
+}
+
+/// An athlete's plan. It is a name and an ordered list of phases — everything else
+/// (dates, weeks, the grid, the 1RMs) belongs to the phase it was written for.
+model Program {
+  id        String   @id @default(cuid())
+  athleteId String
+  athlete   Athlete  @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime @default(now())
+  phases    Block[]
+
+  @@index([athleteId])
+}
+
+model Meet {
+  id          String    @id @default(cuid())
+  athleteId   String
+  athlete     Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  name        String
+  federation  String?
+  weightClass String?
+  bodyweight  Float?
+  date        DateTime
+  createdAt   DateTime  @default(now())
+  attempts    Attempt[]
+
+  @@index([athleteId])
+}
+
+model Attempt {
+  id     String        @id @default(cuid())
+  meetId String
+  meet   Meet          @relation(fields: [meetId], references: [id], onDelete: Cascade)
+  lift   MeetLift
+  number Int
+  weight Float?
+  result AttemptResult @default(PENDING)
+
+  @@unique([meetId, lift, number])
+}
+
+/// One phase of a program: its own start date, week count, grid and maxes.
+model Block {
+  id        String   @id @default(cuid())
+  athleteId String
+  athlete   Athlete  @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  programId String
+  program   Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  order     Int      @default(0)
+  /// The phase's own name — "Base", "Peak". The program holds the plan's name.
+  phase     String
+  startDate DateTime
+
+  // The maxes this block was written against. Seeded from the athlete when the block is
+  // created, then frozen: a new PR must not silently rewrite a block already handed out.
+  squat1RM  Float?
+  bench1RM  Float?
+  dead1RM   Float?
+  createdAt DateTime @default(now())
+  weeks     Week[]
+
+  @@index([athleteId])
+  @@index([programId])
+}
+
+/// A week of a phase, with its own days. Weeks do not have to match each other: a week
+/// owns its sessions outright, so one can drop an exercise, reorder, or rest a day
+/// without touching the rest of the phase.
+model Week {
+  id      String @id @default(cuid())
+  blockId String
+  block   Block  @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  /// 1-based week number within the phase.
+  order   Int
+  /// A locked week keeps whatever is in it — progression rules skip over it when
+  /// writing later weeks, so a manually-tuned deload doesn't get overwritten.
+  locked  Boolean @default(false)
+  days    Day[]
+
+  @@unique([blockId, order])
+}
+
+model Day {
+  id     String        @id @default(cuid())
+  weekId String
+  week   Week          @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  index  Int
+  label  String
+  rest   Boolean       @default(false)
+  rows   ExerciseRow[]
+
+  @@unique([weekId, index])
+}
+
+model ExerciseRow {
+  id       String @id @default(cuid())
+  dayId    String
+  day      Day    @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  order    Int
+  tier     Tier   @default(ACCESSORY)
+  target   String
+  exercise String
+
+  // What this row prescribes, for its own week. A row is one exercise on one day of one
+  // week, so the prescription belongs on it rather than in a per-week side table.
+  sets          Int?
+  reps          Int?
+  intensityType IntensityType @default(RPE)
+  intensity     Float?
+  intensityMax  Float?
+  rampStep      Float?
+  coachNotes    String?
+  /// e.g. "3-1-X", free text.
+  tempo         String?
+  /// Rest between sets, free text ("2-3 min").
+  restTime      String?
+  videoUrl      String?
+
+  // What the athlete actually did.
+  actualWeight Float?
+  performedRpe Float?
+  athleteNotes String?
+
+  /// The same exercise in the week before. Progressions walk this chain forward, so a
+  /// rule written once still drives the weeks that follow it.
+  fromId String?      @unique
+  from   ExerciseRow? @relation("WeekChain", fields: [fromId], references: [id], onDelete: SetNull)
+  next   ExerciseRow? @relation("WeekChain")
+
+  rules ProgressionRule[]
+  /// Set by set, as the athlete checked them off in the athlete app.
+  logs  SetLog[]
+
+  @@unique([dayId, order])
+}
+
+/// One set the athlete logged against a row. Sets past the prescribed count are extras.
+model SetLog {
+  id       String      @id @default(cuid())
+  rowId    String
+  row      ExerciseRow @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  /// 0-based.
+  setIndex Int
+  weight   Float?
+  reps     Int?
+  rpe      Float?
+  /// Reps in reserve, when the athlete logged effort that way. A set has an RPE or an RIR.
+  rir      Float?
+  done     Boolean     @default(false)
+  loggedAt DateTime    @updatedAt
+
+  @@unique([rowId, setIndex])
+  @@index([loggedAt])
+}
+
+/// A weigh-in, from the athlete app or typed in by the coach. Both sides write these, so
+/// sync merges them row by row: the newer `updatedAt` wins, and a delete is a tombstone
+/// (`deletedAt`) rather than a missing row, so it travels like any other edit.
+model BodyweightLog {
+  id        String    @id @default(cuid())
+  athleteId String
+  athlete   Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  /// The day it was weighed, `YYYY-MM-DD` on the athlete's calendar.
+  day       String
+  /// In the athlete's unit.
+  weight    Float
+  note      String?
+  /// "athlete" or "coach": who entered it.
+  source    String    @default("athlete")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([athleteId, day])
+}
+
+/// How the athlete feels before training, on the days the coach asks: four 1–5 scores,
+/// higher is better on each (5 = slept great, no stress, fresh, full of energy), and a
+/// note. One per athlete per day. Synced like weigh-ins: newer edit wins, deletes are
+/// tombstones.
+model ReadinessLog {
+  id        String    @id @default(cuid())
+  athleteId String
+  athlete   Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  /// `YYYY-MM-DD` on the athlete's calendar.
+  day       String
+  sleep     Int?
+  stress    Int?
+  soreness  Int?
+  energy    Int?
+  note      String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([athleteId, day])
+}
+
+model ProgressionRule {
+  id         String      @id @default(cuid())
+  rowId      String
+  row        ExerciseRow @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  order      Int
+  field      ProgField
+  op         ProgOp      @default(ADD)
+  amount     Float
+  everyWeeks Int         @default(1)
+  startWeek  Int         @default(2)
+  endWeek    Int?
+  enabled    Boolean     @default(true)
+
+  @@index([rowId])
+}
+
+enum Unit {
+  KG
+  LB
+}
+
+enum Tier {
+  PRIMARY
+  SECONDARY
+  VARIATION
+  BACKOFF
+  ACCESSORY
+}
+
+enum ProgField {
+  SETS
+  REPS
+  INTENSITY
+}
+
+enum ProgOp {
+  ADD
+  MULTIPLY
+}
+
+enum MeetLift {
+  SQUAT
+  BENCH
+  DEADLIFT
+}
+
+enum AttemptResult {
+  PENDING
+  GOOD
+  MISS
+}
+
+enum IntensityType {
+  RPE
+  RIR
+  PERCENT
+  WEIGHT
+  RANGE
+  BACKOFF
+}

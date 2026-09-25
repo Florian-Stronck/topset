@@ -1,0 +1,46 @@
+appId: io.github.florian-stronck.topset
+productName: Topset
+copyright: Copyright © 2026 Florian Stronck. Licensed under AGPL-3.0-or-later.
+
+# Left unpacked on purpose: better-sqlite3 ships a native .node that cannot be loaded
+# out of an asar, and the Next server reads its own build output from disk.
+asar: false
+
+# better-sqlite3 ships Node-API prebuilds, which are stable across Node and Electron
+# alike. Rebuilding them would only trade a working binary for a C++ toolchain.
+npmRebuild: false
+
+# Chromium's own UI strings, one .pak per language — 55 of them, ~50 MB the portable exe
+# unpacks on every launch. Only the app's languages are kept (Luxembourgish falls back).
+electronLanguages:
+  - en-US
+  - de
+  - fr
+
+directories:
+  output: dist-desktop
+  buildResources: build
+
+# Only the main process and the one native module it loads itself. Everything the site
+# needs is already traced into the standalone server, copied in below.
+files:
+  - "!**/*"
+  - electron/**
+  - package.json
+  - node_modules/better-sqlite3/lib/**
+  - node_modules/better-sqlite3/prebuilds/win32-x64.node
+  - node_modules/better-sqlite3/package.json
+
+# The built site is copied in by hand afterwards — see electron/after-pack.js for why
+# neither the file globs nor extraResources can carry it.
+afterPack: electron/after-pack.js
+
+win:
+  # A folder, not the single-file "portable" exe: that one unpacks the whole app (~380 MB)
+  # into %TEMP% on every launch — 11–17 s before a window appears, against well under a
+  # second run straight from the folder. The data is still kept beside Topset.exe, so the
+  # folder can be moved or copied to a stick as before.
+  target:
+    - zip
+  artifactName: Topset.zip
+  icon: electron/icon.ico

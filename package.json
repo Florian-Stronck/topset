@@ -1,0 +1,61 @@
+{
+  "name": "topset",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "vercel-build": "prisma generate && tsx scripts/migrate-cloud.ts && next build",
+    "start": "next start",
+    "lint": "eslint",
+    "postinstall": "prisma generate",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "desktop": "electron .",
+    "desktop:build": "node scripts/make-icon.mjs && next build && node scripts/prepare-desktop.mjs && node scripts/package-desktop.mjs",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset": "prisma db push --force-reset && tsx prisma/seed.ts"
+  },
+  "overrides": {
+    "better-sqlite3": "^13.0.3"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "@prisma/adapter-better-sqlite3": "^7.10.0",
+    "@prisma/adapter-libsql": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "better-sqlite3": "^13.0.3",
+    "exceljs": "^4.4.0",
+    "jspdf": "^4.2.1",
+    "next": "16.3.5",
+    "qrcode": "^1.5.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^20",
+    "@types/pg": "^8.23.1",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "dotenv": "^18.0.2",
+    "electron": "^44.4.4",
+    "electron-builder": "^26.15.3",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "prisma": "^7.10.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.15",
+    "typescript": "^5"
+  },
+  "license": "AGPL-3.0-or-later",
+  "description": "Programming, tracking and meet planning for strength coaches: a spreadsheet-fast grid on the desktop, a check-in page on the athlete's phone.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Florian-Stronck/topset.git"
+  },
+  "author": "Florian Stronck"
+}

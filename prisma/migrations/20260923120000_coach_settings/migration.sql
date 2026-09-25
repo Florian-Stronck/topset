@@ -1,0 +1,1 @@
+ALTER TABLE "Coach" ADD COLUMN "settings" TEXT NOT NULL DEFAULT '{}';
