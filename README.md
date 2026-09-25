@@ -6,6 +6,8 @@ Topset runs as a desktop app (**Topset.exe**, Windows). Everything you write sta
 
 Available in English, Deutsch, Français and Lëtzebuergesch (**Settings → App → Language**).
 
+![The programming grid: a week of squat, bench and deadlift sessions with target weights calculated from the 1RMs](docs/screenshots/programming.png)
+
 ---
 
 ## Getting started
@@ -19,14 +21,41 @@ Available in English, Deutsch, Français and Lëtzebuergesch (**Settings → App
 
 ## The screens
 
-| Screen | What it's for |
-| --- | --- |
-| **Overview** | One table for the whole roster this week: each day done, partly done or missed, completion, bodyweight against the next meet's class, and days left in the phase. Above it, one feed: warnings first (missed sessions, RPE drifting off plan, over the weight class, a program running out), then the latest check-ins, each with one button to act on it. |
-| **Athletes** | The roster, everyone's current 1RMs, exports and athlete links. |
-| **Programming** | Where you write the plan, one week at a time. |
-| **Tracking** | The trend across programs, with the chosen week's sets directly below. Missed rows get a red edge; sets more than 5% under target or 1 RPE over the plan get an amber one, and **Off-plan only** shows just those. The day's readiness check-in sits in its header. Below: weekly sets by TARGET (bench also counts for Chest, squat and deadlift for Legs; click a header to sort), the history of any exercise across all programs, estimated 1RMs, and bodyweight with where the trend lands on meet day. Arrows next to the name step through the roster. |
-| **Competition** | Meets, attempt planning off the 1RMs, and results written back as new maxes. |
-| **Settings** | Units, rounding, the RPE chart, defaults for new programs, exercises, exports, backups and more. |
+The screenshots show made-up demo athletes.
+
+### Overview
+
+One table for the whole roster this week: each day done, partly done or missed, completion, bodyweight against the next meet's class, and days left in the phase. Above it, one feed: warnings first (missed sessions, RPE drifting off plan, over the weight class, a program running out), then the latest check-ins, each with one button to act on it.
+
+![Overview: warnings and check-ins above a week table for the whole roster](docs/screenshots/overview.png)
+
+### Athletes
+
+The roster, everyone's current 1RMs, readiness-check days, exports and athlete links.
+
+![Athletes: a card per athlete with 1RMs, total, readiness days and actions](docs/screenshots/athletes.png)
+
+### Programming
+
+Where you write the plan, one week at a time. See [Writing a program](#writing-a-program) below, and the screenshot at the top.
+
+### Tracking
+
+The trend across programs, with the chosen week's sets directly below. Missed rows get a red edge; sets more than 5% under target or 1 RPE over the plan get an amber one, and **Off-plan only** shows just those. The day's readiness check-in sits in its header. Below: weekly sets by TARGET (bench also counts for Chest, squat and deadlift for Legs; click a header to sort), the history of any exercise across all programs, estimated 1RMs, and bodyweight with where the trend lands on meet day. Arrows next to the name step through the roster.
+
+![Tracking: top sets across the program as a chart, then each logged set against what was prescribed](docs/screenshots/tracking.png)
+
+### Competition
+
+Meets, attempt planning off the 1RMs, and results written back as new maxes.
+
+![Competition: a meet with federation, class and nine planned attempts](docs/screenshots/competition.png)
+
+### Settings
+
+Units, rounding, the RPE chart, defaults for new programs, exercises, exports, backups and more.
+
+![Settings: units, rounding and the editable RPE chart](docs/screenshots/settings.png)
 
 ## Writing a program
 
@@ -68,6 +97,8 @@ Each exercise can carry rules in its PROGRESSION column, e.g. `+1 rep / week`, `
 
 `Ctrl+K` opens the command palette. `Alt+/` shows every shortcut. Grid shortcuts can be changed under **Settings → Keyboard**.
 
+![The command palette over the programming grid, with shortcuts next to each command](docs/screenshots/command-palette.png)
+
 | Keys | What they do |
 | --- | --- |
 | `Alt+←` / `Alt+→` | Previous / next week |
@@ -101,6 +132,8 @@ Your name, logo, header and footer for PDFs and prints are set under **Settings 
 
 Once you're signed in to a Topset server, click **Athlete link** on an athlete's card and share the QR code or link. On their phone the athlete gets:
 
+<img src="docs/screenshots/athlete-app.png" alt="The athlete app on a phone: today's session with bodyweight, readiness and every logged set" width="320" align="right">
+
 - **Today**: the session, set by set, to log weight, reps and RPE or RIR, with notes and videos.
 - **History**: every session done so far and what's coming up.
 - **Tools**: a plate calculator and an e1RM calculator.
@@ -108,6 +141,8 @@ Once you're signed in to a Topset server, click **Athlete link** on an athlete's
 - **Readiness**: sleep, stress, soreness and energy (1–5) and a note, on the weekdays you tick under **Readiness check** on the athlete's card. Low readiness shows up on Overview.
 
 What they log shows up in **Tracking** and **Overview** within seconds. You can add or delete weigh-ins yourself on **Tracking** too (at a weigh-in, say); the newer edit wins, on either side. **New link** replaces a lost link; **Turn off** stops it.
+
+<br clear="all">
 
 ## Your data
 
