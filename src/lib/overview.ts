@@ -1,5 +1,5 @@
 import type { BodyweightSummary } from "@/lib/bodyweight";
-import { LOW_READINESS, READINESS_FIELDS, readinessScore, type ReadinessEntry } from "@/lib/readiness";
+import { LOW_READINESS, type ReadinessDay } from "@/lib/checkins";
 import { completionPct, dayStatus, daySets, DRIFT_MIN_ROWS, DRIFT_WARN, rpeDrift, type ComplianceRow, type DayStatus } from "@/lib/compliance";
 import { liftOf } from "@/lib/intensity";
 import { formatDate, ymdOf } from "@/lib/dates";
@@ -78,7 +78,7 @@ export function currentBlock(blocks: BlockSummary[], today: Date): BlockSummary 
 }
 
 /** What a flag's one button does: open the plan, open Tracking, or hand out the link. */
-export type FlagAction = "program" | "review" | "link";
+export type FlagAction = "program" | "review" | "link" | "checkins";
 
 export type Flag = {
   text: string;
@@ -281,8 +281,8 @@ export function trainingFlags(
     bodyweight: BodyweightSummary;
     meet: NextMeet | null;
     unit: string;
-    /** The latest readiness check-in, if any. */
-    readiness?: ReadinessEntry | null;
+    /** The latest check-in day with scale answers, if any. */
+    readiness?: ReadinessDay | null;
     today?: string;
   },
 ): Flag[] {
@@ -310,17 +310,17 @@ export function trainingFlags(
   }
 
   // Low readiness in the last week, with the answers that pulled it down.
-  const score = readiness ? readinessScore(readiness) : null;
+  const score = readiness?.score ?? null;
   if (readiness && score !== null && score <= LOW_READINESS && (!today || readiness.day >= addDays(today, -6))) {
-    const low = READINESS_FIELDS.filter((f) => (readiness[f.key] ?? 5) <= 2).map((f) => `${t(f.label).toLowerCase()} ${readiness[f.key]}`);
+    const low = readiness.low.map((l) => `${l.label.toLowerCase()} ${l.value}`);
     const heavy = mean !== null && n >= DRIFT_MIN_ROWS && mean >= DRIFT_WARN;
     flags.push({
       text:
         t("Readiness {n}/5 on {date}", { n: score, date: formatDate(readiness.day) }) +
         (low.length > 0 ? ` — ${low.join(", ")}` : "") +
         (heavy ? ` · ${t("and RPE running above plan")}` : "") +
-        (readiness.note ? ` · “${readiness.note}”` : ""),
-      action: "review",
+        readiness.notes.map((note) => ` · “${note}”`).join(""),
+      action: "checkins",
     });
   }
 

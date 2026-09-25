@@ -25,13 +25,13 @@ The screenshots show made-up demo athletes.
 
 ### Overview
 
-One table for the whole roster this week: each day done, partly done or missed, completion, bodyweight against the next meet's class, and days left in the phase. Above it, one feed: warnings first (missed sessions, RPE drifting off plan, over the weight class, a program running out), then the latest check-ins, each with one button to act on it.
+One table for the whole roster this week: each day done, partly done or missed, completion, bodyweight against the next meet's class, and days left in the phase. Above it, one feed: warnings first (missed sessions, RPE drifting off plan, over the weight class, a program running out), then PRs the athletes flagged, then the latest check-ins, each with one button to act on it.
 
 ![Overview: warnings and check-ins above a week table for the whole roster](docs/screenshots/overview.png)
 
 ### Athletes
 
-The roster, everyone's current 1RMs, readiness-check days, exports and athlete links.
+The roster, everyone's current 1RMs, check-in questions, exports and athlete links.
 
 ![Athletes: a card per athlete with 1RMs, total, readiness days and actions](docs/screenshots/athletes.png)
 
@@ -41,7 +41,7 @@ Where you write the plan, one week at a time. See [Writing a program](#writing-a
 
 ### Tracking
 
-The trend across programs, with the chosen week's sets directly below. Missed rows get a red edge; sets more than 5% under target or 1 RPE over the plan get an amber one, and **Off-plan only** shows just those. The day's readiness check-in sits in its header. Below: weekly sets by TARGET (bench also counts for Chest, squat and deadlift for Legs; click a header to sort), the history of any exercise across all programs, estimated 1RMs, and bodyweight with where the trend lands on meet day. Arrows next to the name step through the roster.
+The trend across programs, with the chosen week's sets directly below. Missed rows get a red edge; sets more than 5% under target or 1 RPE over the plan get an amber one, and **Off-plan only** shows just those. The day's check-in answers sit in its header, and weekly answers (and rest-day ones) above the days. Sets the athlete flagged as PRs get a gold edge. Below: weekly sets by TARGET (bench also counts for Chest, squat and deadlift for Legs; click a header to sort), the history of any exercise across all programs, estimated 1RMs, and bodyweight with where the trend lands on meet day. Arrows next to the name step through the roster.
 
 ![Tracking: top sets across the program as a chart, then each logged set against what was prescribed](docs/screenshots/tracking.png)
 
@@ -134,11 +134,10 @@ Once you're signed in to a Topset server, click **Athlete link** on an athlete's
 
 <img src="docs/screenshots/athlete-app.png" alt="The athlete app on a phone: today's session with bodyweight, readiness and every logged set" width="320" align="right">
 
-- **Today**: the session, set by set, to log weight, reps and RPE or RIR, with notes and videos.
+- **Today**: the session, set by set, to log weight, reps and RPE or RIR, with notes and videos. Each exercise's circle fills as its sets are ticked, and **PR** flags the top set as a personal record: it gets a gold edge in **Tracking** and a line in **Overview**.
 - **History**: every session done so far and what's coming up.
 - **Tools**: a plate calculator and an e1RM calculator.
-- **Bodyweight**: a field at the top of Today, to log whenever they weigh in.
-- **Readiness**: sleep, stress, soreness and energy (1–5) and a note, on the weekdays you tick under **Readiness check** on the athlete's card. Low readiness shows up on Overview.
+- **Check-in**: bodyweight first, then the questions you write under **Check-in** on the athlete's card — start from a preset (calories, sleep, stress, soreness, energy, steps, water, cycle, supplements, notes) or write your own. Each is asked daily (every day or the weekdays you pick) or weekly, and answered as a number, a scale, single or multiple choice, yes/no or text, with its own icon and colour. Scales make up the readiness score; low readiness shows up on Overview. Every answer is in the **Check-ins** table on Tracking (14, 28 or 56 days), linked from **See answers** on the athlete card.
 
 What they log shows up in **Tracking** and **Overview** within seconds. You can add or delete weigh-ins yourself on **Tracking** too (at a weigh-in, say); the newer edit wins, on either side. **New link** replaces a lost link; **Turn off** stops it.
 

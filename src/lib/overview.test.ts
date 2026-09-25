@@ -98,14 +98,22 @@ test("low readiness in the last week is flagged, with the answers behind it", ()
     meet: null,
     unit: "kg",
     today,
-    readiness: { id: "r", day: "2026-09-23", sleep: 1, stress: 3, soreness: 2, energy: 3, note: "bad night" },
+    readiness: {
+      day: "2026-09-23",
+      score: 2.3,
+      low: [
+        { label: "Sleep", value: "1/5" },
+        { label: "Soreness", value: "2/5" },
+      ],
+      notes: ["bad night"],
+    },
   });
   assert.equal(flags.length, 1);
-  assert.match(flags[0].text, /Readiness 2.3\/5 .* — sleep 1, soreness 2 · “bad night”/);
+  assert.match(flags[0].text, /Readiness 2.3\/5 .* — sleep 1\/5, soreness 2\/5 · “bad night”/);
 
   const old = trainingFlags(training, {
     hasLink: true, linksOn: true, bodyweight: noBodyweight, meet: null, unit: "kg", today,
-    readiness: { id: "r", day: "2026-09-10", sleep: 1, stress: 1, soreness: 1, energy: 1, note: null },
+    readiness: { day: "2026-09-10", score: 1, low: [], notes: [] },
   });
   assert.equal(old.length, 0);
 });

@@ -1,15 +1,13 @@
 import { notFound } from "next/navigation";
-import { BodyweightCard } from "@/components/athlete/BodyweightCard";
 import { CheckinDay, type StripDay } from "@/components/athlete/CheckinDay";
-import { ReadinessCard } from "@/components/athlete/ReadinessCard";
-import { getAthleteByToken, getAthleteCalendar, readinessOn, recentBodyweight, sessionsInFull, type ScheduledSession, type SchedulePhase } from "@/lib/athlete-queries";
+import { CheckinCard } from "@/components/athlete/CheckinCard";
+import { checkinOn, getAthleteByToken, getAthleteCalendar, recentBodyweight, sessionsInFull, type ScheduledSession, type SchedulePhase } from "@/lib/athlete-queries";
 import { longDate, shortDate, weekdayLetter, weekdayShort } from "@/lib/athlete-format";
 import { athleteToday } from "@/lib/athlete-today";
 import { loadSettings } from "@/lib/coach-settings";
 import { ymdOf } from "@/lib/dates";
 import { t } from "@/lib/i18n";
 import { dateOfDay, daysBetween } from "@/lib/schedule";
-import { asksOn, parseDays } from "@/lib/readiness";
 import { completion } from "@/lib/setlog";
 
 export const dynamic = "force-dynamic";
@@ -39,12 +37,11 @@ export default async function AthleteToday({
 
   const today = await athleteToday();
   const day = d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : today;
-  // Readiness is asked on the coach's weekdays, for today or a day already past.
-  const asked = day <= today && asksOn(parseDays(athlete.readinessDays), day);
-  const [{ phases, sessions }, bodyweight, readiness] = await Promise.all([
+  // The check-in is asked for today or a day already past, on the days each question is.
+  const [{ phases, sessions }, bodyweight, checkin] = await Promise.all([
     getAthleteCalendar(athlete),
     recentBodyweight(athlete.id),
-    asked ? readinessOn(athlete.id, day) : null,
+    day <= today ? checkinOn(athlete.id, day) : { questions: [], answers: [] },
   ]);
   const base = `/a/${token}`;
   const link = (ymd: string) => (ymd === today ? base : `${base}?d=${ymd}`);
@@ -60,8 +57,7 @@ export default async function AthleteToday({
   if (!phase) {
     return (
       <>
-        <BodyweightCard token={token} unit={athlete.unit} day={today} today={today} entries={bodyweight} />
-        {asked && <ReadinessCard token={token} day={day} initial={readiness} />}
+        <CheckinCard key={day} token={token} unit={athlete.unit} day={day} today={today} initial={checkin} bodyweight={bodyweight} />
         <div className="mt-12 rounded-2xl border border-border bg-surface px-5 py-8 text-center">
           <div className="text-[16px] font-medium">{t("No program yet")}</div>
           <p className="mt-1 text-[13px] text-muted">{t("Your coach hasn't written a program for you yet.")}</p>
@@ -130,7 +126,7 @@ export default async function AthleteToday({
         todayHref: day === today ? null : base,
       }}
       bodyweight={bodyweight}
-      readiness={asked ? { entry: readiness } : undefined}
+      checkin={checkin}
     />
   );
 }

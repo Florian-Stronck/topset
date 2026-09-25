@@ -7,7 +7,8 @@ import { applyAllProgressions } from "@/app/programming/actions";
 import { loadSettings } from "@/lib/coach-settings";
 import { snapStart } from "@/lib/dates";
 import { prisma } from "@/lib/prisma";
-import { formatDays, parseDays } from "@/lib/readiness";
+import { COLORS, formatDays, KINDS, parseConfig, type CheckinCadence, type CheckinConfig, type CheckinKind } from "@/lib/checkins";
+import { CHECKIN_ICONS } from "@/components/CheckinIcon";
 
 function revalidateAll() {
   revalidatePath("/athletes");
@@ -182,13 +183,10 @@ export async function updateAthleteProfile(
     squat1RM?: number | null;
     bench1RM?: number | null;
     dead1RM?: number | null;
-    /** Weekdays the readiness check-in is asked, "0,3" (0 = Monday). */
-    readinessDays?: string;
   },
 ) {
   assertCoach();
   const data = { ...patch };
-  if (data.readinessDays !== undefined) data.readinessDays = formatDays(parseDays(data.readinessDays));
   if (data.name !== undefined) {
     const name = data.name.trim();
     if (!name) delete data.name;
@@ -197,6 +195,75 @@ export async function updateAthleteProfile(
 
   await prisma.athlete.update({ where: { id: athleteId }, data });
   revalidateAll();
+}
+
+export type CheckinQuestionInput = {
+  label: string;
+  cadence: CheckinCadence;
+  days: number[];
+  kind: CheckinKind;
+  config: CheckinConfig;
+  icon: string;
+  color: string;
+};
+
+function questionFields(input: CheckinQuestionInput) {
+  const kind = KINDS.includes(input.kind) ? input.kind : "TEXT";
+  const cadence = input.cadence === "WEEKLY" ? "WEEKLY" : "DAILY";
+  const days = formatDays(input.days);
+  return {
+    label: input.label.trim().slice(0, 120) || "Question",
+    cadence,
+    // A weekly question opens on one day.
+    days: cadence === "WEEKLY" ? (days.split(",")[0] ?? "") : days,
+    kind,
+    config: JSON.stringify(parseConfig(kind, input.config)),
+    icon: input.icon in CHECKIN_ICONS ? input.icon : "check",
+    color: input.color in COLORS ? input.color : "blue",
+  } as const;
+}
+
+function revalidateCheckins() {
+  revalidatePath("/athletes");
+  revalidatePath("/tracking");
+  revalidatePath("/overview");
+}
+
+/** Adds a check-in question to the end of the athlete's list. */
+export async function addCheckinQuestion(athleteId: string, input: CheckinQuestionInput) {
+  assertCoach();
+  const last = await prisma.checkinQuestion.findFirst({ where: { athleteId }, orderBy: { order: "desc" }, select: { order: true } });
+  const q = await prisma.checkinQuestion.create({ data: { athleteId, order: (last?.order ?? -1) + 1, ...questionFields(input) } });
+  revalidateCheckins();
+  return q.id;
+}
+
+/**
+ * Rewrites a question. Answers already given stay as they were; one that no longer fits
+ * (an option taken away) just shows as it was answered.
+ */
+export async function updateCheckinQuestion(id: string, input: CheckinQuestionInput) {
+  assertCoach();
+  await prisma.checkinQuestion.update({ where: { id }, data: questionFields(input) });
+  revalidateCheckins();
+}
+
+/** Takes a question off the athlete's check-in. One already answered is archived, so its answers keep their label. */
+export async function removeCheckinQuestion(id: string) {
+  assertCoach();
+  const answered = await prisma.checkinAnswer.count({ where: { questionId: id } });
+  if (answered > 0) await prisma.checkinQuestion.update({ where: { id }, data: { archived: true } });
+  else await prisma.checkinQuestion.delete({ where: { id } });
+  revalidateCheckins();
+}
+
+/** Puts the athlete's questions in this order. */
+export async function reorderCheckinQuestions(athleteId: string, ids: string[]) {
+  assertCoach();
+  await prisma.$transaction(
+    ids.map((id, order) => prisma.checkinQuestion.updateMany({ where: { id, athleteId }, data: { order } })),
+  );
+  revalidateCheckins();
 }
 
 export async function deleteAthlete(athleteId: string) {

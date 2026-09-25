@@ -1,6 +1,6 @@
 import { bodyweightEntry } from "@/lib/bodyweight";
 import { currentBlock, type AthleteSummary, type WindowSession } from "@/lib/overview";
-import type { ReadinessEntry } from "@/lib/readiness";
+import { questionData, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
 import { sessionsOf } from "@/lib/schedule";
 import { prisma } from "@/lib/prisma";
 import type { BlockData } from "@/lib/types";
@@ -268,6 +268,7 @@ export async function getRoster() {
     where: { coachId: coach.id },
     orderBy: { name: "asc" },
     include: {
+      questions: { where: { archived: false }, orderBy: [{ order: "asc" }, { createdAt: "asc" }] },
       programs: {
         orderBy: { createdAt: "asc" },
         select: {
@@ -423,14 +424,79 @@ export async function getNextMeets(athleteIds: string[], from: Date) {
   return out;
 }
 
-/** Readiness check-ins on or after a day, for the athletes given, oldest first. */
-export async function getReadiness(athleteIds: string[], from?: string) {
-  const rows = await prisma.readinessLog.findMany({
-    where: { athleteId: { in: athleteIds }, deletedAt: null, ...(from ? { day: { gte: from } } : {}) },
-    orderBy: { day: "asc" },
-    select: { id: true, athleteId: true, day: true, sleep: true, stress: true, soreness: true, energy: true, note: true },
-  });
-  const out = new Map<string, ReadinessEntry[]>();
-  for (const { athleteId, ...entry } of rows) out.set(athleteId, [...(out.get(athleteId) ?? []), entry]);
+export type AthleteCheckins = { questions: CheckinQuestionData[]; answers: CheckinAnswerData[] };
+
+/**
+ * Each athlete's check-in questions — archived ones too, so old answers keep their label —
+ * and their answers on or after a day, oldest first.
+ */
+export async function getCheckins(athleteIds: string[], from?: string): Promise<Map<string, AthleteCheckins>> {
+  const [questions, answers] = await Promise.all([
+    prisma.checkinQuestion.findMany({ where: { athleteId: { in: athleteIds } }, orderBy: [{ order: "asc" }, { createdAt: "asc" }] }),
+    prisma.checkinAnswer.findMany({
+      where: { athleteId: { in: athleteIds }, deletedAt: null, ...(from ? { day: { gte: from } } : {}) },
+      orderBy: { day: "asc" },
+      select: { id: true, athleteId: true, questionId: true, day: true, value: true },
+    }),
+  ]);
+  const out = new Map<string, AthleteCheckins>();
+  const entry = (id: string) => {
+    let e = out.get(id);
+    if (!e) out.set(id, (e = { questions: [], answers: [] }));
+    return e;
+  };
+  for (const row of questions) entry(row.athleteId).questions.push(questionData(row));
+  for (const { athleteId, ...answer } of answers) entry(athleteId).answers.push(answer);
   return out;
+}
+
+export type RecentPr = {
+  id: string;
+  athleteId: string;
+  athlete: string;
+  exercise: string;
+  weight: number | null;
+  reps: number | null;
+  rpe: number | null;
+  rir: number | null;
+  blockId: string;
+  week: number;
+  loggedAt: Date;
+};
+
+/** Sets the athletes flagged as PRs in the last `days` days, newest first. */
+export async function getRecentPrs(coachId: string, days = 14): Promise<RecentPr[]> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const logs = await prisma.setLog.findMany({
+    where: { pr: true, loggedAt: { gte: since }, row: { day: { week: { block: { athlete: { coachId } } } } } },
+    orderBy: { loggedAt: "desc" },
+    take: 50,
+    select: {
+      id: true,
+      weight: true,
+      reps: true,
+      rpe: true,
+      rir: true,
+      loggedAt: true,
+      row: {
+        select: {
+          exercise: true,
+          day: { select: { week: { select: { order: true, block: { select: { id: true, athlete: { select: { id: true, name: true } } } } } } } },
+        },
+      },
+    },
+  });
+  return logs.map((l) => ({
+    id: l.id,
+    athleteId: l.row.day.week.block.athlete.id,
+    athlete: l.row.day.week.block.athlete.name,
+    exercise: l.row.exercise,
+    weight: l.weight,
+    reps: l.reps,
+    rpe: l.rpe,
+    rir: l.rir,
+    blockId: l.row.day.week.block.id,
+    week: l.row.day.week.order,
+    loggedAt: l.loggedAt,
+  }));
 }

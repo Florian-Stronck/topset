@@ -100,18 +100,25 @@ test("a weigh-in for someone else's athlete is refused", async () => {
   assert.equal(await applyPush(client, "me", { tables: {}, athlete: [], merged: { BodyweightLog: [entry] } }), "That athlete isn't yours.");
 });
 
-test("readiness merges like weigh-ins, and scores outside 1–5 are refused", async () => {
+test("check-in answers merge like weigh-ins, and only to the coach's own questions", async () => {
+  await client.execute(
+    `INSERT INTO "CheckinQuestion" ("id", "athleteId", "label", "kind") VALUES ('q1', 'a1', 'Sleep', 'SCALE'), ('q9', 'a9', 'Theirs', 'TEXT')`,
+  );
   const entry = {
-    id: "rd1", athleteId: "a1", day: "2026-09-21", sleep: 2, stress: 4, soreness: 3, energy: 5, note: null,
+    id: "ca1", athleteId: "a1", questionId: "q1", day: "2026-09-21", value: "2",
     createdAt: "2026-09-21T06:00:00.000+00:00", updatedAt: "2026-09-21T06:00:00.000+00:00", deletedAt: null,
   };
-  assert.equal(await applyPush(client, "me", { tables: {}, athlete: [], merged: { ReadinessLog: [entry] } }), null);
+  assert.equal(await applyPush(client, "me", { tables: {}, athlete: [], merged: { CheckinAnswer: [entry] } }), null);
   const pulled = await athleteData(client, "me");
   assert.ok(!pulled.unchanged);
-  assert.equal(pulled.merged.ReadinessLog[0].sleep, 2);
+  assert.equal(pulled.merged.CheckinAnswer[0].value, "2");
   assert.equal(
-    await applyPush(client, "me", { tables: {}, athlete: [], merged: { ReadinessLog: [{ ...entry, id: "rd2", sleep: 9 }] } }),
-    "A ReadinessLog row is missing something.",
+    await applyPush(client, "me", { tables: {}, athlete: [], merged: { CheckinAnswer: [{ ...entry, id: "ca2", value: 3 }] } }),
+    "A CheckinAnswer row is missing something.",
+  );
+  assert.equal(
+    await applyPush(client, "me", { tables: {}, athlete: [], merged: { CheckinAnswer: [{ ...entry, id: "ca3", questionId: "q9" }] } }),
+    "That question isn't yours.",
   );
   assert.equal(
     await applyPush(client, "me", { tables: {}, athlete: [], merged: { SetLog: [entry] } }),

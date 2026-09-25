@@ -4,6 +4,7 @@ import type { Unit } from "@prisma/client";
 import { useState, useTransition } from "react";
 import { logSet, logSets, removeSet, saveAthleteNotes, type SetPatch } from "@/app/a/actions";
 import { Check } from "@/components/athlete/icons";
+import { Trophy } from "@/components/CheckinIcon";
 import type { AthleteRow, AthleteSession } from "@/lib/athlete-queries";
 import { t } from "@/lib/i18n";
 import { formatSet, type SetLogData } from "@/lib/setlog";
@@ -22,6 +23,7 @@ const blank = (setIndex: number): SetLogData => ({
   rpe: null,
   rir: null,
   done: false,
+  pr: false,
   loggedAt: new Date().toISOString(),
 });
 
@@ -33,10 +35,21 @@ function finishedRow(row: AthleteRow) {
   return row.logs.filter((l) => l.done).length >= Math.max(1, row.sets ?? 1);
 }
 
+/** The set to flag when the athlete says "that was a PR": the heaviest done, then the most reps. */
+function topSet(logs: SetLogData[]): SetLogData | null {
+  let top: (SetLogData & { weight: number }) | null = null;
+  for (const l of logs) {
+    if (!l.done || l.weight === null) continue;
+    if (!top || l.weight > top.weight || (l.weight === top.weight && (l.reps ?? 0) > (top.reps ?? 0))) top = { ...l, weight: l.weight };
+  }
+  return top;
+}
+
 /**
  * A day's exercises as a timeline. Each opens to its effort scale (RPE or RIR, per
- * exercise), a line of big fields per set — weight, reps, effort — and a note; the circle
- * ticks the whole exercise off in one tap.
+ * exercise), a line of big fields per set — weight, reps, effort — and a note. The circle
+ * fills as sets are ticked, and ticks the whole exercise off in one tap. A set can be
+ * flagged as a PR, for the coach to see in Tracking and Overview.
  */
 export function SessionLogger({
   token,
@@ -204,6 +217,8 @@ function ExerciseItem({
   const target = loads.length === 0 ? null : loads[loads.length - 1];
   const finished = finishedRow(row);
   const doneLogs = row.logs.filter((l) => l.done);
+  const prLogs = row.logs.filter((l) => l.pr);
+  const top = topSet(row.logs);
   const lastLogged = row.logs.reduce((m, l) => Math.max(m, l.setIndex + 1), 0);
   const count = Math.max(planned, lastLogged + extra);
 
@@ -219,29 +234,39 @@ function ExerciseItem({
     onAll(sets.filter((i) => !logOf(i)?.done).map((i) => ({ setIndex: i, patch: asWritten(i) })));
   }
 
+  /** On: the top set is the PR. Off: no set is. */
+  function togglePr() {
+    if (prLogs.length > 0) return onAll(prLogs.map((l) => ({ setIndex: l.setIndex, patch: { pr: false } })));
+    if (top) onAll([{ setIndex: top.setIndex, patch: { pr: true } }]);
+  }
+
   // Closed, a logged exercise lists its sets as done; otherwise it says what is asked.
-  const summary = !open && doneLogs.length > 0 ? doneLogs.map((l) => formatSet(l)).join(" · ") : null;
+  const summary = !open && doneLogs.length > 0 ? doneLogs : null;
 
   return (
     <li className="relative pb-6 pl-11 last:pb-1">
-      <button
-        type="button"
-        onClick={toggleDone}
-        aria-pressed={finished}
-        aria-label={finished ? t("Mark set not done") : t("Mark set done")}
-        className={`absolute left-0 top-0.5 z-10 grid h-7 w-7 place-items-center rounded-full ${
-          finished ? "bg-accent text-white" : "border-2 border-border bg-background text-transparent"
-        }`}
-      >
-        <Check size={14} />
-      </button>
+      <ProgressRing done={Math.min(doneLogs.length, planned)} of={planned} finished={finished} onClick={toggleDone} />
 
       <button type="button" onClick={onToggleOpen} aria-expanded={open} className="flex w-full items-start gap-3 text-left">
         <div className="min-w-0 flex-1">
-          <h2 className="text-[16px] font-semibold leading-snug">{row.exercise}</h2>
+          <h2 className="flex items-center gap-1.5 text-[16px] font-semibold leading-snug">
+            <span className="min-w-0">{row.exercise}</span>
+            {prLogs.length > 0 && (
+              <span className="flex shrink-0 items-center gap-0.5 rounded-md bg-pr/15 px-1.5 py-0.5 text-[11px] font-bold text-pr">
+                <Trophy size={11} /> {t("PR")}
+              </span>
+            )}
+          </h2>
           <div className="mt-0.5 text-[14px] tabular-nums">
             {summary !== null ? (
-              <span className="text-muted">{summary}</span>
+              <span className="text-muted">
+                {summary.map((l, i) => (
+                  <span key={l.setIndex} className={l.pr ? "font-medium text-pr" : undefined}>
+                    {i > 0 && <span className="text-muted"> · </span>}
+                    {formatSet(l)}
+                  </span>
+                ))}
+              </span>
             ) : (
               <>
                 <span>{row.sets ?? "—"}</span>
@@ -337,6 +362,7 @@ function ExerciseItem({
                   effort={effort}
                   onLog={(patch) => onLog(i, patch)}
                   onTick={() => onLog(i, log?.done ? { done: false } : asWritten(i))}
+                  onPr={log?.done ? () => onLog(i, { pr: !log.pr }) : null}
                   onDrop={
                     isExtra
                       ? () => {
@@ -349,13 +375,26 @@ function ExerciseItem({
               );
             })}
           </div>
-          <div className="mt-1 flex items-center justify-between">
+          <div className="mt-1 flex items-center gap-3">
             <button
               type="button"
               onClick={() => setExtra((n) => n + 1)}
               className="h-10 rounded-full pr-2 text-[13px] text-accent active:bg-surface-3"
             >
               + {t("Add set")}
+            </button>
+            <button
+              type="button"
+              onClick={togglePr}
+              disabled={prLogs.length === 0 && !top}
+              aria-pressed={prLogs.length > 0}
+              title={t("Flag your top set as a personal record")}
+              className={`ml-auto flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-semibold disabled:opacity-35 ${
+                prLogs.length > 0 ? "bg-pr text-black" : "border border-pr/60 text-pr active:bg-pr/15"
+              }`}
+            >
+              <Trophy size={14} />
+              {prLogs.length > 0 ? t("PR!") : t("PR")}
             </button>
             <span className="text-[12px] tabular-nums text-muted">
               {t("{done}/{of} sets", { done: doneLogs.length, of: planned })}
@@ -387,6 +426,7 @@ function SetRow({
   effort,
   onLog,
   onTick,
+  onPr,
   onDrop,
 }: {
   index: number;
@@ -397,9 +437,12 @@ function SetRow({
   effort: Effort;
   onLog: (patch: SetPatch) => void;
   onTick: () => void;
+  /** Flags the set as a PR, or unflags it; null while it isn't done. */
+  onPr: (() => void) | null;
   onDrop: (() => void) | null;
 }) {
   const done = log?.done ?? false;
+  const pr = log?.pr ?? false;
   // Shown in this exercise's scale; saved in it, with the other one cleared.
   const other = effort === "RPE" ? log?.rir : log?.rpe;
   const own = effort === "RPE" ? log?.rpe : log?.rir;
@@ -412,10 +455,21 @@ function SetRow({
         placeholder={load}
         done={done}
         suffix={unit}
+        pr={pr}
         prefix={
           onDrop ? (
             <button type="button" onClick={onDrop} aria-label={t("Remove set")} className="mr-2 text-[15px] text-muted-2">
               ×
+            </button>
+          ) : pr || onPr ? (
+            <button
+              type="button"
+              onClick={onPr ?? undefined}
+              aria-pressed={pr}
+              aria-label={pr ? t("Unflag PR") : t("Flag as PR")}
+              className={`-ml-1 mr-1 grid size-6 place-items-center rounded-md text-[12px] tabular-nums ${pr ? "bg-pr/20 text-pr" : "text-muted-2"}`}
+            >
+              {pr ? <Trophy size={13} /> : index + 1}
             </button>
           ) : (
             <span className="mr-2 text-[12px] tabular-nums text-muted-2">{index + 1}</span>
@@ -453,12 +507,14 @@ function BigNumber({
   done,
   prefix,
   suffix,
+  pr = false,
   center = false,
   onCommit,
 }: {
   value: number | null;
   placeholder: number | null;
   done: boolean;
+  pr?: boolean;
   prefix?: React.ReactNode;
   suffix?: string;
   center?: boolean;
@@ -477,7 +533,7 @@ function BigNumber({
   return (
     <label
       className={`flex h-14 min-w-0 items-center rounded-2xl border focus-within:border-accent ${center ? "px-1" : "px-3"} ${
-        done ? "border-ok/40 bg-ok/10" : "border-border bg-surface"
+        pr ? "border-pr/60 bg-pr/10" : done ? "border-ok/40 bg-ok/10" : "border-border bg-surface"
       }`}
     >
       {prefix}
@@ -516,5 +572,45 @@ function NotesField({ value, onCommit }: { value: string | null; onCommit: (note
       }}
       className="w-full resize-none rounded-2xl border border-border bg-surface px-4 py-3 text-[16px] outline-none placeholder:text-muted-2 focus:border-accent"
     />
+  );
+}
+
+/**
+ * The exercise's circle on the timeline: a ring that fills as its sets are ticked, solid
+ * with a tick once they all are. Tapping it ticks every set, or unticks them all.
+ */
+function ProgressRing({ done, of, finished, onClick }: { done: number; of: number; finished: boolean; onClick: () => void }) {
+  const r = 12;
+  const length = 2 * Math.PI * r;
+  const share = of === 0 ? 0 : Math.min(1, done / of);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={finished}
+      aria-label={finished ? t("Mark set not done") : t("Mark set done")}
+      title={t("{done}/{of} sets", { done, of })}
+      className="absolute left-0 top-0.5 z-10 grid h-7 w-7 place-items-center rounded-full bg-background"
+    >
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden className="absolute inset-0 -rotate-90">
+        <circle cx="14" cy="14" r={r} fill={finished ? "var(--accent)" : "none"} stroke={finished ? "var(--accent)" : "var(--border)"} strokeWidth="2.5" />
+        <circle
+          cx="14"
+          cy="14"
+          r={r}
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray={length}
+          strokeDashoffset={length * (1 - share)}
+          opacity={share === 0 ? 0 : 1}
+          className="transition-[stroke-dashoffset] duration-300 ease-out"
+        />
+      </svg>
+      <span className={`relative ${finished ? "text-white" : "text-transparent"}`}>
+        <Check size={14} />
+      </span>
+    </button>
   );
 }

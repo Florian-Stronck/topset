@@ -8,7 +8,7 @@ import { today as calendarToday, ymdOf } from "@/lib/dates";
 import { blockWindow, startOfDay } from "@/lib/overview";
 import { liftProgress } from "@/lib/progress";
 import { exerciseHistory } from "@/lib/exercise-history";
-import { getAllPhasesForAthlete, getBodyweights, getCoach, getNextMeets, getReadiness, getWorkspace, toBlockData } from "@/lib/queries";
+import { getAllPhasesForAthlete, getBodyweights, getCoach, getCheckins, getNextMeets, getWorkspace, toBlockData } from "@/lib/queries";
 import type { BlockData } from "@/lib/types";
 import { loadSettings } from "@/lib/coach-settings";
 import { videoLists } from "@/lib/videos";
@@ -33,12 +33,12 @@ export default async function TrackingPage({
     return a.id === athlete.id ? null : { id: a.id, name: a.name };
   };
   const now = new Date();
-  const [{ programs, program, phase }, phases, weights, meets, readiness] = await Promise.all([
+  const [{ programs, program, phase }, phases, weights, meets, checkins] = await Promise.all([
     getWorkspace(athlete.id, undefined, params.block),
     getAllPhasesForAthlete(athlete.id),
     getBodyweights([athlete.id]),
     getNextMeets([athlete.id], startOfDay(now)),
-    getReadiness([athlete.id]),
+    getCheckins([athlete.id]),
   ]);
   const meet = meets.get(athlete.id);
 
@@ -84,7 +84,7 @@ export default async function TrackingPage({
           series={series}
           videos={videos}
           bodyweight={weights.get(athlete.id) ?? []}
-          readiness={readiness.get(athlete.id) ?? []}
+          checkins={checkins.get(athlete.id) ?? { questions: [], answers: [] }}
           history={exerciseHistory(phases, athlete)}
           meet={meet ? { name: meet.name, day: ymdOf(meet.date), weightClass: meet.weightClass, limit: classLimit(meet.weightClass) } : null}
         />

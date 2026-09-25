@@ -8,13 +8,16 @@ import { syncNow } from "@/app/sync-actions";
 import { NumberInput, TextInput } from "@/components/cells";
 import { AthleteLinkButton } from "@/components/AthleteLink";
 import { BodyweightPanel } from "@/components/BodyweightPanel";
+import { CheckinPanel } from "@/components/CheckinPanel";
 import { ExerciseHistoryPanel } from "@/components/ExerciseHistoryPanel";
 import { VolumeTable } from "@/components/VolumeTable";
 import { LiftChart } from "@/components/LiftChart";
 import { RowVideos } from "@/components/RowVideos";
 import type { BodyweightEntry } from "@/lib/bodyweight";
 import type { ExerciseHistory } from "@/lib/exercise-history";
-import { LOW_READINESS, READINESS_FIELDS, readinessScore, type ReadinessEntry } from "@/lib/readiness";
+import { formatAnswer, LOW_READINESS, readinessOf, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
+import { CheckinIcon, Trophy } from "@/components/CheckinIcon";
+import type { AthleteCheckins } from "@/lib/queries";
 import { offPlan, rpeDelta, type OffPlan } from "@/lib/compliance";
 import { formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
 import { SHELL_MAX_WIDTH } from "@/lib/layout";
@@ -23,7 +26,7 @@ import { formatEffort } from "@/lib/setlog";
 import { bestEstimates, weekStats } from "@/lib/tracking";
 import type { VideoFile } from "@/lib/videos";
 import { WEEKDAYS, type AthleteData, type BlockData, type Prescription, type RowData } from "@/lib/types";
-import { weekdayOfDay } from "@/lib/dates";
+import { weekdayOf, weekdayOfDay } from "@/lib/dates";
 import { dateOfDay } from "@/lib/schedule";
 import { useSettings } from "@/components/SettingsProvider";
 import { fresh, useCommands, type Command } from "@/lib/commands";
@@ -45,7 +48,7 @@ export function TrackingSheet({
   series,
   videos,
   bodyweight,
-  readiness,
+  checkins,
   history,
   meet,
 }: {
@@ -67,8 +70,8 @@ export function TrackingSheet({
   videos: Record<string, VideoFile[]>;
   /** Every weigh-in on file, oldest first. */
   bodyweight: BodyweightEntry[];
-  /** Every readiness check-in on file, oldest first. */
-  readiness: ReadinessEntry[];
+  /** The athlete's check-in questions, archived too, and every answer on file. */
+  checkins: AthleteCheckins;
   /** Every logged exercise across all programs, most logged first. */
   history: ExerciseHistory[];
   meet: { name: string; day: string; weightClass: string | null; limit: number | null } | null;
@@ -109,7 +112,9 @@ export function TrackingSheet({
       });
     return { day, rows };
   });
-  const readinessByDay = new Map(readiness.map((r) => [r.day, r]));
+  const answersByDay = new Map<string, CheckinAnswerData[]>();
+  for (const a of checkins.answers) answersByDay.set(a.day, [...(answersByDay.get(a.day) ?? []), a]);
+  const weekDates = Array.from({ length: 7 }, (_, i) => dateOfDay(block.startDate, activeWeek, i));
   const offCount = checked.reduce((n, d) => n + d.rows.filter((r) => r.off).length, 0);
 
   const weekCount = block.weeks.length;
@@ -339,6 +344,13 @@ export function TrackingSheet({
             </label>
           </div>
 
+          <WeekCheckins
+            questions={checkins.questions}
+            answersByDay={answersByDay}
+            dates={weekDates}
+            sessionDates={new Set(checked.filter((d) => !d.day.rest && d.rows.length > 0).map((d) => dateOfDay(block.startDate, activeWeek, d.day.index)))}
+          />
+
           <div className="mt-2 space-y-4">
             {offOnly && offCount === 0 && (
               <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-[12px] text-muted-2">
@@ -354,7 +366,7 @@ export function TrackingSheet({
                   <div className="sticky left-0 flex items-center gap-2 bg-surface-2 px-4 py-2">
                     <span className="text-[13px] font-semibold">{day.label}</span>
                     <span className="text-[11px] text-muted-2">{t(WEEKDAYS[weekdayOfDay(block.startDate, day.index)])}</span>
-                    <ReadinessNote entry={readinessByDay.get(dateOfDay(block.startDate, activeWeek, day.index))} />
+                    <CheckinNote questions={checkins.questions} answers={answersByDay.get(dateOfDay(block.startDate, activeWeek, day.index)) ?? []} />
                   </div>
 
                   <div
@@ -379,11 +391,29 @@ export function TrackingSheet({
                         key={row.id}
                         className={`grid min-w-full w-fit items-center border-b border-l-[3px] border-b-border/60 px-4 pl-[13px] last:border-b-0 ${
                           done ? "bg-surface" : "bg-surface/40"
-                        } ${off?.level === "miss" ? "border-l-miss" : off ? "border-l-warn" : "border-l-transparent"}`}
+                        } ${
+                          row.logs?.some((l) => l.pr)
+                            ? "border-l-pr"
+                            : off?.level === "miss"
+                              ? "border-l-miss"
+                              : off
+                                ? "border-l-warn"
+                                : "border-l-transparent"
+                        }`}
                         style={{ gridTemplateColumns: COLS }}
                       >
                         <span className="min-w-0 py-2">
-                          <span className="block truncate text-[12px] font-medium">{row.exercise}</span>
+                          <span className="flex items-center gap-1.5 text-[12px] font-medium">
+                            <span className="truncate">{row.exercise}</span>
+                            {row.logs?.some((l) => l.pr) && (
+                              <span
+                                title={t("The athlete flagged a PR")}
+                                className="flex shrink-0 items-center gap-0.5 rounded bg-pr/15 px-1 py-px text-[9px] font-bold tracking-wider text-pr"
+                              >
+                                <Trophy size={9} /> {t("PR")}
+                              </span>
+                            )}
+                          </span>
                           {off && <OffPlanNote off={off} row={row} target={target} />}
                         </span>
                         <span className="truncate text-[12px] text-muted">
@@ -429,6 +459,10 @@ export function TrackingSheet({
             })}
           </div>
         </section>
+        <div className="mt-7">
+          <CheckinPanel questions={checkins.questions} answers={checkins.answers} today={today} />
+        </div>
+
         <VolumeTable block={block} activeWeek={activeWeek} />
 
         <ExerciseHistoryPanel history={history} unit={unit} />
@@ -531,7 +565,7 @@ function SetLines({ logs, sets, unit }: { logs: NonNullable<RowData["logs"]>; se
           </span>
         )}
       </div>
-      <div className="mt-1 grid w-fit grid-cols-[auto_auto_auto_auto_auto] gap-x-4 gap-y-0.5 text-[11px] tabular-nums">
+      <div className="mt-1 grid w-fit grid-cols-[auto_auto_auto_auto_auto_auto] gap-x-4 gap-y-0.5 text-[11px] tabular-nums">
         {logs.map((l) => (
           <Fragment key={l.setIndex}>
             <span className="text-muted-2">{t("Set {n}", { n: l.setIndex + 1 })}</span>
@@ -539,6 +573,7 @@ function SetLines({ logs, sets, unit }: { logs: NonNullable<RowData["logs"]>; se
             <span className={l.done ? "text-foreground" : "text-muted-2"}>{l.reps === null ? "—" : `× ${l.reps}`}</span>
             <span className="text-muted">{formatEffort(l) || "—"}</span>
             <span className={l.done ? "text-[color:var(--ok)]" : "text-muted-2"}>{l.done ? "✓" : t("not done")}</span>
+            <span className="flex items-center gap-0.5 font-semibold text-pr">{l.pr && <><Trophy size={10} /> {t("PR")}</>}</span>
           </Fragment>
         ))}
       </div>
@@ -553,23 +588,97 @@ function maxPatch(lift: "squat" | "bench" | "dead", value: number) {
   return { dead1RM: value };
 }
 
-/** The day's readiness check-in, in the day's header: the score, each answer, the note. */
-function ReadinessNote({ entry }: { entry: ReadinessEntry | undefined }) {
-  if (!entry) return null;
-  const score = readinessScore(entry);
+/** A day's check-in answers, in the day's header: the readiness score, then each answer. */
+function CheckinNote({ questions, answers }: { questions: CheckinQuestionData[]; answers: CheckinAnswerData[] }) {
+  const daily = answers.filter((a) => questions.find((q) => q.id === a.questionId)?.cadence !== "WEEKLY");
+  if (daily.length === 0) return null;
+  const { score } = readinessOf(questions, daily);
   const low = score !== null && score <= LOW_READINESS;
   return (
-    <span className="ml-auto flex min-w-0 items-baseline gap-2 text-[11px]">
-      <span className={`shrink-0 rounded px-1.5 py-0.5 font-medium ${low ? "bg-warn/15 text-warn" : "bg-surface-3 text-muted"}`}>
-        {t("Readiness {n}/5", { n: score ?? "—" })}
-      </span>
-      <span className="shrink-0 text-muted-2">
-        {READINESS_FIELDS.filter((f) => entry[f.key] !== null)
-          .map((f) => `${t(f.label)} ${entry[f.key]}`)
-          .join(" · ")}
-      </span>
-      {entry.note && <span className="truncate italic text-muted">“{entry.note}”</span>}
+    <span className="ml-auto flex min-w-0 items-center gap-2 text-[11px]">
+      {score !== null && (
+        <span className={`shrink-0 rounded px-1.5 py-0.5 font-medium ${low ? "bg-warn/15 text-warn" : "bg-surface-3 text-muted"}`}>
+          {t("Readiness {n}/5", { n: score })}
+        </span>
+      )}
+      <Answers questions={questions} answers={daily} />
     </span>
+  );
+}
+
+/** Each answer as its question's icon, label and value; text answers last, in quotes. */
+function Answers({ questions, answers }: { questions: CheckinQuestionData[]; answers: CheckinAnswerData[] }) {
+  const yesNo = { yes: t("Yes"), no: t("No") };
+  const shown = questions
+    .map((q) => ({ q, a: answers.find((a) => a.questionId === q.id) }))
+    .filter((x): x is { q: CheckinQuestionData; a: CheckinAnswerData } => x.a !== undefined);
+  return (
+    <span className="flex min-w-0 items-center gap-2.5 truncate text-muted-2">
+      {shown
+        .sort((x, y) => Number(x.q.kind === "TEXT") - Number(y.q.kind === "TEXT"))
+        .map(({ q, a }) =>
+          q.kind === "TEXT" ? (
+            <span key={q.id} title={q.label} className="truncate italic text-muted">
+              “{a.value}”
+            </span>
+          ) : (
+            <span key={q.id} className="flex shrink-0 items-center gap-1" title={q.label}>
+              <CheckinIcon name={q.icon} size={11} className="shrink-0 opacity-70" />
+              {q.label} <span className="text-foreground">{formatAnswer(q, a.value, yesNo)}</span>
+            </span>
+          ),
+        )}
+    </span>
+  );
+}
+
+/**
+ * Check-in answers with no session header to sit in, above the days: the week's weekly
+ * questions, and daily ones answered on a day without a session shown.
+ */
+function WeekCheckins({
+  questions,
+  answersByDay,
+  dates,
+  sessionDates,
+}: {
+  questions: CheckinQuestionData[];
+  answersByDay: Map<string, CheckinAnswerData[]>;
+  dates: string[];
+  sessionDates: Set<string>;
+}) {
+  const weekly = new Set(questions.filter((q) => q.cadence === "WEEKLY").map((q) => q.id));
+  const weeklyAnswers = dates.flatMap((d) => answersByDay.get(d) ?? []).filter((a) => weekly.has(a.questionId));
+  const offDays = dates
+    .filter((d) => !sessionDates.has(d))
+    .map((d) => ({ day: d, answers: (answersByDay.get(d) ?? []).filter((a) => !weekly.has(a.questionId)) }))
+    .filter((d) => d.answers.length > 0);
+  if (weeklyAnswers.length === 0 && offDays.length === 0) return null;
+  return (
+    <div className="mt-2 divide-y divide-border/60 rounded-xl border border-border bg-surface text-[11px]">
+      {weeklyAnswers.length > 0 && (
+        <div className="flex min-w-0 items-center gap-2 px-4 py-2">
+          <span className="w-[120px] shrink-0 tracking-[0.12em] text-muted-2">{t("WEEKLY CHECK-IN")}</span>
+          <Answers questions={questions} answers={weeklyAnswers} />
+        </div>
+      )}
+      {offDays.map(({ day, answers }) => {
+        const { score } = readinessOf(questions, answers);
+        return (
+          <div key={day} className="flex min-w-0 items-center gap-2 px-4 py-2">
+            <span className="w-[120px] shrink-0 tracking-[0.12em] text-muted-2">
+              {t("CHECK-IN")} · {t(WEEKDAYS[weekdayOf(`${day}T00:00:00Z`)])}
+            </span>
+            {score !== null && (
+              <span className={`shrink-0 rounded px-1.5 py-0.5 font-medium ${score <= LOW_READINESS ? "bg-warn/15 text-warn" : "bg-surface-3 text-muted"}`}>
+                {t("Readiness {n}/5", { n: score })}
+              </span>
+            )}
+            <Answers questions={questions} answers={answers} />
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

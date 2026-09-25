@@ -54,7 +54,7 @@ type State = {
   /** The server's athlete-data version this copy last took in full; null until then. */
   athleteVersion: number | null;
   /**
-   * Merged tables (weigh-ins, readiness) as the server has them, table → id → updatedAt in
+   * Merged tables (weigh-ins, check-in answers) as the server has them, table → id → updatedAt in
    * ms: what the last full pull saw, plus what was pushed since. Null until a pull brings
    * them (or from an older server).
    */

@@ -1,6 +1,7 @@
 import { Roster, type RosterEntry } from "@/components/Roster";
 import { Sidebar } from "@/components/Sidebar";
 import { getRoster } from "@/lib/queries";
+import { questionData } from "@/lib/checkins";
 import { loadSettings } from "@/lib/coach-settings";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export default async function AthletesPage({
     bench1RM: a.bench1RM,
     dead1RM: a.dead1RM,
     hasLink: a.accessToken !== null,
-    readinessDays: a.readinessDays,
+    questions: a.questions.map(questionData),
     programs: a.programs.map((p) => ({
       id: p.id,
       name: p.name,

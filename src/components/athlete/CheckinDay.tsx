@@ -3,13 +3,11 @@
 import type { Unit } from "@prisma/client";
 import Link from "next/link";
 import { useState } from "react";
-import { BodyweightCard } from "@/components/athlete/BodyweightCard";
 import { Check } from "@/components/athlete/icons";
-import { ReadinessCard } from "@/components/athlete/ReadinessCard";
+import { CheckinCard } from "@/components/athlete/CheckinCard";
 import { SessionLogger } from "@/components/athlete/SessionLogger";
-import type { AthleteSession } from "@/lib/athlete-queries";
+import type { AthleteSession, DayCheckin } from "@/lib/athlete-queries";
 import type { BodyweightEntry } from "@/lib/bodyweight";
-import type { ReadinessEntry } from "@/lib/readiness";
 import { t } from "@/lib/i18n";
 import { completion } from "@/lib/setlog";
 
@@ -43,7 +41,7 @@ export function CheckinDay({
   session,
   rest,
   bodyweight,
-  readiness,
+  checkin,
 }: {
   token: string;
   unit: Unit;
@@ -59,8 +57,8 @@ export function CheckinDay({
   rest: { next: { href: string; date: string } | null; todayHref: string | null };
   /** Recent weigh-ins, newest first. */
   bodyweight: BodyweightEntry[];
-  /** The day's readiness check-in, when the coach asks for one that day; undefined when not. */
-  readiness?: { entry: ReadinessEntry | null };
+  /** The day's check-in questions and answers; none on a day still to come. */
+  checkin: DayCheckin;
 }) {
   const [live, setLive] = useState<StripDay["status"] | null>(null);
   const days = strip.map((d) => (d.ymd === day && live ? { ...d, status: live } : d));
@@ -138,9 +136,7 @@ export function CheckinDay({
         )}
       </div>
 
-      {/* A future day can't be weighed yet: that one logs today. */}
-      <BodyweightCard token={token} unit={unit} day={day <= today ? day : today} today={today} entries={bodyweight} />
-      {readiness && <ReadinessCard token={token} day={day} initial={readiness.entry} />}
+      <CheckinCard token={token} unit={unit} day={day} today={today} initial={checkin} bodyweight={bodyweight} />
 
       {session ? (
         <SessionLogger

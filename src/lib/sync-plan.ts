@@ -7,7 +7,7 @@
  * data only ever comes down — except when the coach edits an athlete column themselves
  * (Tracking), which goes up unless the athlete changed it too, in which case theirs wins.
  *
- * Bodyweight and readiness are written outright on either side. They merge row by row,
+ * Weigh-ins and check-in answers are written outright on either side. They merge row by row,
  * the newer edit winning, with deletes kept as tombstones so they travel like edits.
  */
 
@@ -27,13 +27,12 @@ export const ATHLETE_TABLES = new Set(["SetLog"]);
  */
 export const MERGED_COLUMNS: Record<string, readonly string[]> = {
   BodyweightLog: ["id", "athleteId", "day", "weight", "note", "source", "createdAt", "updatedAt", "deletedAt"],
-  ReadinessLog: ["id", "athleteId", "day", "sleep", "stress", "soreness", "energy", "note", "createdAt", "updatedAt", "deletedAt"],
+  CheckinAnswer: ["id", "athleteId", "questionId", "day", "value", "createdAt", "updatedAt", "deletedAt"],
 };
 
 export const MERGED_TABLES = new Set(Object.keys(MERGED_COLUMNS));
 
 const plainValue = (v: unknown) => v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean";
-const score = (v: unknown) => v === null || v === undefined || (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 5);
 
 /** A merged row as sync may write it: the columns it needs there, and of the right kind. */
 export function validMergedRow(table: string, row: Row): boolean {
@@ -48,7 +47,9 @@ export function validMergedRow(table: string, row: Row): boolean {
     cols.every((c) => plainValue(row[c] ?? null));
   if (!base) return false;
   if (table === "BodyweightLog") return typeof row.weight === "number" && Number.isFinite(row.weight);
-  if (table === "ReadinessLog") return ["sleep", "stress", "soreness", "energy"].every((c) => score(row[c]));
+  if (table === "CheckinAnswer") {
+    return typeof row.questionId === "string" && row.questionId !== "" && (row.value === null || row.value === undefined || typeof row.value === "string");
+  }
   return true;
 }
 

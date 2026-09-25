@@ -7,6 +7,7 @@ import { useCommands, type Command } from "@/lib/commands";
 import type { WeekCell } from "@/lib/overview";
 import { t } from "@/lib/i18n";
 import { formatDate } from "@/lib/dates";
+import { Trophy } from "@/components/CheckinIcon";
 
 export type BoardRow = {
   id: string;
@@ -16,6 +17,8 @@ export type BoardRow = {
   href: string;
   running: boolean;
   flagged: boolean;
+  /** Sets the athlete flagged as PRs in the last week. */
+  prs: number;
   phase: {
     name: string;
     program: string;
@@ -214,6 +217,15 @@ function Row({ row }: { row: BoardRow }) {
       <span className="flex min-w-0 items-center gap-2">
         {row.flagged && <span aria-label={t("Needs attention")} className="size-1.5 shrink-0 rounded-full bg-warn" />}
         <span className="truncate text-[13px] font-medium">{row.name}</span>
+        {row.prs > 0 && (
+          <span
+            title={t("{n} PR this week", { n: row.prs })}
+            className="flex shrink-0 items-center gap-0.5 rounded bg-pr/15 px-1 py-px text-[10px] font-bold text-pr"
+          >
+            <Trophy size={10} />
+            {row.prs > 1 ? row.prs : t("PR")}
+          </span>
+        )}
       </span>
 
       <span className="min-w-0">

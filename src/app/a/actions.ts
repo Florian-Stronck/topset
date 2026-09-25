@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getAthleteByToken, rowForToken } from "@/lib/athlete-queries";
 import { bodyweightEntry, type BodyweightEntry } from "@/lib/bodyweight";
-import { asksOn, cleanScore, parseDays, READINESS_FIELDS, type ReadinessEntry, type ReadinessKey } from "@/lib/readiness";
+import { answerDay, asksOn, cleanAnswer, questionData } from "@/lib/checkins";
 import { prisma } from "@/lib/prisma";
 import { rowActuals } from "@/lib/setlog";
 
@@ -18,6 +18,8 @@ export type SetPatch = {
   rpe?: number | null;
   rir?: number | null;
   done?: boolean;
+  /** Flagged as a personal record. */
+  pr?: boolean;
 };
 
 const MAX_SETS = 30;
@@ -34,6 +36,7 @@ function clean(patch: SetPatch): SetPatch {
     rpe: num(patch.rpe, 10),
     rir: num(patch.rir, 10),
     done: typeof patch.done === "boolean" ? patch.done : undefined,
+    pr: typeof patch.pr === "boolean" ? patch.pr : undefined,
   };
 }
 
@@ -159,30 +162,31 @@ export async function deleteBodyweight(token: string, id: string) {
 }
 
 /**
- * The readiness check-in for a day, one score or the note at a time as the athlete taps.
- * Only on a day the coach asks for it; a check-in taken back and filled in again comes
- * back to life rather than making a second one.
+ * One check-in answer, as the athlete gives it: for a question of theirs, on a day it is
+ * asked, up to today. Null takes the answer back — it stays as a tombstone so the coach's
+ * copy drops it too — and answering again brings it back rather than making a second.
  */
-export async function saveReadiness(
-  token: string,
-  day: string,
-  patch: Partial<Record<ReadinessKey, number | null>> & { note?: string | null },
-): Promise<ReadinessEntry> {
+export async function saveCheckinAnswer(token: string, questionId: string, day: string, raw: unknown): Promise<string | null> {
   const athlete = await getAthleteByToken(token);
   if (!athlete) throw new Error("Not found.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(day))) throw new Error("That day isn't a date.");
-  if (!asksOn(parseDays(athlete.readinessDays), day)) throw new Error("Your coach doesn't ask for this today.");
+  const row = await prisma.checkinQuestion.findFirst({ where: { id: questionId, athleteId: athlete.id } });
+  if (!row) throw new Error("Not found.");
+  const question = questionData(row);
+  if (!asksOn(question, day)) throw new Error("Your coach doesn't ask this that day.");
 
-  const data: Partial<Record<ReadinessKey, number | null>> & { note?: string | null } = {};
-  for (const { key } of READINESS_FIELDS) if (key in patch) data[key] = cleanScore(patch[key]);
-  if ("note" in patch) data.note = patch.note?.trim().slice(0, 500) || null;
-
-  const row = await prisma.readinessLog.upsert({
-    where: { athleteId_day: { athleteId: athlete.id, day } },
-    create: { athleteId: athlete.id, day, ...data },
-    update: { ...data, deletedAt: null },
-    select: { id: true, day: true, sleep: true, stress: true, soreness: true, energy: true, note: true },
-  });
+  const value = cleanAnswer(question, raw);
+  const filed = answerDay(question, day);
+  const key = { questionId_day: { questionId, day: filed } };
+  if (value === null) {
+    await prisma.checkinAnswer.updateMany({ where: { questionId, day: filed, deletedAt: null }, data: { deletedAt: new Date() } });
+  } else {
+    await prisma.checkinAnswer.upsert({
+      where: key,
+      create: { athleteId: athlete.id, questionId, day: filed, value },
+      update: { value, deletedAt: null },
+    });
+  }
   await changed(token);
-  return row;
+  return value;
 }

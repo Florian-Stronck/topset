@@ -2,7 +2,7 @@ import { cache } from "react";
 import { formatPrescription, formatRamp, maxesOf, resolveDay } from "@/lib/intensity";
 import { bodyweightEntry } from "@/lib/bodyweight";
 import { prisma } from "@/lib/prisma";
-import type { ReadinessEntry } from "@/lib/readiness";
+import { answerDay, asksOn, questionData, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
 import { sessionsOf, type Session } from "@/lib/schedule";
 import type { SetLogData } from "@/lib/setlog";
 
@@ -22,7 +22,7 @@ export const getAthleteByToken = cache(async (token: string) => {
   return prisma.athlete.findUnique({
     // A coach the admin turned off takes their athletes' links with them.
     where: { accessToken: token, coach: { disabledAt: null } },
-    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, readinessDays: true },
+    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true },
   });
 });
 
@@ -186,10 +186,19 @@ export async function recentBodyweight(athleteId: string, take = 30) {
   return rows.map(bodyweightEntry);
 }
 
-/** The readiness check-in for one day, if the athlete has filled it in. */
-export async function readinessOn(athleteId: string, day: string): Promise<ReadinessEntry | null> {
-  return prisma.readinessLog.findFirst({
-    where: { athleteId, day, deletedAt: null },
-    select: { id: true, day: true, sleep: true, stress: true, soreness: true, energy: true, note: true },
+export type DayCheckin = { questions: CheckinQuestionData[]; answers: CheckinAnswerData[] };
+
+/** The check-in questions asked on a day, in the coach's order, with any answers given. */
+export async function checkinOn(athleteId: string, day: string): Promise<DayCheckin> {
+  const rows = await prisma.checkinQuestion.findMany({ where: { athleteId, archived: false }, orderBy: [{ order: "asc" }, { createdAt: "asc" }] });
+  const questions = rows.map(questionData).filter((q) => asksOn(q, day));
+  if (questions.length === 0) return { questions, answers: [] };
+  const answers = await prisma.checkinAnswer.findMany({
+    where: {
+      deletedAt: null,
+      OR: questions.map((q) => ({ questionId: q.id, day: answerDay(q, day) })),
+    },
+    select: { id: true, questionId: true, day: true, value: true },
   });
+  return { questions, answers };
 }

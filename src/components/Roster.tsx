@@ -9,14 +9,15 @@ import { formKeys, NumberInput, TextInput } from "@/components/cells";
 import { useSettings } from "@/components/SettingsProvider";
 import { fresh, useCommands, type Command } from "@/lib/commands";
 import type { AthleteData } from "@/lib/types";
-import { plural, t, weekdayShort } from "@/lib/i18n";
-import { formatDays, parseDays } from "@/lib/readiness";
+import { plural, t } from "@/lib/i18n";
+import { CheckinQuestions } from "@/components/CheckinQuestions";
+import type { CheckinQuestionData } from "@/lib/checkins";
 
 export type RosterEntry = AthleteData & {
   /** Whether a check-in link is out. The link itself is only fetched when asked for. */
   hasLink: boolean;
-  /** Weekdays the readiness check-in is asked, "0,3" (0 = Monday). */
-  readinessDays: string;
+  /** What the athlete app asks in the check-in, in order. */
+  questions: CheckinQuestionData[];
   programs: {
     id: string;
     name: string;
@@ -185,7 +186,7 @@ function AthleteCard({ athlete, linkOpen }: { athlete: RosterEntry; linkOpen: bo
         </div>
       </div>
 
-      <ReadinessDays value={athlete.readinessDays} onChange={(readinessDays) => patch({ readinessDays })} />
+      <CheckinQuestions athleteId={athlete.id} questions={athlete.questions} />
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Link
@@ -205,53 +206,6 @@ function AthleteCard({ athlete, linkOpen }: { athlete: RosterEntry; linkOpen: bo
         <AthleteLinkButton athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasLink} initiallyOpen={linkOpen} />
         <DeleteAthleteButton athlete={athlete} />
       </div>
-    </div>
-  );
-}
-
-/** The weekdays the athlete app asks for a readiness check-in, as seven toggles. */
-function ReadinessDays({ value, onChange }: { value: string; onChange: (days: string) => void }) {
-  const [days, setDays] = useState(() => parseDays(value));
-  const [synced, setSynced] = useState(value);
-  if (synced !== value) {
-    setSynced(value);
-    setDays(parseDays(value));
-  }
-
-  function toggle(d: number) {
-    const next = days.includes(d) ? days.filter((x) => x !== d) : [...days, d];
-    setDays(parseDays(next.join(",")));
-    onChange(formatDays(next));
-  }
-
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-2">
-      <span
-        className="text-[10px] tracking-[0.14em] text-muted-2"
-        title={t("The athlete app asks for sleep, stress, soreness and energy on these days.")}
-      >
-        {t("READINESS CHECK")}
-      </span>
-      <div className="flex gap-1">
-        {[0, 1, 2, 3, 4, 5, 6].map((d) => {
-          const on = days.includes(d);
-          return (
-            <button
-              key={d}
-              type="button"
-              aria-pressed={on}
-              title={weekdayShort(d)}
-              onClick={() => toggle(d)}
-              className={`h-6 w-8 rounded-md text-[11px] ${
-                on ? "bg-accent-soft font-medium text-accent" : "border border-border text-muted-2 hover:text-foreground"
-              }`}
-            >
-              {weekdayShort(d).slice(0, 2)}
-            </button>
-          );
-        })}
-      </div>
-      {days.length === 0 && <span className="text-[11px] text-muted-2">{t("off")}</span>}
     </div>
   );
 }

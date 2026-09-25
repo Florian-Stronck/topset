@@ -8,6 +8,8 @@ export type SetLogData = {
   /** Reps in reserve, when effort was logged that way; a set has one or the other. */
   rir: number | null;
   done: boolean;
+  /** Flagged by the athlete as a personal record. */
+  pr: boolean;
   loggedAt: string;
 };
 

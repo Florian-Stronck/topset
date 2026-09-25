@@ -65,14 +65,12 @@ model Athlete {
   /// Secret for the athlete's check-in link. Null until the coach hands one out; a new one
   /// replaces the old, so a lost phone is one click away from locked out.
   accessToken String? @unique
-  /// Weekdays the athlete app asks for a readiness check-in, 0 = Monday … 6 = Sunday,
-  /// comma-separated ("0,3"). Empty: never asked.
-  readinessDays String @default("")
   blocks   Block[]
   programs Program[]
   meets    Meet[]
   bodyweights BodyweightLog[]
-  readiness   ReadinessLog[]
+  questions   CheckinQuestion[]
+  answers     CheckinAnswer[]
 
   @@index([coachId])
 }
@@ -225,6 +223,8 @@ model SetLog {
   /// Reps in reserve, when the athlete logged effort that way. A set has an RPE or an RIR.
   rir      Float?
   done     Boolean     @default(false)
+  /// The athlete flagged this set as a personal record.
+  pr       Boolean     @default(false)
   loggedAt DateTime    @updatedAt
 
   @@unique([rowId, setIndex])
@@ -252,26 +252,48 @@ model BodyweightLog {
   @@index([athleteId, day])
 }
 
-/// How the athlete feels before training, on the days the coach asks: four 1–5 scores,
-/// higher is better on each (5 = slept great, no stress, fresh, full of energy), and a
-/// note. One per athlete per day. Synced like weigh-ins: newer edit wins, deletes are
-/// tombstones.
-model ReadinessLog {
-  id        String    @id @default(cuid())
+/// A question the athlete app asks, written by the coach for one athlete: what it asks,
+/// how often, how it is answered, and the icon and colour it shows with. Coach-owned and
+/// synced like the plan. A question with answers on file is archived rather than deleted,
+/// so the answers keep their label.
+model CheckinQuestion {
+  id        String         @id @default(cuid())
   athleteId String
-  athlete   Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
-  /// `YYYY-MM-DD` on the athlete's calendar.
-  day       String
-  sleep     Int?
-  stress    Int?
-  soreness  Int?
-  energy    Int?
-  note      String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  athlete   Athlete        @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  order     Int            @default(0)
+  label     String
+  cadence   CheckinCadence @default(DAILY)
+  /// Weekdays, 0 = Monday, comma-separated. Daily: the days it is asked, empty = every
+  /// day. Weekly: the first is the day it opens, and it stays open to the end of the week.
+  days      String         @default("")
+  kind      CheckinKind
+  /// What the answer kind needs, as JSON — see src/lib/checkins.ts.
+  config    String         @default("{}")
+  icon      String         @default("check")
+  color     String         @default("blue")
+  archived  Boolean        @default(false)
+  createdAt DateTime       @default(now())
 
-  @@unique([athleteId, day])
+  @@index([athleteId])
+}
+
+/// One answer to a check-in question, for one day — for a weekly question, the day it
+/// opened that week. The value is text whatever the kind (see src/lib/checkins.ts). Written
+/// by the athlete app and synced like weigh-ins: the newer edit wins, deletes are tombstones.
+model CheckinAnswer {
+  id         String    @id @default(cuid())
+  athleteId  String
+  athlete    Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  questionId String
+  /// `YYYY-MM-DD` on the athlete's calendar.
+  day        String
+  value      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  @@unique([questionId, day])
+  @@index([athleteId, day])
 }
 
 model ProgressionRule {
@@ -324,6 +346,20 @@ enum AttemptResult {
   PENDING
   GOOD
   MISS
+}
+
+enum CheckinCadence {
+  DAILY
+  WEEKLY
+}
+
+enum CheckinKind {
+  NUMBER
+  SCALE
+  SINGLE
+  MULTI
+  YESNO
+  TEXT
 }
 
 enum IntensityType {

@@ -102,7 +102,7 @@ export type PushPayload = {
   tables: PushTables;
   /** The coach's own edits to athlete columns (the Tracking sheet). */
   athlete: { id: string; values: Record<string, unknown> }[];
-  /** Rows of merged tables (weigh-ins, readiness) added, changed or deleted here; the newer edit wins. */
+  /** Rows of merged tables (weigh-ins, check-in answers) added, changed or deleted here; the newer edit wins. */
   merged?: Record<string, Row[]>;
 };
 
@@ -125,6 +125,7 @@ export async function applyPush(client: Client, coachId: string, payload: PushPa
   for (const [table] of merged) {
     if (!MERGED_TABLES.has(table)) return `${table} can't be synced.`;
     needed.add("Athlete").add(table);
+    if (table === "CheckinAnswer") needed.add("CheckinQuestion");
   }
   const owned = await ownedIds(client, coachId, [...needed]);
 
@@ -200,12 +201,18 @@ export async function applyPush(client: Client, coachId: string, payload: PushPa
   // must be theirs. Only an edit newer than the copy here is written.
   // An athlete created in this same push counts: its rows were checked as the coach's above.
   const athletes = new Set([...(owned.get("Athlete") ?? []), ...(tables.Athlete?.upsert ?? []).map((r) => String(r.id))]);
+  // An answer has to be to one of their questions too, or it could take another coach's slot.
+  const questions = new Set([
+    ...(owned.get("CheckinQuestion") ?? []),
+    ...(tables.CheckinQuestion?.upsert ?? []).map((r) => String(r.id)),
+  ]);
   for (const [table, list] of merged) {
     const cols = [...MERGED_COLUMNS[table]];
     const mine = owned.get(table) ?? new Set<string>();
     for (const row of list) {
       if (!validMergedRow(table, row)) return `A ${table} row is missing something.`;
       if (!athletes.has(String(row.athleteId))) return "That athlete isn't yours.";
+      if (table === "CheckinAnswer" && !questions.has(String(row.questionId))) return "That question isn't yours.";
     }
     const ids = list.map((r) => r.id);
     const held = new Map<string, number>();

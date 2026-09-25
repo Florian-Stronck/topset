@@ -15,6 +15,8 @@
   /* Status, independent of the coach's accent colour: a missed session, and off plan. */
   --miss: #ef5350;
   --warn: #f0a92e;
+  /* A personal record the athlete flagged. */
+  --pr: #f5c542;
 }
 
 /* Light theme, picked per computer in Settings. */
@@ -29,6 +31,7 @@
   --muted-2: #74747f;
   --miss: #d32f2f;
   --warn: #b7791f;
+  --pr: #b8860b;
   color-scheme: light;
 }
 
@@ -46,6 +49,7 @@
   --color-ok: var(--ok);
   --color-miss: var(--miss);
   --color-warn: var(--warn);
+  --color-pr: var(--pr);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }

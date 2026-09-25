@@ -17,7 +17,10 @@ import {
   trainingFlags,
   type FlagAction,
 } from "@/lib/overview";
-import { getBodyweights, getNextMeets, getOverview, getReadiness, getRecentCheckins, getTrainingWindow } from "@/lib/queries";
+import { getBodyweights, getCheckins, getNextMeets, getOverview, getRecentCheckins, getRecentPrs, getTrainingWindow } from "@/lib/queries";
+import { latestReadiness } from "@/lib/checkins";
+import { formatEffort } from "@/lib/setlog";
+import { Trophy } from "@/components/CheckinIcon";
 import { addDays, daysBetween } from "@/lib/schedule";
 import { activeSettings } from "@/lib/settings";
 import { syncEnabled } from "@/lib/sync";
@@ -31,7 +34,7 @@ type FeedItem = {
   text: string;
   detail?: string;
   action: { label: string; href: string };
-  kind: "flag" | "checkin";
+  kind: "flag" | "pr" | "checkin";
 };
 
 export default async function OverviewPage() {
@@ -47,14 +50,16 @@ export default async function OverviewPage() {
   const from = [addDays(today, -(COMPLIANCE_DAYS - 1)), week[0]].sort()[0];
   const to = [today, week[6]].sort()[1];
 
-  const [checkins, sessions, weights, meets, readiness] = await Promise.all([
+  const [checkins, sessions, weights, meets, answers, prs] = await Promise.all([
     getRecentCheckins(coach.id),
     getTrainingWindow(ids, from, to),
     // Three weeks is enough for this week's average and the one before.
     getBodyweights(ids, addDays(today, -21)),
     getNextMeets(ids, startOfDay(now)),
-    getReadiness(ids, addDays(today, -6)),
+    getCheckins(ids, addDays(today, -6)),
+    getRecentPrs(coach.id),
   ]);
+  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const linksOn = syncEnabled();
 
   const feedFlags: FeedItem[] = [];
@@ -77,6 +82,7 @@ export default async function OverviewPage() {
       program: { label: t("Program"), href: block ? `/programming?athlete=${athlete.id}&phase=${block.id}` : `/programming?athlete=${athlete.id}` },
       review: { label: t("Review"), href: review },
       link: { label: t("Send link"), href: `/athletes?link=${athlete.id}` },
+      checkins: { label: t("Check-ins"), href: `/tracking?athlete=${athlete.id}#checkins` },
     };
 
     const flags = [
@@ -88,7 +94,10 @@ export default async function OverviewPage() {
         meet: nextMeet,
         unit,
         today,
-        readiness: readiness.get(athlete.id)?.at(-1) ?? null,
+        readiness: (() => {
+          const c = answers.get(athlete.id);
+          return c ? latestReadiness(c.questions, c.answers) : null;
+        })(),
       }),
     ];
     flags.forEach((flag, i) =>
@@ -110,6 +119,7 @@ export default async function OverviewPage() {
       href: review,
       running: window?.status === "active",
       flagged: flags.length > 0,
+      prs: prs.filter((p) => p.athleteId === athlete.id && p.loggedAt >= weekAgo).length,
       phase:
         block && window
           ? {
@@ -161,6 +171,22 @@ export default async function OverviewPage() {
     kind: "checkin",
   }));
 
+  const prItems: FeedItem[] = prs.slice(0, 8).map((p) => {
+    const unitOf = athletes.find((a) => a.id === p.athleteId)?.unit === "LB" ? "lb" : "kg";
+    return {
+      key: `pr-${p.id}`,
+      athleteId: p.athleteId,
+      athlete: p.athlete,
+      text:
+        `${t("PR")} · ${p.exercise} ${p.weight === null ? "—" : `${p.weight} ${unitOf}`}` +
+        (p.reps === null ? "" : ` × ${p.reps}`) +
+        (formatEffort(p) ? ` ${formatEffort(p)}` : ""),
+      detail: `${t("week {n}", { n: p.week })} · ${p.loggedAt.toLocaleString(LOCALE[settings.language], { weekday: "short", hour: "2-digit", minute: "2-digit" })}`,
+      action: { label: t("Review"), href: `/tracking?athlete=${p.athleteId}&block=${p.blockId}&week=${p.week}` },
+      kind: "pr",
+    };
+  });
+
   const programs = new Set(athletes.flatMap((a) => a.blocks.map((b) => b.programId))).size;
   const phases = athletes.reduce((n, a) => n + a.blocks.length, 0);
 
@@ -188,7 +214,7 @@ export default async function OverviewPage() {
               day: weekdayShort((settings.weekStart + week.indexOf(ymd)) % 7),
               today: ymd === today,
             }))}
-            feed={<Feed flags={feedFlags} checkins={checkinItems} />}
+            feed={<Feed flags={feedFlags} prs={prItems} checkins={checkinItems} />}
           />
         </div>
       </main>
@@ -196,29 +222,33 @@ export default async function OverviewPage() {
   );
 }
 
-/** Warnings first, then what athletes logged, newest first — each with one thing to do about it. */
-function Feed({ flags, checkins }: { flags: FeedItem[]; checkins: FeedItem[] }) {
+/** Warnings first, then PRs, then what athletes logged, newest first — each with one thing to do about it. */
+function Feed({ flags, prs, checkins }: { flags: FeedItem[]; prs: FeedItem[]; checkins: FeedItem[] }) {
   return (
     <section id="feed" className="mt-7 scroll-mt-4">
       <div className="flex items-center justify-between">
         <h2 className="text-[11px] tracking-[0.16em] text-muted-2">{t("NEEDS ATTENTION AND CHECK-INS")}</h2>
         <RefreshButton />
       </div>
-      {flags.length + checkins.length === 0 ? (
+      {flags.length + prs.length + checkins.length === 0 ? (
         <p className="mt-2 rounded-xl border border-border bg-surface px-4 py-3 text-[13px] text-muted">{t("All caught up.")}</p>
       ) : (
         <div className="mt-2 max-h-[420px] divide-y divide-border overflow-auto rounded-xl border border-border bg-surface">
-          {[...flags, ...checkins].map((item) => (
-            <div key={item.key} className="flex items-center gap-3 px-4 py-2.5">
-              <span
-                aria-hidden
-                className={`size-2 shrink-0 rounded-full ${item.kind === "flag" ? "bg-warn" : "bg-ok"}`}
-              />
+          {[...flags, ...prs, ...checkins].map((item) => (
+            <div key={item.key} className={`flex items-center gap-3 px-4 py-2.5 ${item.kind === "pr" ? "bg-pr/[0.06]" : ""}`}>
+              {item.kind === "pr" ? (
+                <Trophy size={12} className="shrink-0 text-pr" />
+              ) : (
+                <span aria-hidden className={`size-2 shrink-0 rounded-full ${item.kind === "flag" ? "bg-warn" : "bg-ok"}`} />
+              )}
               <Avatar name={item.athlete} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13px]">
                   <span className="font-medium">{item.athlete}</span>
-                  <span className={item.kind === "flag" ? "text-foreground" : "text-muted"}> · {item.text}</span>
+                  <span className={item.kind === "flag" ? "text-foreground" : item.kind === "pr" ? "font-medium text-pr" : "text-muted"}>
+                    {" · "}
+                    {item.text}
+                  </span>
                 </div>
                 {item.detail && <div className="truncate text-[11px] text-muted-2">{item.detail}</div>}
               </div>
