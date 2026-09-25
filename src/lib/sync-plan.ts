@@ -7,7 +7,7 @@
  * data only ever comes down — except when the coach edits an athlete column themselves
  * (Tracking), which goes up unless the athlete changed it too, in which case theirs wins.
  *
- * Weigh-ins and check-in answers are written outright on either side. They merge row by row,
+ * Weigh-ins, check-in answers and the coach's messages are written outright on either side. They merge row by row,
  * the newer edit winning, with deletes kept as tombstones so they travel like edits.
  */
 
@@ -28,6 +28,8 @@ export const ATHLETE_TABLES = new Set(["SetLog"]);
 export const MERGED_COLUMNS: Record<string, readonly string[]> = {
   BodyweightLog: ["id", "athleteId", "day", "weight", "note", "source", "createdAt", "updatedAt", "deletedAt"],
   CheckinAnswer: ["id", "athleteId", "questionId", "day", "value", "createdAt", "updatedAt", "deletedAt"],
+  // The coach writes the text, the athlete app when it was read.
+  CoachMessage: ["id", "athleteId", "day", "dayId", "rowId", "body", "readAt", "createdAt", "updatedAt", "deletedAt"],
 };
 
 export const MERGED_TABLES = new Set(Object.keys(MERGED_COLUMNS));
@@ -50,6 +52,7 @@ export function validMergedRow(table: string, row: Row): boolean {
   if (table === "CheckinAnswer") {
     return typeof row.questionId === "string" && row.questionId !== "" && (row.value === null || row.value === undefined || typeof row.value === "string");
   }
+  if (table === "CoachMessage") return typeof row.body === "string";
   return true;
 }
 

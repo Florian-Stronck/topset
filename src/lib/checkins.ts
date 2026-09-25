@@ -49,7 +49,14 @@ export type CheckinQuestionData = {
   archived: boolean;
 };
 
-export type CheckinAnswerData = { id: string; questionId: string; day: string; value: string | null };
+export type CheckinAnswerData = {
+  id: string;
+  questionId: string;
+  day: string;
+  value: string | null;
+  /** When it was last answered, ISO — for telling what is new since a session was reviewed. */
+  updatedAt?: string;
+};
 
 /** At or under this average, readiness is worth a look. */
 export const LOW_READINESS = 2.5;

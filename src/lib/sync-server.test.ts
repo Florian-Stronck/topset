@@ -125,3 +125,32 @@ test("check-in answers merge like weigh-ins, and only to the coach's own questio
     "SetLog can't be synced.",
   );
 });
+
+test("coach messages merge both ways: the coach's text up, the athlete's read receipt down", async () => {
+  const note = {
+    id: "m1", athleteId: "a1", day: "2026-09-21", dayId: "d1", rowId: null, body: "Great speed off the floor.", readAt: null,
+    createdAt: "2026-09-21T18:00:00.000+00:00", updatedAt: "2026-09-21T18:00:00.000+00:00", deletedAt: null,
+  };
+  assert.equal(await applyPush(client, "me", { tables: {}, athlete: [], merged: { CoachMessage: [note] } }), null);
+
+  // The athlete app reads it on the server; the desktop copy takes the newer row.
+  await client.execute(`UPDATE "CoachMessage" SET "readAt" = '2026-09-22T07:00:00.000+00:00', "updatedAt" = '2026-09-22T07:00:00.000+00:00' WHERE "id" = 'm1'`);
+  const pulled = await athleteData(client, "me");
+  assert.ok(!pulled.unchanged);
+  assert.equal(pulled.merged.CoachMessage[0].readAt, "2026-09-22T07:00:00.000+00:00");
+
+  // An older copy from the desktop doesn't undo the read.
+  assert.equal(await applyPush(client, "me", { tables: {}, athlete: [], merged: { CoachMessage: [note] } }), null);
+  const again = await athleteData(client, "me");
+  assert.ok(!again.unchanged);
+  assert.equal(again.merged.CoachMessage[0].readAt, "2026-09-22T07:00:00.000+00:00");
+
+  assert.equal(
+    await applyPush(client, "me", { tables: {}, athlete: [], merged: { CoachMessage: [{ ...note, id: "m2", body: 3 }] } }),
+    "A CoachMessage row is missing something.",
+  );
+  assert.equal(
+    await applyPush(client, "me", { tables: {}, athlete: [], merged: { CoachMessage: [{ ...note, id: "m3", athleteId: "a9" }] } }),
+    "That athlete isn't yours.",
+  );
+});

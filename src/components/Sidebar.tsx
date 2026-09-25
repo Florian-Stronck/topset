@@ -75,12 +75,15 @@ export function Sidebar({
   coachUsername,
   coachName,
   section = "programming",
+  keep,
 }: {
   athletes: Athlete[];
   activeAthleteId?: string;
   coachUsername: string;
   coachName?: string;
   section?: "overview" | "athletes" | "programming" | "tracking" | "competition" | "settings";
+  /** Query kept when switching athlete, such as Tracking's open view (`view=progress`). */
+  keep?: string;
 }) {
   const router = useRouter();
   const athleteMenu = useContextMenu();
@@ -96,7 +99,7 @@ export function Sidebar({
       kind: "place",
       run: () => router.push(href),
     });
-    const inSection = (id: string) => `${SECTION_HREF[section] ?? "/programming"}?athlete=${id}`;
+    const inSection = (id: string) => `${SECTION_HREF[section] ?? "/programming"}?athlete=${id}${keep ? `&${keep}` : ""}`;
     const at = athletes.findIndex((a) => a.id === activeAthleteId);
     const step = (by: 1 | -1) => {
       if (athletes.length === 0) return;
@@ -143,7 +146,7 @@ export function Sidebar({
           run: () => router.push(inSection(a.id)),
         })),
     ];
-  }, [athletes, activeAthleteId, router, section]);
+  }, [athletes, activeAthleteId, keep, router, section]);
   useCommands("sidebar", commands);
 
   // Remembered for "open where I left off" — a cookie, so the server can read it at "/".
@@ -216,7 +219,7 @@ export function Sidebar({
                   { label: t("Competition"), onSelect: () => router.push(`/competition?athlete=${a.id}`) },
                 ])
               }
-              href={`${SECTION_HREF[section] ?? "/programming"}?athlete=${a.id}`}
+              href={`${SECTION_HREF[section] ?? "/programming"}?athlete=${a.id}${keep ? `&${keep}` : ""}`}
               title={collapsed ? a.name : undefined}
               className={`flex items-center gap-2 rounded-lg border text-[13px] ${
                 collapsed ? "justify-center px-0 py-1.5" : "px-3 py-2"
@@ -335,16 +338,16 @@ export function Sidebar({
             }`}
           >
             <svg
-              viewBox="0 0 16 16"
+              viewBox="0 0 24 24"
               className="size-4"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.3"
+              strokeWidth="1.9"
               strokeLinecap="round"
               strokeLinejoin="round"
             >
-              <circle cx="8" cy="8" r="2.2" />
-              <path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1" />
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
             </svg>
           </Link>
         </div>

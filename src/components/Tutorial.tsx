@@ -125,7 +125,7 @@ const STEPS: Step[] = [
   {
     page: "tracking",
     title: "Tracking",
-    body: "After training, enter what the athlete actually lifted — weight, RPE and notes. Charts show progress over every phase, and Topset can estimate a new 1RM from good sets and save it with one click.",
+    body: "Three views, <k>Alt</k>+<k>1</k> to <k>3</k>. <b>Review</b> shows each session against its plan — mark it reviewed, or send the athlete a note that lands in their inbox. <b>Progress</b> charts 1RMs, tonnage, RPE and intensity, and saves a new 1RM with one click. <b>Wellness</b> has readiness, bodyweight and every check-in.",
   },
   {
     page: "competition",

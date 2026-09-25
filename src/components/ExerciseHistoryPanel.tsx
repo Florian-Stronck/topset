@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { formatDate } from "@/lib/dates";
 import type { ExerciseHistory } from "@/lib/exercise-history";
 import { t } from "@/lib/i18n";
@@ -16,6 +16,12 @@ const PLOT = { w: W - PAD.left - PAD.right, h: H - PAD.top - PAD.bottom };
  */
 export function ExerciseHistoryPanel({ history, unit }: { history: ExerciseHistory[]; unit: string }) {
   const [name, setName] = useState(history[0]?.name ?? "");
+  // The palette's "Exercise history: …" picks one from outside.
+  useEffect(() => {
+    const pick = (e: Event) => setName(String((e as CustomEvent).detail));
+    window.addEventListener("topset:exercise-history", pick);
+    return () => window.removeEventListener("topset:exercise-history", pick);
+  }, []);
   if (history.length === 0) return null;
   const current = history.find((h) => h.name === name) ?? history[0];
 

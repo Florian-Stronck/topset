@@ -37,6 +37,8 @@ export type DayData = {
   index: number;
   label: string;
   rest: boolean;
+  /** When the coach last marked the session reviewed in Tracking, ISO. */
+  reviewedAt?: string | null;
   rows: RowData[];
 };
 

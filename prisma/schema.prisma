@@ -71,6 +71,7 @@ model Athlete {
   bodyweights BodyweightLog[]
   questions   CheckinQuestion[]
   answers     CheckinAnswer[]
+  messages    CoachMessage[]
 
   @@index([coachId])
 }
@@ -163,6 +164,8 @@ model Day {
   index  Int
   label  String
   rest   Boolean       @default(false)
+  /// When the coach last marked the session reviewed in Tracking. Coach-owned.
+  reviewedAt DateTime?
   rows   ExerciseRow[]
 
   @@unique([weekId, index])
@@ -293,6 +296,28 @@ model CheckinAnswer {
   deletedAt  DateTime?
 
   @@unique([questionId, day])
+  @@index([athleteId, day])
+}
+
+/// A note from the coach to the athlete about one session, read in the athlete app's inbox.
+/// Both sides write it — the coach the text, the athlete when they read it — so it syncs
+/// like weigh-ins: the newer edit wins, deletes are tombstones.
+model CoachMessage {
+  id        String    @id @default(cuid())
+  athleteId String
+  athlete   Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  /// The session it is about, `YYYY-MM-DD` on the athlete's calendar.
+  day       String
+  /// The session's Day, when it still exists; a plain id so a deleted phase leaves the note.
+  dayId     String?
+  /// Set when the note is about one exercise of the session.
+  rowId     String?
+  body      String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
   @@index([athleteId, day])
 }
 

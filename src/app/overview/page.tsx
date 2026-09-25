@@ -17,7 +17,7 @@ import {
   trainingFlags,
   type FlagAction,
 } from "@/lib/overview";
-import { getBodyweights, getCheckins, getNextMeets, getOverview, getRecentCheckins, getRecentPrs, getTrainingWindow } from "@/lib/queries";
+import { getBodyweights, getCheckins, getNextMeets, getOverview, getRecentCheckins, getRecentPrs, getTrainingWindow, getUnreviewed } from "@/lib/queries";
 import { latestReadiness } from "@/lib/checkins";
 import { formatEffort } from "@/lib/setlog";
 import { Trophy } from "@/components/CheckinIcon";
@@ -50,7 +50,7 @@ export default async function OverviewPage() {
   const from = [addDays(today, -(COMPLIANCE_DAYS - 1)), week[0]].sort()[0];
   const to = [today, week[6]].sort()[1];
 
-  const [checkins, sessions, weights, meets, answers, prs] = await Promise.all([
+  const [checkins, sessions, weights, meets, answers, prs, unreviewed] = await Promise.all([
     getRecentCheckins(coach.id),
     getTrainingWindow(ids, from, to),
     // Three weeks is enough for this week's average and the one before.
@@ -58,6 +58,7 @@ export default async function OverviewPage() {
     getNextMeets(ids, startOfDay(now)),
     getCheckins(ids, addDays(today, -6)),
     getRecentPrs(coach.id),
+    getUnreviewed(coach.id),
   ]);
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const linksOn = syncEnabled();
@@ -82,8 +83,16 @@ export default async function OverviewPage() {
       program: { label: t("Program"), href: block ? `/programming?athlete=${athlete.id}&phase=${block.id}` : `/programming?athlete=${athlete.id}` },
       review: { label: t("Review"), href: review },
       link: { label: t("Send link"), href: `/athletes?link=${athlete.id}` },
-      checkins: { label: t("Check-ins"), href: `/tracking?athlete=${athlete.id}#checkins` },
+      checkins: { label: t("Check-ins"), href: `/tracking?athlete=${athlete.id}&view=wellness#checkins` },
+      sessions: (() => {
+        const u = unreviewed.get(athlete.id);
+        return {
+          label: t("Review"),
+          href: u ? `/tracking?athlete=${athlete.id}&block=${u.blockId}&week=${u.week}&show=unreviewed` : review,
+        };
+      })(),
     };
+    const toReview = unreviewed.get(athlete.id)?.count ?? 0;
 
     const flags = [
       ...flagsFor(athlete, now, block ? (targetsByBlock.get(block.id) ?? []) : []),
@@ -99,6 +108,9 @@ export default async function OverviewPage() {
           return c ? latestReadiness(c.questions, c.answers) : null;
         })(),
       }),
+      ...(toReview > 0
+        ? [{ text: t(toReview === 1 ? "{n} session to review" : "{n} sessions to review", { n: toReview }), action: "sessions" as const }]
+        : []),
     ];
     flags.forEach((flag, i) =>
       feedFlags.push({

@@ -19,19 +19,36 @@ export function CheckinPanel({
   questions,
   answers,
   today,
+  range: rangeFromProps,
+  onRange,
+  lowOnly = false,
 }: {
   questions: CheckinQuestionData[];
   answers: CheckinAnswerData[];
   today: string;
+  /** How many days back, when the caller keeps track of it. */
+  range?: number;
+  onRange?: (days: number) => void;
+  /** Only the days readiness came out low. */
+  lowOnly?: boolean;
 }) {
-  const [range, setRange] = useState(14);
+  const [ownRange, setOwnRange] = useState(14);
+  const range = rangeFromProps ?? ownRange;
+  const setRange = onRange ?? setOwnRange;
   const from = addDays(today, -(range - 1));
   const inRange = answers.filter((a) => a.day >= from && a.day <= today);
 
   // Questions still asked, then retired ones that were answered in this stretch.
   const answeredIds = new Set(inRange.map((a) => a.questionId));
   const columns = questions.filter((q) => !q.archived || answeredIds.has(q.id));
-  const days = [...new Set(inRange.map((a) => a.day))].sort().reverse();
+  const days = [...new Set(inRange.map((a) => a.day))]
+    .sort()
+    .reverse()
+    .filter((day) => {
+      if (!lowOnly) return true;
+      const { score } = readinessOf(questions, inRange.filter((a) => a.day === day));
+      return score !== null && score <= LOW_READINESS;
+    });
   const hasScale = columns.some((q) => q.kind === "SCALE");
   const yesNo = { yes: t("Yes"), no: t("No") };
 
@@ -58,7 +75,9 @@ export function CheckinPanel({
         <p className="mt-2 rounded-xl border border-dashed border-border px-4 py-4 text-[12px] text-muted-2">
           {columns.length === 0
             ? t("No check-in questions yet. Add them on the athlete's card under Athletes.")
-            : t("Nothing answered in the last {n} days.", { n: range })}
+            : lowOnly
+              ? t("No low-readiness days in the last {n} days.", { n: range })
+              : t("Nothing answered in the last {n} days.", { n: range })}
         </p>
       ) : (
         <div className="mt-2 overflow-x-auto rounded-xl border border-border">

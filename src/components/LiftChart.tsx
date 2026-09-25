@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { LIFT_COLOR, type LiftKey, type LiftSeries } from "@/lib/progress";
 import { formatDate as formatShortDate } from "@/lib/dates";
 import { t } from "@/lib/i18n";
@@ -26,14 +26,25 @@ export function LiftChart({
   unit,
   mode,
   onMode,
+  title = "ACROSS PROGRAMS",
+  hidden: hiddenFromProps,
+  onToggleLift,
+  controls,
 }: {
   series: Record<Mode, LiftSeries[]>;
   unit: string;
   mode: Mode;
   onMode: (mode: Mode) => void;
+  title?: string;
+  /** Lifts switched off, when the caller keeps track of them. */
+  hidden?: Set<LiftKey>;
+  onToggleLift?: (lift: LiftKey) => void;
+  /** More controls beside the mode switch, such as a date range. */
+  controls?: ReactNode;
 }) {
   const active = series[mode];
-  const [hidden, setHidden] = useState<Set<LiftKey>>(new Set());
+  const [ownHidden, setHidden] = useState<Set<LiftKey>>(new Set());
+  const hidden = hiddenFromProps ?? ownHidden;
   const [hover, setHover] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -93,9 +104,10 @@ export function LiftChart({
   return (
     <section>
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-[11px] tracking-[0.16em] text-muted-2">{t("ACROSS PROGRAMS")}</h2>
+        <h2 className="text-[11px] tracking-[0.16em] text-muted-2">{t(title)}</h2>
 
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex flex-wrap items-center gap-1">
+          {controls}
           {(Object.keys(MODE_LABEL) as Mode[]).map((m) => (
             <button
               key={m}
@@ -122,12 +134,14 @@ export function LiftChart({
               key={s.lift}
               type="button"
               onClick={() =>
-                setHidden((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(s.lift)) next.delete(s.lift);
-                  else next.add(s.lift);
-                  return next;
-                })
+                onToggleLift
+                  ? onToggleLift(s.lift)
+                  : setHidden((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(s.lift)) next.delete(s.lift);
+                      else next.add(s.lift);
+                      return next;
+                    })
               }
               className={`flex items-center gap-1.5 text-[11px] ${
                 off ? "text-muted-2 line-through" : "text-muted"

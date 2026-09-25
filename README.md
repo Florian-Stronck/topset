@@ -41,7 +41,13 @@ Where you write the plan, one week at a time. See [Writing a program](#writing-a
 
 ### Tracking
 
-The trend across programs, with the chosen week's sets directly below. Missed rows get a red edge; sets more than 5% under target or 1 RPE over the plan get an amber one, and **Off-plan only** shows just those. The day's check-in answers sit in its header, and weekly answers (and rest-day ones) above the days. Sets the athlete flagged as PRs get a gold edge. Below: weekly sets by TARGET (bench also counts for Chest, squat and deadlift for Legs; click a header to sort), the history of any exercise across all programs, estimated 1RMs, and bodyweight with where the trend lands on meet day. Arrows next to the name step through the roster.
+Three views, **Alt+1** to **Alt+3**, each athlete stepped through with the arrows by the name. It fetches what athletes logged every minute while it's open.
+
+- **Review** — the week's sessions as cards, one line per exercise: the plan, what was done, the estimated 1RM and how it compares with last time. A line opens to its sets, the athlete's note, your cues and the videos. Missed rows get a red edge, rows more than 5% under target or 1 RPE over plan an amber one, PRs a gold one. A bar on top counts what needs you — sessions to review, missed, off plan, PRs, low readiness — and filters narrow it down (by state, and to competition lifts, variations or accessories). **Mark reviewed** clears a session; **Send and mark reviewed** also sends the athlete a note, which lands in their inbox.
+- **Progress** — the best 1RMs of the phase (**Use as 1RM** saves one), strength across every program (phase, program, 12 weeks or all), weekly tonnage by lift or by target, RPE against the plan, compliance, intensity zones by %1RM, a week-by-week table per lift, the history of any exercise, and weekly sets by TARGET.
+- **Wellness** — readiness day by day (as one score or per question), readiness against how heavy the sessions felt, bodyweight with where the trend lands on meet day, and every check-in answer.
+
+Every button has a command in the palette, and every command can take a key.
 
 ![Tracking: top sets across the program as a chart, then each logged set against what was prescribed](docs/screenshots/tracking.png)
 
@@ -136,6 +142,7 @@ Once you're signed in to a Topset server, click **Athlete link** on an athlete's
 
 - **Today**: the session, set by set, to log weight, reps and RPE or RIR, with notes and videos. Each exercise's circle fills as its sets are ticked, and **PR** flags the top set as a personal record: it gets a gold edge in **Tracking** and a line in **Overview**.
 - **History**: every session done so far and what's coming up.
+- **Inbox**: your notes on their sessions, newest first, with a badge for new ones. A note also shows on its day in Today and History, and Tracking shows you once it's been read.
 - **Tools**: a plate calculator and an e1RM calculator.
 - **Check-in**: bodyweight first, then the questions you write under **Check-in** on the athlete's card — start from a preset (calories, sleep, stress, soreness, energy, steps, water, cycle, supplements, notes) or write your own. Each is asked daily (every day or the weekdays you pick) or weekly, and answered as a number, a scale, single or multiple choice, yes/no or text, with its own icon and colour. Scales make up the readiness score; low readiness shows up on Overview. Every answer is in the **Check-ins** table on Tracking (14, 28 or 56 days), linked from **See answers** on the athlete card.
 

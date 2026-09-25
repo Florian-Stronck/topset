@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { AthleteNav } from "@/components/athlete/AthleteNav";
 import { RememberAthlete } from "@/components/athlete/RememberAthlete";
 import { SettingsProvider } from "@/components/SettingsProvider";
-import { getAthleteByToken } from "@/lib/athlete-queries";
+import { getAthleteByToken, unreadCount } from "@/lib/athlete-queries";
 import { loadSettings } from "@/lib/coach-settings";
 import { forClient } from "@/lib/settings";
 
@@ -36,7 +36,7 @@ export default async function AthleteLayout({
   const athlete = await getAthleteByToken(token);
   if (!athlete) notFound();
   // The athlete sees their own coach's units, rounding, RPE chart and language.
-  const settings = await loadSettings(athlete.coachId);
+  const [settings, unread] = await Promise.all([loadSettings(athlete.coachId), unreadCount(athlete.id)]);
 
   return (
     <SettingsProvider settings={forClient(settings)}>
@@ -45,7 +45,7 @@ export default async function AthleteLayout({
         <div className="flex-1 px-4 pb-28 pt-[max(16px,env(safe-area-inset-top))]">
           {children}
         </div>
-        <AthleteNav token={token} />
+        <AthleteNav token={token} unread={unread} />
       </div>
     </SettingsProvider>
   );

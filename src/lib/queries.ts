@@ -117,6 +117,7 @@ export function toBlockData(phase: BlockWithDays): BlockData {
         index: day.index,
         label: day.label,
         rest: day.rest,
+        reviewedAt: day.reviewedAt?.toISOString() ?? null,
         rows: day.rows.map((row) => ({
           ...row,
           logs: row.logs.map((log) => ({ ...log, loggedAt: log.loggedAt.toISOString() })),
@@ -246,7 +247,7 @@ export async function getAllPhasesForAthlete(athleteId: string) {
     where: { athleteId },
     orderBy: { startDate: "asc" },
     include: {
-      program: { select: { name: true } },
+      program: { select: { id: true, name: true } },
       weeks: {
         orderBy: { order: "asc" },
         include: {
@@ -436,7 +437,7 @@ export async function getCheckins(athleteIds: string[], from?: string): Promise<
     prisma.checkinAnswer.findMany({
       where: { athleteId: { in: athleteIds }, deletedAt: null, ...(from ? { day: { gte: from } } : {}) },
       orderBy: { day: "asc" },
-      select: { id: true, athleteId: true, questionId: true, day: true, value: true },
+      select: { id: true, athleteId: true, questionId: true, day: true, value: true, updatedAt: true },
     }),
   ]);
   const out = new Map<string, AthleteCheckins>();
@@ -446,7 +447,88 @@ export async function getCheckins(athleteIds: string[], from?: string): Promise<
     return e;
   };
   for (const row of questions) entry(row.athleteId).questions.push(questionData(row));
-  for (const { athleteId, ...answer } of answers) entry(athleteId).answers.push(answer);
+  for (const { athleteId, updatedAt, ...answer } of answers) entry(athleteId).answers.push({ ...answer, updatedAt: updatedAt.toISOString() });
+  return out;
+}
+
+/** A note from the coach about one session, as Tracking and the athlete's inbox show it. */
+export type MessageData = {
+  id: string;
+  day: string;
+  dayId: string | null;
+  rowId: string | null;
+  body: string;
+  readAt: string | null;
+  createdAt: string;
+};
+
+export function messageData(row: {
+  id: string;
+  day: string;
+  dayId: string | null;
+  rowId: string | null;
+  body: string;
+  readAt: Date | null;
+  createdAt: Date;
+}): MessageData {
+  return {
+    id: row.id,
+    day: row.day,
+    dayId: row.dayId,
+    rowId: row.rowId,
+    body: row.body,
+    readAt: row.readAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/** Every note the coach sent an athlete that is still standing, oldest first. */
+export async function getMessages(athleteId: string): Promise<MessageData[]> {
+  const rows = await prisma.coachMessage.findMany({
+    where: { athleteId, deletedAt: null },
+    orderBy: { createdAt: "asc" },
+  });
+  return rows.map(messageData);
+}
+
+/**
+ * Sessions with something new since the coach last reviewed them, per athlete, over the
+ * last `days` days: logged sets after `reviewedAt`, or never reviewed at all.
+ */
+export async function getUnreviewed(coachId: string, days = 14): Promise<Map<string, { count: number; blockId: string; week: number }>> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const logs = await prisma.setLog.findMany({
+    where: { done: true, loggedAt: { gte: since }, row: { day: { week: { block: { athlete: { coachId } } } } } },
+    select: {
+      loggedAt: true,
+      row: {
+        select: {
+          day: {
+            select: {
+              id: true,
+              reviewedAt: true,
+              week: { select: { order: true, block: { select: { id: true, athleteId: true } } } },
+            },
+          },
+        },
+      },
+    },
+  });
+  const sessions = new Map<string, { athleteId: string; blockId: string; week: number; last: Date; reviewedAt: Date | null }>();
+  for (const log of logs) {
+    const day = log.row.day;
+    const had = sessions.get(day.id);
+    if (had && had.last >= log.loggedAt) continue;
+    sessions.set(day.id, { athleteId: day.week.block.athleteId, blockId: day.week.block.id, week: day.week.order, last: log.loggedAt, reviewedAt: day.reviewedAt });
+  }
+  const out = new Map<string, { count: number; blockId: string; week: number }>();
+  for (const d of sessions.values()) {
+    if (d.reviewedAt && d.reviewedAt >= d.last) continue;
+    const had = out.get(d.athleteId);
+    // The link opens the oldest session still waiting.
+    if (!had) out.set(d.athleteId, { count: 1, blockId: d.blockId, week: d.week });
+    else had.count++;
+  }
   return out;
 }
 

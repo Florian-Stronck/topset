@@ -40,3 +40,15 @@ test("only keys with Ctrl, Alt or an F-key fire while typing in a cell", () => {
   assert.equal(firesWhileTyping("g"), false);
   assert.equal(firesWhileTyping("shift+n"), false);
 });
+
+test("no two built-in commands share a default key", async () => {
+  const { COMMAND_SPECS } = await import("@/lib/shortcuts");
+  const seen = new Map<string, string>();
+  for (const spec of COMMAND_SPECS) {
+    for (const key of spec.keys ?? []) {
+      const scope = `${spec.when ?? "any"}:${key}`;
+      assert.equal(seen.get(scope), undefined, `${key} is the default for both ${seen.get(scope)} and ${spec.id}`);
+      seen.set(scope, spec.id);
+    }
+  }
+});

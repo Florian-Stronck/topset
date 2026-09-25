@@ -24,9 +24,9 @@ export type ExerciseLog = {
 export type ExerciseHistory = { name: string; logs: ExerciseLog[] };
 
 type ProgressDay = ProgressBlock["weeks"][number]["days"][number];
-type HistoryBlock = Omit<ProgressBlock, "weeks"> & { weeks: { order: number; days: (ProgressDay & { index: number })[] }[] };
+export type HistoryBlock = Omit<ProgressBlock, "weeks"> & { weeks: { order: number; days: (ProgressDay & { index: number })[] }[] };
 
-const keyOf = (name: string) => name.trim().replace(/\s+/g, " ").toLowerCase();
+export const keyOf = (name: string) => name.trim().replace(/\s+/g, " ").toLowerCase();
 
 export function exerciseHistory(blocks: HistoryBlock[], athlete: AthleteData): ExerciseHistory[] {
   const out = new Map<string, ExerciseHistory>();

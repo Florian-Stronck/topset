@@ -78,7 +78,7 @@ export function currentBlock(blocks: BlockSummary[], today: Date): BlockSummary 
 }
 
 /** What a flag's one button does: open the plan, open Tracking, or hand out the link. */
-export type FlagAction = "program" | "review" | "link" | "checkins";
+export type FlagAction = "program" | "review" | "link" | "checkins" | "sessions";
 
 export type Flag = {
   text: string;

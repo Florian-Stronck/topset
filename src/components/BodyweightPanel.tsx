@@ -136,6 +136,7 @@ export function BodyweightPanel({
           className="h-8 rounded-lg border border-border bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
         />
         <input
+          id="bodyweight-weight"
           type="text"
           inputMode="decimal"
           value={draft}

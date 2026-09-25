@@ -53,7 +53,7 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
           {t("CHECK-IN")}
         </span>
         {order.length === 0 && <span className="text-[11px] text-muted-2">{t("bodyweight only")}</span>}
-        <Link href={`/tracking?athlete=${athleteId}#checkins`} className="ml-auto text-[11px] text-muted hover:text-accent">
+        <Link href={`/tracking?athlete=${athleteId}&view=wellness#checkins`} className="ml-auto text-[11px] text-muted hover:text-accent">
           {t("See answers")} →
         </Link>
       </div>

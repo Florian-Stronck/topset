@@ -202,3 +202,39 @@ export async function checkinOn(athleteId: string, day: string): Promise<DayChec
   });
   return { questions, answers };
 }
+
+/** A note from the coach as the athlete app shows it, with the session it is about. */
+export type InboxMessage = {
+  id: string;
+  day: string;
+  /** The session's name, when its day still exists. */
+  label: string | null;
+  body: string;
+  read: boolean;
+  createdAt: string;
+};
+
+/** The coach's notes to this athlete, newest first — all of them, or those about some days. */
+export async function inboxFor(athleteId: string, days?: string[]): Promise<InboxMessage[]> {
+  const rows = await prisma.coachMessage.findMany({
+    where: { athleteId, deletedAt: null, ...(days ? { day: { in: days } } : {}) },
+    orderBy: [{ day: "desc" }, { createdAt: "desc" }],
+  });
+  const dayIds = [...new Set(rows.map((r) => r.dayId).filter((id): id is string => id !== null))];
+  const labels = new Map(
+    dayIds.length ? (await prisma.day.findMany({ where: { id: { in: dayIds } }, select: { id: true, label: true } })).map((d) => [d.id, d.label]) : [],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    day: r.day,
+    label: r.dayId ? (labels.get(r.dayId) ?? null) : null,
+    body: r.body,
+    read: r.readAt !== null,
+    createdAt: r.createdAt.toISOString(),
+  }));
+}
+
+/** How many of the coach's notes the athlete hasn't opened yet. */
+export async function unreadCount(athleteId: string): Promise<number> {
+  return prisma.coachMessage.count({ where: { athleteId, deletedAt: null, readAt: null } });
+}

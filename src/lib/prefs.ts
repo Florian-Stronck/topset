@@ -44,6 +44,32 @@ export type Prefs = {
   recentCommands: string[];
   /** A copied phase or week, waiting to be pasted — into any program, any athlete. */
   clipboard: { kind: "phase" | "week"; id: string; label: string } | null;
+  /** How Tracking is filtered and charted on this computer. */
+  tracking: TrackingPrefs;
+};
+
+export type TrackingPrefs = {
+  filter: "all" | "unreviewed" | "offplan" | "missed" | "prs";
+  lifts: "all" | "main" | "variations" | "accessories";
+  /** Every exercise opened to its sets. */
+  expandAll: boolean;
+  /** Sessions later this week, not just the ones done or due. */
+  showUpcoming: boolean;
+  /** Coach notes, tempo and rest under each exercise. */
+  showCues: boolean;
+  /** Fetch what athletes logged every minute while Tracking is open. */
+  autoSync: boolean;
+  chartBasis: "estimated" | "prescribed";
+  chartRange: "phase" | "program" | "12w" | "all";
+  /** Lifts switched off in the charts. */
+  chartHidden: ("squat" | "bench" | "dead")[];
+  tonnageBy: "lift" | "target";
+  /** Which lift the RPE, zones and week-by-week charts show. */
+  chartLift: "all" | "squat" | "bench" | "dead";
+  checkinRange: 14 | 28 | 56;
+  lowOnly: boolean;
+  /** Readiness as one score, or a line per question. */
+  perQuestion: boolean;
 };
 
 export const PREF_DEFAULTS: Prefs = {
@@ -63,7 +89,28 @@ export const PREF_DEFAULTS: Prefs = {
   pinnedCommands: [],
   recentCommands: [],
   clipboard: null,
+  tracking: {
+    filter: "all",
+    lifts: "all",
+    expandAll: false,
+    showUpcoming: true,
+    showCues: false,
+    autoSync: true,
+    chartBasis: "estimated",
+    chartRange: "all",
+    chartHidden: [],
+    tonnageBy: "lift",
+    chartLift: "squat",
+    checkinRange: 14,
+    lowOnly: false,
+    perQuestion: false,
+  },
 };
+
+/** Changes some of Tracking's view settings, keeping the rest. */
+export function setTrackingPref(patch: Partial<TrackingPrefs>) {
+  setPref("tracking", { ...read("tracking"), ...patch });
+}
 
 // Snapshots must be stable between changes, or useSyncExternalStore re-renders forever.
 const cache = new Map<string, { raw: string | null; value: unknown }>();

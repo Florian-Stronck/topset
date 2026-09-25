@@ -190,3 +190,14 @@ export async function saveCheckinAnswer(token: string, questionId: string, day: 
   await changed(token);
   return value;
 }
+
+/** The athlete opened their coach's notes: these ones, or every one still unread. */
+export async function markRead(token: string, ids?: string[]) {
+  const athlete = await getAthleteByToken(token);
+  if (!athlete) throw new Error("Not found.");
+  const { count } = await prisma.coachMessage.updateMany({
+    where: { athleteId: athlete.id, deletedAt: null, readAt: null, ...(ids ? { id: { in: ids } } : {}) },
+    data: { readAt: new Date() },
+  });
+  if (count > 0) await changed(token);
+}

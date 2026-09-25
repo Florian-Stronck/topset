@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getAthleteByToken, getAthleteSchedule, sessionsInFull, type AthleteSession } from "@/lib/athlete-queries";
+import { getAthleteByToken, getAthleteSchedule, inboxFor, sessionsInFull, type AthleteSession, type InboxMessage } from "@/lib/athlete-queries";
 import { shortDate } from "@/lib/athlete-format";
 import { athleteToday } from "@/lib/athlete-today";
 import { loadSettings } from "@/lib/coach-settings";
@@ -26,6 +26,8 @@ export default async function AthleteHistory({ params }: { params: Promise<{ tok
     ...schedule.filter((s) => s.ymd <= today),
     ...schedule.filter((s) => s.ymd > today).slice(0, AHEAD),
   ]);
+  const notes = await inboxFor(athlete.id, shown.map((s) => s.ymd));
+  const notesOn = (ymd: string) => notes.filter((n) => n.day === ymd);
   const upcoming = shown.filter((s) => s.ymd > today);
   const past = shown.filter((s) => s.ymd <= today).reverse();
   const u = athlete.unit === "LB" ? "lb" : "kg";
@@ -66,6 +68,7 @@ export default async function AthleteHistory({ params }: { params: Promise<{ tok
                 href={s.ymd === today ? base : `${base}?d=${s.ymd}`}
                 unit={u}
                 today={s.ymd === today}
+                notes={notesOn(s.ymd)}
               />
             ))}
           </div>
@@ -81,12 +84,15 @@ function SessionItem({
   unit,
   upcoming = false,
   today = false,
+  notes = [],
 }: {
   session: AthleteSession;
   href: string;
   unit: string;
   upcoming?: boolean;
   today?: boolean;
+  /** What the coach said about it. */
+  notes?: InboxMessage[];
 }) {
   const state = completion(session.done, session.prescribed);
   const badge = upcoming
@@ -134,6 +140,12 @@ function SessionItem({
           );
         })}
       </ul>
+      {notes.map((n) => (
+        <p key={n.id} className="mt-2 rounded-xl bg-accent-soft px-3 py-2 text-[12px] leading-snug text-foreground">
+          <span className="mr-1.5 text-[10px] font-semibold tracking-wider text-accent">{t("COACH")}</span>
+          {n.body}
+        </p>
+      ))}
     </Link>
   );
 }

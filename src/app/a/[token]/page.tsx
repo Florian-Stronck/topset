@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import { CheckinDay, type StripDay } from "@/components/athlete/CheckinDay";
 import { CheckinCard } from "@/components/athlete/CheckinCard";
-import { checkinOn, getAthleteByToken, getAthleteCalendar, recentBodyweight, sessionsInFull, type ScheduledSession, type SchedulePhase } from "@/lib/athlete-queries";
+import { CoachNotes } from "@/components/athlete/CoachNotes";
+import { checkinOn, getAthleteByToken, getAthleteCalendar, inboxFor, recentBodyweight, sessionsInFull, type ScheduledSession, type SchedulePhase } from "@/lib/athlete-queries";
 import { longDate, shortDate, weekdayLetter, weekdayShort } from "@/lib/athlete-format";
 import { athleteToday } from "@/lib/athlete-today";
 import { loadSettings } from "@/lib/coach-settings";
@@ -38,10 +39,11 @@ export default async function AthleteToday({
   const today = await athleteToday();
   const day = d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : today;
   // A day still to come shows what it will ask, to be answered on the day.
-  const [{ phases, sessions }, bodyweight, checkin] = await Promise.all([
+  const [{ phases, sessions }, bodyweight, checkin, notes] = await Promise.all([
     getAthleteCalendar(athlete),
     recentBodyweight(athlete.id),
     checkinOn(athlete.id, day),
+    inboxFor(athlete.id, [day]),
   ]);
   const base = `/a/${token}`;
   const link = (ymd: string) => (ymd === today ? base : `${base}?d=${ymd}`);
@@ -99,34 +101,42 @@ export default async function AthleteToday({
   const next = sessions.find((s) => s.ymd > day) ?? null;
 
   return (
-    <CheckinDay
-      key={day}
-      token={token}
-      unit={athlete.unit}
-      today={today}
-      day={day}
-      athlete={athlete.name}
-      program={phase.program.name}
-      phase={{
-        name: phase.phase,
-        prev: phaseHref(phases[at - 1]),
-        next: phaseHref(phases[at + 1]),
-      }}
-      week={{
-        n: week,
-        of: phase.weeks.length,
-        prev: week > 1 ? link(firstOf(week - 1)) : null,
-        next: week < phase.weeks.length ? link(firstOf(week + 1)) : null,
-      }}
-      strip={strip}
-      heading={{ weekday: weekdayShort(day), label: session?.label ?? null, long: longDate(day) }}
-      session={session}
-      rest={{
-        next: next ? { href: link(next.ymd), date: shortDate(next.ymd) } : null,
-        todayHref: day === today ? null : base,
-      }}
-      bodyweight={bodyweight}
-      checkin={checkin}
-    />
+    <>
+      {notes.length > 0 && (
+        <section className="mb-4">
+          <h2 className="mb-2 text-[11px] tracking-[0.16em] text-muted-2">{t("FROM YOUR COACH")}</h2>
+          <CoachNotes token={token} messages={notes} compact />
+        </section>
+      )}
+      <CheckinDay
+        key={day}
+        token={token}
+        unit={athlete.unit}
+        today={today}
+        day={day}
+        athlete={athlete.name}
+        program={phase.program.name}
+        phase={{
+          name: phase.phase,
+          prev: phaseHref(phases[at - 1]),
+          next: phaseHref(phases[at + 1]),
+        }}
+        week={{
+          n: week,
+          of: phase.weeks.length,
+          prev: week > 1 ? link(firstOf(week - 1)) : null,
+          next: week < phase.weeks.length ? link(firstOf(week + 1)) : null,
+        }}
+        strip={strip}
+        heading={{ weekday: weekdayShort(day), label: session?.label ?? null, long: longDate(day) }}
+        session={session}
+        rest={{
+          next: next ? { href: link(next.ymd), date: shortDate(next.ymd) } : null,
+          todayHref: day === today ? null : base,
+        }}
+        bodyweight={bodyweight}
+        checkin={checkin}
+      />
+    </>
   );
 }

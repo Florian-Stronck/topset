@@ -102,7 +102,7 @@ export type PushPayload = {
   tables: PushTables;
   /** The coach's own edits to athlete columns (the Tracking sheet). */
   athlete: { id: string; values: Record<string, unknown> }[];
-  /** Rows of merged tables (weigh-ins, check-in answers) added, changed or deleted here; the newer edit wins. */
+  /** Rows of merged tables (weigh-ins, check-in answers, messages) added, changed or deleted here; the newer edit wins. */
   merged?: Record<string, Row[]>;
 };
 
