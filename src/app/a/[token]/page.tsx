@@ -37,11 +37,11 @@ export default async function AthleteToday({
 
   const today = await athleteToday();
   const day = d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : today;
-  // The check-in is asked for today or a day already past, on the days each question is.
+  // A day still to come shows what it will ask, to be answered on the day.
   const [{ phases, sessions }, bodyweight, checkin] = await Promise.all([
     getAthleteCalendar(athlete),
     recentBodyweight(athlete.id),
-    day <= today ? checkinOn(athlete.id, day) : { questions: [], answers: [] },
+    checkinOn(athlete.id, day),
   ]);
   const base = `/a/${token}`;
   const link = (ymd: string) => (ymd === today ? base : `${base}?d=${ymd}`);

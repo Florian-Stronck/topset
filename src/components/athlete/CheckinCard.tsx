@@ -6,7 +6,7 @@ import { deleteBodyweight, logBodyweight, saveCheckinAnswer } from "@/app/a/acti
 import { CheckinIcon } from "@/components/CheckinIcon";
 import type { DayCheckin } from "@/lib/athlete-queries";
 import { colorOf, formatAnswer, picked, readinessOf, type CheckinQuestionData } from "@/lib/checkins";
-import { shortDate } from "@/lib/athlete-format";
+import { shortDate, weekdayShort } from "@/lib/athlete-format";
 import type { BodyweightEntry } from "@/lib/bodyweight";
 import { t } from "@/lib/i18n";
 
@@ -17,7 +17,12 @@ import { t } from "@/lib/i18n";
  * that opens again. Weigh-ins still go to the bodyweight log, so the trend and the meet
  * projection read them as before.
  */
-export function CheckinCard({
+export function CheckinCard(props: Parameters<typeof CheckinForm>[0]) {
+  if (props.day > props.today) return <UpcomingCheckin day={props.day} questions={props.initial.questions} />;
+  return <CheckinForm {...props} />;
+}
+
+function CheckinForm({
   token,
   unit,
   day,
@@ -393,5 +398,33 @@ function ScaleAnswer({
         </span>
       </div>
     </div>
+  );
+}
+
+/**
+ * A day still to come: what its check-in will ask, without anything to fill in yet —
+ * answers and the weigh-in go in on the day itself.
+ */
+function UpcomingCheckin({ day, questions }: { day: string; questions: CheckinQuestionData[] }) {
+  return (
+    <section className="mt-3 rounded-2xl border border-dashed border-border px-4 py-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("CHECK-IN")}</div>
+        <div className="text-[11px] text-muted-2">{t("Opens on {day}", { day: weekdayShort(day) })}</div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {[{ id: "bw", label: t("Bodyweight"), icon: "weight", color: null as string | null }, ...questions].map((q) => (
+          <span key={q.id} className="flex items-center gap-1.5 rounded-lg bg-surface py-1 pl-1 pr-2 text-[12px] text-muted">
+            <span
+              className={`grid size-5 place-items-center rounded-md ${q.color ? "text-white" : "bg-surface-3 text-foreground"}`}
+              style={q.color ? { background: colorOf(q.color) } : undefined}
+            >
+              <CheckinIcon name={q.icon} size={12} />
+            </span>
+            {q.label}
+          </span>
+        ))}
+      </div>
+    </section>
   );
 }

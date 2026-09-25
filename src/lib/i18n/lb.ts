@@ -1,5 +1,6 @@
 /** Luxembourgish translations, keyed by the English text. Missing keys fall back to English. */
 const dict: Record<string, string> = {
+  "Opens on {day}": "Geet op den {day}",
   "Drag to answer": "Zéi fir z'äntweren",
   "Bodyweight": "Kierpergewiicht",
   "Log your bodyweight": "Dréi däi Kierpergewiicht an",

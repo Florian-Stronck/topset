@@ -1,5 +1,6 @@
 /** German translations, keyed by the English text. Missing keys fall back to English. */
 const dict: Record<string, string> = {
+  "Opens on {day}": "Öffnet am {day}",
   "Drag to answer": "Zum Antworten ziehen",
   "Bodyweight": "Körpergewicht",
   "Log your bodyweight": "Trag dein Körpergewicht ein",
