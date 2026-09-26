@@ -5,7 +5,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { createClient, type Client } from "@libsql/client";
 import { migrateRemote } from "@/lib/cloud";
-import { applyPush, athleteData } from "@/lib/sync-server";
+import { applyPush, athleteData, pushNews } from "@/lib/sync-server";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "topset-sync-server-"));
 let client: Client;
@@ -153,4 +153,64 @@ test("coach messages merge both ways: the coach's text up, the athlete's read re
     await applyPush(client, "me", { tables: {}, athlete: [], merged: { CoachMessage: [{ ...note, id: "m3", athleteId: "a9" }] } }),
     "That athlete isn't yours.",
   );
+});
+
+test("a push says which notes the athlete should hear about: new or reworded, not re-sent, read or deleted", async () => {
+  const note = {
+    id: "n1", athleteId: "a1", day: "2026-09-23", dayId: "d1", rowId: null, body: "Keep the bar closer.", readAt: null,
+    createdAt: "2026-09-23T18:00:00.000+00:00", updatedAt: "2026-09-23T18:00:00.000+00:00", deletedAt: null,
+  };
+  const push = async (row: { id: string } & Record<string, unknown>) => {
+    const news = pushNews();
+    assert.equal(await applyPush(client, "me", { tables: {}, athlete: [], merged: { CoachMessage: [row] } }, news), null);
+    return news.notes.map((n) => n.body);
+  };
+  assert.deepEqual(await push(note), ["Keep the bar closer."]);
+  // The same note again, newer but unchanged (the desktop re-sending it): nothing to say.
+  assert.deepEqual(await push({ ...note, updatedAt: "2026-09-23T18:05:00.000+00:00" }), []);
+  assert.deepEqual(await push({ ...note, body: "Keep the bar over midfoot.", updatedAt: "2026-09-23T18:10:00.000+00:00" }), [
+    "Keep the bar over midfoot.",
+  ]);
+  assert.deepEqual(await push({ ...note, body: "Gone", deletedAt: "2026-09-23T18:20:00.000+00:00", updatedAt: "2026-09-23T18:20:00.000+00:00" }), []);
+  // A rejected push tells no one.
+  const news = pushNews();
+  await applyPush(client, "me", { tables: {}, athlete: [], merged: { CoachMessage: [{ ...note, id: "n2", athleteId: "a9" }] } }, news);
+  assert.deepEqual(news.notes, []);
+});
+
+test("a push names the athletes whose plan really changed", async () => {
+  const rs = await client.execute(`SELECT * FROM "Day" WHERE "id" = 'd1'`);
+  const dayRow = Object.fromEntries(rs.columns.map((c, i) => [c, rs.rows[0][i]])) as { id: string } & Record<string, unknown>;
+  const plans = async (tables: Record<string, { upsert: ({ id: string } & Record<string, unknown>)[]; remove: string[] }>) => {
+    const news = pushNews();
+    assert.equal(await applyPush(client, "me", { tables, athlete: [] }, news), null);
+    return [...news.plans];
+  };
+  // The same day sent again (a desktop app that just started): nothing changed.
+  assert.deepEqual(await plans({ Day: { upsert: [dayRow], remove: [] } }), []);
+  // Marking it reviewed isn't a plan change either.
+  assert.deepEqual(await plans({ Day: { upsert: [{ ...dayRow, reviewedAt: "2026-09-24T10:00:00.000Z" }], remove: [] } }), []);
+  assert.deepEqual(await plans({ Day: { upsert: [{ ...dayRow, label: "Heavy" }], remove: [] } }), ["a1"]);
+  // A new exercise under that day, and then taking it out again.
+  const row = { id: "r9", dayId: "d1", order: 5, target: "Bench", exercise: "Bench" };
+  assert.deepEqual(await plans({ ExerciseRow: { upsert: [row], remove: [] } }), ["a1"]);
+  assert.deepEqual(await plans({ ExerciseRow: { upsert: [], remove: ["r9"] } }), ["a1"]);
+});
+
+test("videos come down with the athlete data but can never be pushed up", async () => {
+  await client.execute(
+    `INSERT INTO "AthleteVideo" ("id", "athleteId", "rowId", "day", "name", "contentType", "size", "storageKey", "uploadedAt", "updatedAt")
+     VALUES ('v1', 'a1', 'r1', '2026-09-26', 'IMG_1.MOV', 'video/mp4', 4000000, 'v/a1/r1/x.mp4', 1, 1)`,
+  );
+  const pulled = await athleteData(client, "me");
+  assert.ok(!pulled.unchanged);
+  assert.equal(pulled.merged.AthleteVideo.length, 1);
+  assert.equal(pulled.merged.AthleteVideo[0].storageKey, "v/a1/r1/x.mp4");
+
+  // A desktop app pointing a video at someone else's file is turned away.
+  const forged = { ...pulled.merged.AthleteVideo[0], storageKey: "v/other/r9/y.mp4", updatedAt: Date.now() };
+  const problem = await applyPush(client, "me", { tables: {}, athlete: [], merged: { AthleteVideo: [forged] } });
+  assert.match(problem ?? "", /can't be synced/);
+  const kept = await client.execute(`SELECT "storageKey" FROM "AthleteVideo" WHERE "id" = 'v1'`);
+  assert.equal(kept.rows[0].storageKey, "v/a1/r1/x.mp4");
 });

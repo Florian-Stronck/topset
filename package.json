@@ -28,10 +28,12 @@
     "better-sqlite3": "^13.0.3",
     "exceljs": "^4.4.0",
     "jspdf": "^4.2.1",
+    "mediabunny": "^1.60.0",
     "next": "16.3.5",
     "qrcode": "^1.5.4",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -41,6 +43,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/web-push": "^3.6.4",
     "dotenv": "^18.0.2",
     "electron": "^44.4.4",
     "electron-builder": "^26.15.3",

@@ -23,7 +23,8 @@ export type Prefs = {
   /** What the intensity cell shows: the weight, the prescription, or both. */
   cellDisplay: "both" | "weight" | "intensity";
   fontSize: "small" | "medium" | "large";
-  theme: "dark" | "light";
+  /** "system" follows the device's own light or dark setting. */
+  theme: "dark" | "light" | "system";
   accent: string;
   tierColors: { PRIMARY: string; SECONDARY: string; VARIATION: string; BACKOFF: string; ACCESSORY: string };
   /**
@@ -106,6 +107,12 @@ export const PREF_DEFAULTS: Prefs = {
     perQuestion: false,
   },
 };
+
+/** The theme to draw with: the saved one, or the device's when it follows the system. */
+export function resolveTheme(theme: Prefs["theme"]): "dark" | "light" {
+  if (theme !== "system") return theme;
+  return typeof matchMedia !== "undefined" && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
 
 /** Changes some of Tracking's view settings, keeping the rest. */
 export function setTrackingPref(patch: Partial<TrackingPrefs>) {

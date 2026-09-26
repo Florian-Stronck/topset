@@ -2,9 +2,12 @@ import { cache } from "react";
 import { formatPrescription, formatRamp, maxesOf, resolveDay } from "@/lib/intensity";
 import { bodyweightEntry } from "@/lib/bodyweight";
 import { prisma } from "@/lib/prisma";
+import { ymdOf } from "@/lib/dates";
 import { answerDay, asksOn, questionData, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
 import { sessionsOf, type Session } from "@/lib/schedule";
 import type { SetLogData } from "@/lib/setlog";
+import { retentionDays, type ClipView } from "@/lib/athlete-videos";
+import { presign, storageConfig } from "@/lib/storage";
 
 /**
  * Reads for the athlete app. Everything here starts from the athlete's access token, so
@@ -88,6 +91,8 @@ export type AthleteRow = {
   videoUrl: string | null;
   athleteNotes: string | null;
   logs: SetLogData[];
+  /** Videos the athlete sent of it; null when the server has nowhere to keep videos. */
+  videos: ClipView[] | null;
 };
 
 export type AthleteSession = {
@@ -103,7 +108,7 @@ export type AthleteSession = {
   done: number;
 };
 
-function toSession(s: ScheduledSession, dayRows: DayRow[], athlete: TokenAthlete): AthleteSession {
+function toSession(s: ScheduledSession, dayRows: DayRow[], athlete: TokenAthlete, clips: Map<string, ClipView[]> | null): AthleteSession {
   const maxes = maxesOf(s.block, athlete);
   const rows = dayRows.filter((r) => r.exercise.trim() !== "");
   const resolved = resolveDay(dayRows, maxes);
@@ -127,6 +132,7 @@ function toSession(s: ScheduledSession, dayRows: DayRow[], athlete: TokenAthlete
       videoUrl: row.videoUrl,
       athleteNotes: row.athleteNotes,
       logs: row.logs.map((log) => ({ ...log, loggedAt: log.loggedAt.toISOString() })),
+      videos: clips ? (clips.get(row.id) ?? []) : null,
     };
   });
 
@@ -160,10 +166,46 @@ export async function getAthleteCalendar(athlete: TokenAthlete): Promise<{ phase
 export async function sessionsInFull(athlete: TokenAthlete, sessions: ScheduledSession[]): Promise<AthleteSession[]> {
   if (sessions.length === 0) return [];
   const byDay = new Map<string, DayRow[]>();
-  for (const row of await rowsOf(sessions.map((s) => s.day.id))) {
+  const rows = await rowsOf(sessions.map((s) => s.day.id));
+  for (const row of rows) {
     byDay.set(row.dayId, [...(byDay.get(row.dayId) ?? []), row]);
   }
-  return sessions.map((s) => toSession(s, byDay.get(s.day.id) ?? [], athlete));
+  const clips = await clipsOf(athlete.id, rows.map((r) => r.id));
+  return sessions.map((s) => toSession(s, byDay.get(s.day.id) ?? [], athlete, clips));
+}
+
+/** How long a link to play a video works: long enough for a session at the gym. */
+const PLAY_LINK_SECONDS = 6 * 60 * 60;
+
+/**
+ * The videos still in storage for these rows, each with a link to play it, per row; null
+ * when the server has no bucket. Links are signed here, with no call to storage.
+ */
+async function clipsOf(athleteId: string, rowIds: string[]): Promise<Map<string, ClipView[]> | null> {
+  const config = storageConfig();
+  if (!config) return null;
+  const out = new Map<string, ClipView[]>();
+  if (rowIds.length === 0) return out;
+  const keep = retentionDays();
+  const since = new Date(Date.now() - keep * 86_400_000);
+  const rows = await prisma.athleteVideo.findMany({
+    where: { athleteId, rowId: { in: rowIds }, deletedAt: null, uploadedAt: { gt: since } },
+    orderBy: { uploadedAt: "asc" },
+  });
+  for (const v of rows) {
+    const uploaded = v.uploadedAt ?? v.createdAt;
+    const view: ClipView = {
+      id: v.id,
+      name: v.name,
+      setIndex: v.setIndex,
+      size: v.size,
+      uploadedAt: uploaded.toISOString(),
+      url: presign(config, { method: "GET", key: v.storageKey, expiresIn: PLAY_LINK_SECONDS }),
+      daysLeft: Math.max(0, Math.ceil((uploaded.getTime() + keep * 86_400_000 - Date.now()) / 86_400_000)),
+    };
+    out.set(v.rowId, [...(out.get(v.rowId) ?? []), view]);
+  }
+  return out;
 }
 
 /** Whether a row belongs to the athlete holding this token — the check before any write. */
@@ -237,4 +279,31 @@ export async function inboxFor(athleteId: string, days?: string[]): Promise<Inbo
 /** How many of the coach's notes the athlete hasn't opened yet. */
 export async function unreadCount(athleteId: string): Promise<number> {
   return prisma.coachMessage.count({ where: { athleteId, deletedAt: null, readAt: null } });
+}
+
+/** A competition as the athlete app's calendar shows it. */
+export type AthleteMeet = {
+  id: string;
+  ymd: string;
+  name: string;
+  federation: string | null;
+  weightClass: string | null;
+  attempts: { lift: "SQUAT" | "BENCH" | "DEADLIFT"; number: number; weight: number | null; result: "PENDING" | "GOOD" | "MISS" }[];
+};
+
+/** The athlete's competitions, oldest first, with their attempts. */
+export async function meetsFor(athleteId: string): Promise<AthleteMeet[]> {
+  const rows = await prisma.meet.findMany({
+    where: { athleteId },
+    orderBy: { date: "asc" },
+    include: { attempts: { orderBy: [{ lift: "asc" }, { number: "asc" }] } },
+  });
+  return rows.map((m) => ({
+    id: m.id,
+    ymd: ymdOf(m.date),
+    name: m.name,
+    federation: m.federation,
+    weightClass: m.weightClass,
+    attempts: m.attempts.map((a) => ({ lift: a.lift, number: a.number, weight: a.weight, result: a.result })),
+  }));
 }

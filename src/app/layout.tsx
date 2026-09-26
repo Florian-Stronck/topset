@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { CommandCenter } from "@/components/CommandCenter";
 import { SettingsProvider } from "@/components/SettingsProvider";
 import { loadSettings } from "@/lib/coach-settings";
+import { THEME_SCRIPT } from "@/lib/theme-script";
 import { forClient } from "@/lib/settings";
 import "./globals.css";
 
@@ -22,7 +23,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const settings = await loadSettings();
 
   return (
-    <html lang={settings.language}>
+    // The theme script below sets data-theme before React hydrates, so <html> may differ.
+    <html lang={settings.language} data-theme="dark" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <SettingsProvider settings={forClient(settings)}>
           {children}

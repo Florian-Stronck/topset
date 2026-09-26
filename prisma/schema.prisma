@@ -72,6 +72,7 @@ model Athlete {
   questions   CheckinQuestion[]
   answers     CheckinAnswer[]
   messages    CoachMessage[]
+  videos      AthleteVideo[]
 
   @@index([coachId])
 }
@@ -321,6 +322,38 @@ model CoachMessage {
   @@index([athleteId, day])
 }
 
+/// A video the athlete filmed of one exercise and sent from the athlete app. The file
+/// itself is in object storage (see src/lib/storage.ts), never in the database: this row
+/// is only where it is and what it's of. Storage deletes files after a few weeks; the
+/// coach's desktop app downloads each one into its videos folder before then. Synced like
+/// weigh-ins: the newer edit wins, deletes are tombstones.
+model AthleteVideo {
+  id          String    @id @default(cuid())
+  athleteId   String
+  athlete     Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  /// The exercise it is of; a plain id so a deleted phase leaves the video.
+  rowId       String
+  /// The session's day, `YYYY-MM-DD` on the athlete's calendar.
+  day         String
+  /// Which set of the exercise it shows, 0-based; null when the athlete didn't say.
+  setIndex    Int?
+  /// The file's name as it came off the phone, for the coach's copy.
+  name        String
+  contentType String
+  /// In bytes, as uploaded.
+  size        Int
+  /// The object's key in the bucket.
+  storageKey  String    @unique
+  /// Set once the upload is in; until then the row is only a reservation.
+  uploadedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([athleteId, day])
+  @@index([rowId])
+}
+
 model ProgressionRule {
   id         String      @id @default(cuid())
   rowId      String
@@ -394,4 +427,42 @@ enum IntensityType {
   WEIGHT
   RANGE
   BACKOFF
+}
+
+/// A phone that asked for push notifications from the athlete app, and which kinds it
+/// wants. Lives on the server alone (never synced). `token` is the check-in link it signed
+/// up with: a new link turns the old phone's notifications off with it.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  athleteId String
+  token     String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  /// The phone's time zone, for "training today" on the athlete's own calendar.
+  timeZone  String?
+  /// A note from the coach.
+  notes     Boolean  @default(true)
+  /// The coach changed the plan.
+  plan      Boolean  @default(true)
+  /// Morning of a training day.
+  reminder  Boolean  @default(true)
+  /// A week and a day before a competition.
+  meets     Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([athleteId])
+}
+
+/// The coach changed an athlete's plan and the athlete hasn't been told yet. Sent once the
+/// coach has stopped editing for a few minutes, so one evening of work is one notification.
+/// Server-side only.
+model PlanNotice {
+  athleteId String    @id
+  coachId   String
+  /// The last change not yet told; null when there is none.
+  changedAt DateTime?
+  sentAt    DateTime?
+
+  @@index([coachId])
 }

@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { E1rmCalculator } from "@/components/athlete/E1rmCalculator";
 import { PlateCalculator } from "@/components/athlete/PlateCalculator";
+import { ThemePicker } from "@/components/athlete/ThemePicker";
 import { getAthleteByToken } from "@/lib/athlete-queries";
 import { loadSettings } from "@/lib/coach-settings";
 import { t } from "@/lib/i18n";
@@ -19,6 +20,7 @@ export default async function AthleteTools({ params }: { params: Promise<{ token
       <div className="mt-4 space-y-4">
         <PlateCalculator unit={athlete.unit} />
         <E1rmCalculator unit={athlete.unit} />
+        <ThemePicker />
       </div>
     </div>
   );

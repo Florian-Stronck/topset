@@ -32,7 +32,11 @@ export function weekdayShort(index: number): string {
  * string still reads fine; `{name}` placeholders are filled from `vars`.
  */
 export function t(text: string, vars?: Record<string, string | number>): string {
-  const lang = activeSettings().language;
+  return tIn(activeSettings().language, text, vars);
+}
+
+/** `t` in a language named outright, for text written outside any page (a push notification). */
+export function tIn(lang: Language, text: string, vars?: Record<string, string | number>): string {
   const out = lang === "en" ? text : (DICTS[lang][text] ?? text);
   if (!vars) return out;
   return out.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m));

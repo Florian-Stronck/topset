@@ -17,6 +17,13 @@
   --warn: #f0a92e;
   /* A personal record the athlete flagged. */
   --pr: #f5c542;
+  /* The athlete app's calendar: planned, done, a PR that day, a competition. */
+  --cal-plan: #f2f2f5;
+  --cal-done: #e5484d;
+  --cal-pr: #f5c542;
+  --cal-meet: #3ecf8e;
+  /* A training day that went by with nothing logged: only a ring. */
+  --cal-missed: #c4c4cc;
 }
 
 /* Light theme, picked per computer in Settings. */
@@ -32,6 +39,11 @@
   --miss: #d32f2f;
   --warn: #b7791f;
   --pr: #b8860b;
+  --cal-plan: #ffffff;
+  --cal-done: #dc2f3c;
+  --cal-pr: #f2b705;
+  --cal-meet: #1fa463;
+  --cal-missed: #8e8e99;
   color-scheme: light;
 }
 
@@ -50,6 +62,10 @@
   --color-miss: var(--miss);
   --color-warn: var(--warn);
   --color-pr: var(--pr);
+  --color-cal-plan: var(--cal-plan);
+  --color-cal-done: var(--cal-done);
+  --color-cal-pr: var(--cal-pr);
+  --color-cal-meet: var(--cal-meet);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }

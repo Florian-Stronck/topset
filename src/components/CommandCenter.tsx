@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutSheet } from "@/components/ShortcutSheet";
 import { getCommands, isRecording, useCommandList, useCommands, type Command } from "@/lib/commands";
-import { getPref, setPref, togglePref } from "@/lib/prefs";
+import { getPref, resolveTheme, setPref, togglePref } from "@/lib/prefs";
 import {
   allBindings,
   firesWhileTyping,
@@ -134,9 +134,9 @@ export function CommandCenter() {
       {
         id: "view-theme",
         group: "View",
-        title: getPref("theme") === "dark" ? t("Switch to the light theme") : t("Switch to the dark theme"),
+        title: resolveTheme(getPref("theme")) === "dark" ? t("Switch to the light theme") : t("Switch to the dark theme"),
         keywords: "dark light colour color mode",
-        run: () => setPref("theme", getPref("theme") === "dark" ? "light" : "dark"),
+        run: () => setPref("theme", resolveTheme(getPref("theme")) === "dark" ? "light" : "dark"),
       },
     ],
     // Titles follow the prefs they toggle; the palette re-reads commands each opening.

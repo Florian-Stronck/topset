@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { notFound } from "next/navigation";
 import { AthleteNav } from "@/components/athlete/AthleteNav";
+import { AppBadge } from "@/components/athlete/Notifications";
 import { RememberAthlete } from "@/components/athlete/RememberAthlete";
 import { SettingsProvider } from "@/components/SettingsProvider";
 import { getAthleteByToken, unreadCount } from "@/lib/athlete-queries";
@@ -42,6 +43,7 @@ export default async function AthleteLayout({
     <SettingsProvider settings={forClient(settings)}>
       <div className="mx-auto flex min-h-dvh w-full max-w-[560px] flex-col">
         <RememberAthlete token={token} />
+        <AppBadge unread={unread} />
         <div className="flex-1 px-4 pb-28 pt-[max(16px,env(safe-area-inset-top))]">
           {children}
         </div>

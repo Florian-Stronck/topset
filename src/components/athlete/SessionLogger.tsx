@@ -4,6 +4,7 @@ import type { Unit } from "@prisma/client";
 import { useState, useTransition } from "react";
 import { logSet, logSets, removeSet, saveAthleteNotes, type SetPatch } from "@/app/a/actions";
 import { Check } from "@/components/athlete/icons";
+import { RowClips } from "@/components/athlete/RowClips";
 import { Trophy } from "@/components/CheckinIcon";
 import type { AthleteRow, AthleteSession } from "@/lib/athlete-queries";
 import { t } from "@/lib/i18n";
@@ -163,6 +164,8 @@ export function SessionLogger({
           {rows.map((row) => (
             <ExerciseItem
               key={row.id}
+              token={token}
+              day={session.ymd}
               row={row}
               unit={unit}
               open={open.has(row.id)}
@@ -180,6 +183,8 @@ export function SessionLogger({
 }
 
 function ExerciseItem({
+  token,
+  day,
   row,
   unit,
   open,
@@ -189,6 +194,9 @@ function ExerciseItem({
   onDrop,
   onNotes,
 }: {
+  token: string;
+  /** The session's day, which a video is filed under. */
+  day: string;
   row: AthleteRow;
   unit: Unit;
   open: boolean;
@@ -402,7 +410,19 @@ function ExerciseItem({
           </div>
 
           <Label>{t("NOTE")}</Label>
-          <NotesField value={row.athleteNotes} onCommit={onNotes} />
+          {row.videos ? (
+            <RowClips
+              token={token}
+              rowId={row.id}
+              day={day}
+              initial={row.videos}
+              note={<NotesField value={row.athleteNotes} onCommit={onNotes} />}
+              sets={count}
+              guessSet={() => doneLogs.reduce<number | null>((last, l) => (last === null || l.setIndex > last ? l.setIndex : last), null)}
+            />
+          ) : (
+            <NotesField value={row.athleteNotes} onCommit={onNotes} />
+          )}
         </div>
       )}
     </li>
@@ -570,7 +590,7 @@ function NotesField({ value, onCommit }: { value: string | null; onCommit: (note
         if (draft !== null && draft !== (value ?? "")) onCommit(draft);
         setDraft(null);
       }}
-      className="w-full resize-none rounded-2xl border border-border bg-surface px-4 py-3 text-[16px] outline-none placeholder:text-muted-2 focus:border-accent"
+      className="h-full w-full resize-none rounded-2xl border border-border bg-surface px-4 py-3 text-[16px] outline-none placeholder:text-muted-2 focus:border-accent"
     />
   );
 }

@@ -13,6 +13,8 @@ export function proxy(request: NextRequest) {
   if (path === "/a" || path.startsWith("/a/")) return NextResponse.next();
   // Where coaches' desktop apps sign in and sync.
   if (path.startsWith("/api/coach/")) return NextResponse.next();
+  // The daily notifications, called by Vercel Cron with the server's CRON_SECRET.
+  if (path.startsWith("/api/cron/")) return NextResponse.next();
   if (path === "/") return NextResponse.redirect(new URL("/a", request.url));
   return new NextResponse(null, { status: 404 });
 }

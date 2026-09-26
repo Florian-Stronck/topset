@@ -30,9 +30,31 @@ export const MERGED_COLUMNS: Record<string, readonly string[]> = {
   CheckinAnswer: ["id", "athleteId", "questionId", "day", "value", "createdAt", "updatedAt", "deletedAt"],
   // The coach writes the text, the athlete app when it was read.
   CoachMessage: ["id", "athleteId", "day", "dayId", "rowId", "body", "readAt", "createdAt", "updatedAt", "deletedAt"],
+  // Videos the athlete sent: only the athlete app writes them, so they only ever come down.
+  AthleteVideo: [
+    "id",
+    "athleteId",
+    "rowId",
+    "day",
+    "setIndex",
+    "name",
+    "contentType",
+    "size",
+    "storageKey",
+    "uploadedAt",
+    "createdAt",
+    "updatedAt",
+    "deletedAt",
+  ],
 };
 
 export const MERGED_TABLES = new Set(Object.keys(MERGED_COLUMNS));
+
+/**
+ * Merged tables a desktop app may never send up. A video row names where its file is in
+ * storage; one written by a desktop app could point at anyone's file.
+ */
+export const PULL_ONLY_TABLES = new Set(["AthleteVideo"]);
 
 const plainValue = (v: unknown) => v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 
@@ -56,8 +78,8 @@ export function validMergedRow(table: string, row: Row): boolean {
   return true;
 }
 
-/** Accounts live on the server alone: sign-ins, invites, and a coach's login details. */
-export const SERVER_TABLES = new Set(["CoachSession", "Invite"]);
+/** Accounts live on the server alone: sign-ins, invites, push sign-ups, and a coach's login details. */
+export const SERVER_TABLES = new Set(["CoachSession", "Invite", "PushSubscription", "PlanNotice"]);
 export const SERVER_COLUMNS: Record<string, readonly string[]> = {
   Coach: ["username", "passwordHash", "isAdmin", "athleteVersion", "disabledAt", "resetCodeHash", "resetExpiresAt"],
 };

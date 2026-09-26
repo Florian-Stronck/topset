@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import Database from "better-sqlite3";
+import { clipFileName } from "@/lib/athlete-videos";
 import { serial } from "@/lib/serial";
 import {
   ATHLETE_COLUMNS,
   athleteSignature,
   MERGED_COLUMNS,
+  PULL_ONLY_TABLES,
   logChanges,
   mergeAthleteColumns,
   newerRows,
@@ -16,6 +21,7 @@ import {
   tableChanges,
   type Row,
 } from "@/lib/sync-plan";
+import { newVideoPath, readLedger, writeLedger } from "@/lib/videos";
 
 /**
  * Local-first sync for the desktop app. The app only ever touches its local topset.db, so
@@ -388,6 +394,7 @@ async function push(config: CloudConfig, force: boolean): Promise<void> {
   // a pull has said what the server holds, so nothing is sent blind.
   const outgoing: Record<string, Row[]> = {};
   for (const [table, cols] of Object.entries(MERGED_COLUMNS)) {
+    if (PULL_ONLY_TABLES.has(table)) continue;
     const held = s.merged?.get(table);
     if (!held) continue;
     const fresh = newerRows(db.prepare(`SELECT ${cols.map(quote).join(", ")} FROM ${quote(table)}`).all() as Row[], held);
@@ -458,8 +465,85 @@ async function cycle(forcePull: boolean): Promise<void> {
     await push(config, forcePull);
     s.lastSync = Date.now();
     s.error = null;
+    // Alongside, not in the queue: a big download mustn't hold up the next sync.
+    void fetchClips(config);
   } catch (error) {
     s.error = error instanceof Error ? error.message : String(error);
+  }
+}
+
+// --- videos from the athlete app ------------------------------------------------------
+
+/** How often to look for videos to download; each look is one local query. */
+const CLIPS_EVERY_MS = 30_000;
+/** Storage keeps videos for weeks, not months: an older one isn't worth asking for. */
+const CLIP_MAX_AGE_DAYS = 90;
+
+const clipState = globalThis as unknown as { __topsetClips?: { busy: boolean; last: number } };
+
+/**
+ * Downloads the videos athletes sent that this computer doesn't have yet into the videos
+ * folder, beside the ones the coach dropped in themselves, so Tracking shows them with the
+ * exercise. One at a time; a failure leaves the rest for next time.
+ */
+async function fetchClips(config: CloudConfig): Promise<void> {
+  const st = (clipState.__topsetClips ??= { busy: false, last: 0 });
+  if (st.busy || Date.now() - st.last < CLIPS_EVERY_MS) return;
+  st.busy = true;
+  st.last = Date.now();
+  try {
+    const db = local();
+    const since = new Date(Date.now() - CLIP_MAX_AGE_DAYS * 86_400_000).toISOString();
+    const ledger = readLedger();
+    const waiting = (
+      db
+        .prepare(
+          `SELECT v."id", v."rowId", v."day", v."setIndex", v."name", v."contentType", v."uploadedAt", r."exercise"
+           FROM "AthleteVideo" v LEFT JOIN "ExerciseRow" r ON r."id" = v."rowId"
+           WHERE v."uploadedAt" IS NOT NULL AND v."deletedAt" IS NULL ORDER BY v."uploadedAt"`,
+        )
+        .all() as Row[]
+    ).filter((v) => !(v.id in ledger) && new Date(stampOf(v.uploadedAt)).toISOString() >= since);
+    if (waiting.length === 0) return;
+
+    const { urls } = await api<{ urls: Record<string, string> }>(config.server, "videos", {
+      method: "POST",
+      token: config.token,
+      body: { ids: waiting.slice(0, 20).map((v) => v.id) },
+    });
+    for (const v of waiting.slice(0, 20)) {
+      const url = urls[v.id];
+      if (!url) continue;
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.status === 404) {
+        ledger[v.id] = null;
+        writeLedger(ledger);
+        continue;
+      }
+      if (!res.ok || !res.body) break;
+      const set = typeof v.setIndex === "number" || typeof v.setIndex === "bigint" ? Number(v.setIndex) : null;
+      const name = clipFileName(String(v.day), String(v.exercise ?? ""), String(v.name), String(v.contentType), set);
+      const file = newVideoPath(String(v.rowId), name);
+      if (!file) {
+        ledger[v.id] = null;
+        writeLedger(ledger);
+        continue;
+      }
+      const partial = `${file}.part`;
+      try {
+        await pipeline(Readable.fromWeb(res.body as unknown as WebReadableStream), fs.createWriteStream(partial));
+        fs.renameSync(partial, file);
+      } catch {
+        fs.rmSync(partial, { force: true });
+        break;
+      }
+      ledger[v.id] = path.basename(file);
+      writeLedger(ledger);
+    }
+  } catch (error) {
+    console.warn("[topset] couldn't download athlete videos:", error instanceof Error ? error.message : error);
+  } finally {
+    st.busy = false;
   }
 }
 

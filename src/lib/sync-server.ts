@@ -1,6 +1,6 @@
 import type { Client, InStatement, InValue } from "@libsql/client";
 import { checkPush, ownedIdsSql, SCOPE, SCOPED_TABLES, type PushTables } from "@/lib/coach-scope";
-import { ATHLETE_COLUMNS, MERGED_COLUMNS, MERGED_TABLES, newerRows, quote, stampOf, syncedColumns, upsertSql, validMergedRow, type Row } from "@/lib/sync-plan";
+import { ATHLETE_COLUMNS, MERGED_COLUMNS, MERGED_TABLES, PULL_ONLY_TABLES, newerRows, quote, stampOf, syncedColumns, upsertSql, validMergedRow, type Row } from "@/lib/sync-plan";
 
 /**
  * The Topset server's side of sync: what a signed-in coach may read, and applying what their
@@ -110,8 +110,97 @@ function plain(v: unknown): v is InValue {
   return v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 }
 
-/** Checks and applies one push from a coach's desktop app, in one transaction. */
-export async function applyPush(client: Client, coachId: string, payload: PushPayload): Promise<string | null> {
+/** A note from the coach the athlete hasn't seen: new, or reworded since they had it. */
+export type NewNote = { id: string; athleteId: string; day: string; body: string };
+
+/** What a push changed that athletes may want to hear about. */
+export type PushNews = { notes: NewNote[]; plans: Set<string> };
+
+export function pushNews(): PushNews {
+  return { notes: [], plans: new Set() };
+}
+
+/**
+ * The tables an athlete's plan is made of, with the columns that aren't the plan: marking
+ * a session reviewed or locking a week changes nothing the athlete sees.
+ */
+const PLAN_TABLES: Record<string, readonly string[]> = {
+  Program: [],
+  Block: [],
+  Week: ["locked"],
+  Day: ["reviewedAt"],
+  ExerciseRow: [],
+};
+
+/** A stored value in one comparable form, whichever SQLite driver read it. */
+function norm(v: unknown): unknown {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "bigint") return Number(v);
+  if (typeof v === "number") return v;
+  return String(v);
+}
+
+/** SQL for the athlete ids behind some rows of `table`, found up its chain of parents. */
+function athleteIdsSql(table: string, ids: string): string {
+  const entry = SCOPE.find((e) => e.table === table);
+  const [parent] = entry?.parents ?? [];
+  if (!parent) throw new Error(`No athlete above ${table}.`);
+  const up = `SELECT ${quote(parent.column)} FROM ${quote(table)} WHERE "id" IN (${ids})`;
+  return parent.table === "Athlete" ? up : athleteIdsSql(parent.table, up);
+}
+
+async function athletesOf(client: Client, table: string, ids: string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const sql = `SELECT DISTINCT "id" FROM "Athlete" WHERE "id" IN (${athleteIdsSql(table, chunk.map(() => "?").join(", "))})`;
+    out.push(...(await rows(client, sql, chunk)).map((r) => String(r.id)));
+  }
+  return out;
+}
+
+/**
+ * The plan rows this push really changes, per table. A desktop app that just started sends
+ * everything again, so each row is held against the copy here rather than taken at its word.
+ */
+async function planChanges(client: Client, tables: PushTables) {
+  const upserted = new Map<string, string[]>();
+  const removed = new Map<string, string[]>();
+  for (const [table, ignored] of Object.entries(PLAN_TABLES)) {
+    const change = tables[table];
+    if (!change) continue;
+    if (change.remove.length) removed.set(table, change.remove);
+    if (change.upsert.length === 0) continue;
+    const skip = new Set([...ignored, ...(ATHLETE_COLUMNS[table] ?? [])]);
+    const cols = Object.keys(change.upsert[0]).filter((c) => !skip.has(c));
+    const changed: string[] = [];
+    for (let i = 0; i < change.upsert.length; i += 500) {
+      const chunk = change.upsert.slice(i, i + 500);
+      const ids = chunk.map((r) => String(r.id));
+      const held = new Map(
+        (await rows(client, `SELECT * FROM ${quote(table)} WHERE "id" IN (${ids.map(() => "?").join(", ")})`, ids)).map((r) => [String(r.id), r]),
+      );
+      for (const row of chunk) {
+        const before = held.get(String(row.id));
+        if (!before || cols.some((c) => norm(before[c]) !== norm(row[c]))) changed.push(String(row.id));
+      }
+    }
+    if (changed.length) upserted.set(table, changed);
+  }
+  return { upserted, removed };
+}
+
+/**
+ * Checks and applies one push from a coach's desktop app, in one transaction. What it
+ * changed that athletes should hear about goes in `news`, once it's in.
+ */
+export async function applyPush(
+  client: Client,
+  coachId: string,
+  payload: PushPayload,
+  news: PushNews = pushNews(),
+): Promise<string | null> {
   const tables = payload.tables ?? {};
   // Only what checking this push needs: the tables it touches, and their parents.
   const needed = new Set<string>();
@@ -123,7 +212,7 @@ export async function applyPush(client: Client, coachId: string, payload: PushPa
   if ((payload.athlete ?? []).length > 0) needed.add("ExerciseRow");
   const merged = Object.entries(payload.merged ?? {}).filter(([, list]) => Array.isArray(list) && list.length > 0);
   for (const [table] of merged) {
-    if (!MERGED_TABLES.has(table)) return `${table} can't be synced.`;
+    if (!MERGED_TABLES.has(table) || PULL_ONLY_TABLES.has(table)) return `${table} can't be synced.`;
     needed.add("Athlete").add(table);
     if (table === "CheckinAnswer") needed.add("CheckinQuestion");
   }
@@ -206,9 +295,13 @@ export async function applyPush(client: Client, coachId: string, payload: PushPa
     ...(owned.get("CheckinQuestion") ?? []),
     ...(tables.CheckinQuestion?.upsert ?? []).map((r) => String(r.id)),
   ]);
+  const notes: NewNote[] = [];
   for (const [table, list] of merged) {
     const cols = [...MERGED_COLUMNS[table]];
     const mine = owned.get(table) ?? new Set<string>();
+    const isNote = table === "CoachMessage";
+    /** A note's text as the server had it, to tell a reworded note from a re-sent one. */
+    const bodies = new Map<string, unknown>();
     for (const row of list) {
       if (!validMergedRow(table, row)) return `A ${table} row is missing something.`;
       if (!athletes.has(String(row.athleteId))) return "That athlete isn't yours.";
@@ -218,13 +311,25 @@ export async function applyPush(client: Client, coachId: string, payload: PushPa
     const held = new Map<string, number>();
     for (let i = 0; i < ids.length; i += 500) {
       const chunk = ids.slice(i, i + 500);
-      const hit = await rows(client, `SELECT "id", "updatedAt" FROM ${quote(table)} WHERE "id" IN (${chunk.map(() => "?").join(", ")})`, chunk);
+      const hit = await rows(
+        client,
+        `SELECT "id", "updatedAt"${isNote ? `, "body"` : ""} FROM ${quote(table)} WHERE "id" IN (${chunk.map(() => "?").join(", ")})`,
+        chunk,
+      );
       for (const r of hit) {
         if (!mine.has(String(r.id))) return `${table} ${r.id} belongs to someone else.`;
         held.set(String(r.id), stampOf(r.updatedAt));
+        if (isNote) bodies.set(String(r.id), r.body);
       }
     }
     const fresh = newerRows(list, held);
+    if (isNote) {
+      for (const r of fresh) {
+        if (r.deletedAt || r.readAt) continue;
+        if (held.has(String(r.id)) && bodies.get(String(r.id)) === r.body) continue;
+        notes.push({ id: String(r.id), athleteId: String(r.athleteId), day: String(r.day), body: String(r.body) });
+      }
+    }
     for (let i = 0; i < fresh.length; i += ROWS_PER_STATEMENT) {
       const chunk = fresh.slice(i, i + ROWS_PER_STATEMENT);
       stmts.push({
@@ -235,6 +340,11 @@ export async function applyPush(client: Client, coachId: string, payload: PushPa
   }
 
   if (stmts.length === 0) return null;
+
+  // Whose plans this changes: removed rows are traced while they still exist, the rest once in.
+  const plan = await planChanges(client, tables);
+  const plans = new Set<string>();
+  for (const [table, ids] of plan.removed) for (const id of await athletesOf(client, table, ids)) plans.add(id);
 
   // The coach's own edits to athlete data are news to any other computer they use.
   if ((payload.athlete ?? []).length > 0 || merged.length > 0) {
@@ -253,6 +363,9 @@ export async function applyPush(client: Client, coachId: string, payload: PushPa
   }
 
   await client.migrate(stmts);
+  news.notes.push(...notes);
+  for (const [table, ids] of plan.upserted) for (const id of await athletesOf(client, table, ids)) plans.add(id);
+  for (const id of plans) news.plans.add(id);
   return null;
 }
 
@@ -262,7 +375,13 @@ export async function applyPush(client: Client, coachId: string, payload: PushPa
  * children first; the ids are picked while the parents they're found through still exist.
  */
 export async function deleteCoach(client: Client, coachId: string): Promise<void> {
-  const stmts: InStatement[] = [];
+  const stmts: InStatement[] = [
+    // Before the athletes go, while they still say whose phones these are.
+    {
+      sql: `DELETE FROM "PushSubscription" WHERE "athleteId" IN (SELECT "id" FROM "Athlete" WHERE "coachId" = ?)`,
+      args: [coachId],
+    },
+  ];
   for (const { table } of [...SCOPE].reverse()) {
     if (table === "Coach") continue;
     stmts.push({ sql: `DELETE FROM ${quote(table)} WHERE "id" IN (${ownedIdsSql(table)})`, args: [coachId] });

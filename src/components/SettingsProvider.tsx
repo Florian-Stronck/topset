@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useState, useTransition } from "react";
 import { updateSettings } from "@/app/settings/actions";
-import { usePref } from "@/lib/prefs";
+import { resolveTheme, usePref } from "@/lib/prefs";
 import { mergeSettings, setActiveSettings, type CoachSettings, type SettingsPatch } from "@/lib/settings";
 
 type Ctx = {
@@ -72,11 +72,22 @@ function ThemeSync() {
 
   useEffect(() => {
     const root = document.documentElement;
-    root.dataset.theme = theme;
+    const apply = () => {
+      root.dataset.theme = resolveTheme(theme);
+      // The phone's status bar and the browser's toolbar match the page.
+      const bar = getComputedStyle(root).getPropertyValue("--background").trim();
+      document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.setAttribute("content", bar));
+    };
+    apply();
     root.dataset.density = density;
     root.style.setProperty("--accent", accent);
     root.style.setProperty("--accent-soft", `${accent}22`);
     document.body.style.zoom = ZOOM[fontSize];
+    if (theme !== "system") return;
+    // Following the device: switch when it does (sunset, say).
+    const media = matchMedia("(prefers-color-scheme: light)");
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
   }, [theme, accent, fontSize, density]);
 
   return null;

@@ -141,9 +141,10 @@ Once you're signed in to a Topset server, click **Athlete link** on an athlete's
 <img src="docs/screenshots/athlete-app.png" alt="The athlete app on a phone: today's session with bodyweight, readiness and every logged set" width="320" align="right">
 
 - **Today**: the session, set by set, to log weight, reps and RPE or RIR, with notes and videos. Each exercise's circle fills as its sets are ticked, and **PR** flags the top set as a personal record: it gets a gold edge in **Tracking** and a line in **Overview**.
-- **History**: every session done so far and what's coming up.
+- **Videos**: next to each exercise's note, the athlete films or picks a clip and says which set it shows (the last set ticked off is picked for them). The phone shrinks it to 720p (about 4 MB for a 20 s set) and sends it straight to the server's video storage. It lands in your **Tracking** with that exercise, and they can watch it, save it to their phone or delete it for 30 days. Needs a storage bucket on the server: see [docs/cloud-setup.md](docs/cloud-setup.md#6-athlete-videos-optional).
+- **History**: a month calendar. White is training to come, red training done, yellow a day with a PR, green a competition, and a ring a session that went by unlogged. Tap a day to see what was planned and logged, and any competition's attempts.
 - **Inbox**: your notes on their sessions, newest first, with a badge for new ones. A note also shows on its day in Today and History, and Tracking shows you once it's been read.
-- **Tools**: a plate calculator and an e1RM calculator.
+- **Tools**: a plate calculator, an e1RM calculator, and **Appearance**: light, dark, or **Auto** to follow the phone.
 - **Check-in**: bodyweight first, then the questions you write under **Check-in** on the athlete's card — start from a preset (calories, sleep, stress, soreness, energy, steps, water, cycle, supplements, notes) or write your own. Each is asked daily (every day or the weekdays you pick) or weekly, and answered as a number, a scale, single or multiple choice, yes/no or text, with its own icon and colour. Scales make up the readiness score; low readiness shows up on Overview. Every answer is in the **Check-ins** table on Tracking (14, 28 or 56 days), linked from **See answers** on the athlete card.
 
 What they log shows up in **Tracking** and **Overview** within seconds. You can add or delete weigh-ins yourself on **Tracking** too (at a weigh-in, say); the newer edit wins, on either side. **New link** replaces a lost link; **Turn off** stops it.
@@ -155,6 +156,7 @@ What they log shows up in **Tracking** and **Overview** within seconds. You can 
 - Everything lives in `topset.db` next to Topset.exe.
 - **Automatic backups** are taken when Topset opens (every day by default, the last 14 kept) into `topset-backups`, or a folder you choose in **Settings → Backup and data**. **Download** and **Restore…** are there too.
 - Signed in to a server, your programs are also kept there, so a second computer gets them by signing in with the same username.
+- Videos from the athlete app are downloaded into `topset-videos` next to `topset.db`, one folder per exercise, like the ones you drop in yourself. Like those, they aren't part of backups.
 
 ---
 

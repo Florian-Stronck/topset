@@ -489,6 +489,7 @@ function View() {
           options={[
             ["dark", t("Dark")],
             ["light", t("Light")],
+            ["system", t("Match system")],
           ]}
           onChange={(v) => setPref("theme", v as typeof theme)}
         />

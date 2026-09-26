@@ -86,6 +86,79 @@ You own the plans and athletes own their logs, so the two never overwrite each o
 
 Backups and **Restore** work on the local file. A coach's sign-in is kept in `topset-cloud.json` next to `topset.db`, never in the database or in a backup. Desktop apps never hold the Turso key.
 
+## 6. Athlete videos (optional)
+
+Athletes can attach videos of their sets in the athlete app. The videos are never stored in the database. They go into a storage bucket, straight from the phone. The database only keeps a small row per video: which exercise it's of, and where the file is.
+
+The recommended bucket is **Cloudflare R2**. It's free up to 10 GB, and downloads are always free. Before uploading, the phone shrinks each clip to 720p (about 4 MB for a 20 s set). The bucket deletes videos after 30 days. Each coach's desktop app downloads its athletes' videos into `topset-videos` long before that, so they're kept on the coach's computer.
+
+**What to expect:** at about 450 filmed sets a week (15 athletes filming 2–4 top sets of 2–3 exercises, 4 days a week), 30 days of videos is about 8 GB. That fits in R2's free tier. The database grows by under 1 MB a month.
+
+1. In the Cloudflare dashboard, go to **R2** and create a bucket, for example `topset-videos`.
+2. **Settings → Object lifecycle rules → Add rule**: delete objects **30 days** after upload, for the whole bucket.
+3. **Settings → CORS policy**: allow the athlete app to upload and play videos. Replace the origin with your server address:
+
+   ```json
+   [
+     {
+       "AllowedOrigins": ["https://topset-yourname.vercel.app"],
+       "AllowedMethods": ["GET", "PUT", "HEAD"],
+       "AllowedHeaders": ["content-type"],
+       "MaxAgeSeconds": 3600
+     }
+   ]
+   ```
+
+4. **R2 → Manage API tokens → Create API token**, with **Object Read & Write** on this bucket only. Copy the **Access Key ID** and the **Secret Access Key**.
+5. Add these to your Vercel project's environment variables and redeploy:
+
+   | Name | Value |
+   | --- | --- |
+   | `TOPSET_R2_ACCOUNT_ID` | your Cloudflare account id (on the R2 overview page) |
+   | `TOPSET_VIDEO_BUCKET` | the bucket's name |
+   | `TOPSET_VIDEO_ACCESS_KEY_ID` | the access key id |
+   | `TOPSET_VIDEO_SECRET_ACCESS_KEY` | the secret access key |
+   | `TOPSET_VIDEO_RETENTION_DAYS` | optional; the days in your lifecycle rule, if not 30 |
+
+Another S3-compatible service works too: set `TOPSET_VIDEO_ENDPOINT` (and `TOPSET_VIDEO_REGION` if it isn't `auto`) instead of `TOPSET_R2_ACCOUNT_ID`.
+
+Without these variables, the athlete app simply doesn't offer videos.
+
+**How it works:**
+
+- The server hands the phone a signed link that is valid for 15 minutes. It uploads exactly one file, of the size and type the phone announced, to one new place. The server then checks that the file arrived.
+- Links to play or download a video are signed the same way and expire after a few hours. The bucket stays private.
+- A coach's desktop app downloads the new videos of its own athletes every time it syncs. They go into `topset-videos/<exercise>/` next to `topset.db`, named by day, exercise, set and the phone's file name, and show up in **Tracking** under that exercise. A video the coach deletes there isn't downloaded again.
+- An athlete who deletes a video removes it from the bucket. A copy the coach already downloaded stays on the coach's computer.
+- **If a coach doesn't open Topset for longer than the retention period**, videos older than that are gone from the bucket before they are downloaded.
+
+## 7. Notifications (optional)
+
+Athletes turn notifications on with the bell in the athlete app's **Inbox**, and choose there, per phone, what they want to hear about:
+
+- **Notes from your coach**: as soon as your desktop app has synced a note you sent from Tracking. The home-screen icon counts what's unread.
+- **Plan changes**: once you've stopped editing their plan for 5 minutes, and at most every 3 hours, so an evening of programming is one notification.
+- **Training days**: in the morning, when a session is planned that day.
+- **Meets**: a week and a day before a competition.
+
+1. On your computer, in the Topset folder, run `npx web-push generate-vapid-keys`. It prints a public and a private key.
+2. Add these to your Vercel project's environment variables and redeploy:
+
+   | Name | Value |
+   | --- | --- |
+   | `TOPSET_VAPID_PUBLIC_KEY` | the public key |
+   | `TOPSET_VAPID_PRIVATE_KEY` | the private key (keep it secret) |
+   | `TOPSET_VAPID_SUBJECT` | `mailto:` and your email address, so push services can reach you |
+   | `CRON_SECRET` | a long random string; Vercel uses it to run the morning notifications |
+
+The morning run (training days, meets, and plan changes left waiting because you closed the app) is a Vercel Cron job in `vercel.json`, daily at 05:00 UTC: 7:00 in summer and 6:00 in winter in Luxembourg. On the free plan Vercel may start it any time within that hour.
+
+Keep the same keys from then on: new keys switch every athlete's notifications off until they tap the bell again.
+
+**On iPhone** notifications only work once the athlete has added the page to their Home Screen (Share → Add to Home Screen, iOS 16.4 or later) and opened it from there. Android and desktop browsers work straight from the browser.
+
+Handing an athlete a new link turns notifications off on the phones that used the old one.
+
 ## Updating
 
 When a new version changes the database:

@@ -98,3 +98,31 @@ export function deleteVideo(rowId: string, name: string): boolean {
   if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
   return true;
 }
+
+// --- videos from the athlete app ------------------------------------------------------
+
+/**
+ * Which athlete-app videos this computer already has, by `AthleteVideo` id: the file each
+ * went into, or null for one that was gone from storage by the time it was asked for.
+ * Kept beside the videos rather than in the database, like the videos themselves, so a
+ * video the coach deletes here isn't downloaded again.
+ */
+function ledgerPath(): string {
+  return path.join(videosRoot(), ".athlete-videos.json");
+}
+
+export function readLedger(): Record<string, string | null> {
+  try {
+    const data = JSON.parse(fs.readFileSync(ledgerPath(), "utf8"));
+    return data && typeof data === "object" ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeLedger(ledger: Record<string, string | null>): void {
+  fs.mkdirSync(videosRoot(), { recursive: true });
+  const file = ledgerPath();
+  fs.writeFileSync(`${file}.part`, JSON.stringify(ledger, null, 1));
+  fs.renameSync(`${file}.part`, file);
+}
