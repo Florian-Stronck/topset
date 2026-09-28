@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { deleteMessage, editMessage, markReviewed, sendMessage } from "@/app/tracking/actions";
 import { AthleteLinkButton } from "@/components/AthleteLink";
 import { Trophy } from "@/components/CheckinIcon";
@@ -144,7 +144,6 @@ export function ReviewView({
   // Review marks are the coach's own, so the viewer never filters by them.
   const prefs = readOnly && stored.filter === "unreviewed" ? { ...stored, filter: "all" as const } : stored;
   const filters = readOnly ? REVIEW_FILTERS.filter((f) => f !== "unreviewed") : REVIEW_FILTERS;
-  const attentionRef = useRef<HTMLDivElement>(null);
 
   // Fresh data from the server (a refresh, or an action's revalidation) replaces ours.
   if (synced.block !== initialBlock || synced.messages !== initialMessages) {
@@ -422,7 +421,7 @@ export function ReviewView({
         id: "track-attention",
         group: "Filter",
         title: t("Jump to what needs attention"),
-        run: () => attentionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }),
+        run: () => document.getElementById("review-attention")?.scrollIntoView({ block: "start", behavior: "smooth" }),
       },
     ];
     return readOnly ? list.filter((c) => !["session-review", "session-feedback", "session-next-unreviewed", "week-review-all", "track-filter-unreviewed"].includes(c.id)) : list;
@@ -457,7 +456,7 @@ export function ReviewView({
 
       <WeekTiles weeks={sessionsByWeek} stats={stats} active={activeWeek} onSelect={setWeek} />
 
-      <div ref={attentionRef} className="mt-4 flex scroll-mt-4 flex-wrap items-center gap-2">
+      <div id="review-attention" className="mt-4 flex scroll-mt-4 flex-wrap items-center gap-2">
         {!readOnly && (
           <AttentionChip n={attention.unreviewed} label={t("to review")} tone="accent" on={prefs.filter === "unreviewed"} onClick={() => setTrackingPref({ filter: prefs.filter === "unreviewed" ? "all" : "unreviewed" })} />
         )}
