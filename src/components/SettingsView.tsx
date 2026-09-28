@@ -134,6 +134,16 @@ function Units({ settings, update }: Props) {
           onChange={(v) => update({ defaultUnit: v as CoachSettings["defaultUnit"] })}
         />
       </Row>
+      <Row label="New athletes are" hint="Fighters get time per round, load and fights up front; lifters get 1RMs and meets.">
+        <Select
+          value={settings.defaultSport}
+          options={[
+            ["LIFTER", t("Lifters")],
+            ["FIGHTER", t("Fighters")],
+          ]}
+          onChange={(v) => update({ defaultSport: v as CoachSettings["defaultSport"] })}
+        />
+      </Row>
       <Row label="Round kg loads to" hint="Every calculated weight snaps to this step.">
         <Select
           value={String(settings.roundKg)}
@@ -428,6 +438,7 @@ function View() {
   const COLUMN_LABEL: Record<Column, string> = {
     progression: "Progression",
     notes: "Coach notes",
+    time: "Time per set",
     tempo: "Tempo",
     rest: "Rest time",
     video: "Video link",

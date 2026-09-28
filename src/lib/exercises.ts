@@ -68,6 +68,27 @@ export const EXERCISE_CATALOG: CatalogEntry[] = [
   { name: "Hammer Curl", target: "General", tier: "ACCESSORY" },
   { name: "Plank", target: "General", tier: "ACCESSORY" },
   { name: "Hanging Leg Raise", target: "General", tier: "ACCESSORY" },
+
+  // Combat sports: rounds and intervals, written with a TIME per set.
+  { name: "Hard Sparring", target: "Sparring", tier: "PRIMARY" },
+  { name: "Technical Sparring", target: "Sparring", tier: "SECONDARY" },
+  { name: "Positional Sparring", target: "Sparring", tier: "SECONDARY" },
+  { name: "Grappling Rolls", target: "Grappling", tier: "PRIMARY" },
+  { name: "Wrestling Live", target: "Grappling", tier: "PRIMARY" },
+  { name: "Takedown Drilling", target: "Grappling", tier: "VARIATION" },
+  { name: "Guard Drilling", target: "Grappling", tier: "VARIATION" },
+  { name: "Pad Work", target: "Striking", tier: "PRIMARY" },
+  { name: "Bag Rounds", target: "Striking", tier: "SECONDARY" },
+  { name: "Shadow Boxing", target: "Striking", tier: "ACCESSORY" },
+  { name: "Clinch Work", target: "Striking", tier: "VARIATION" },
+  { name: "Assault Bike Intervals", target: "Conditioning", tier: "SECONDARY" },
+  { name: "Rower Intervals", target: "Conditioning", tier: "SECONDARY" },
+  { name: "Road Run", target: "Conditioning", tier: "ACCESSORY" },
+  { name: "Sled Push", target: "Conditioning", tier: "ACCESSORY" },
+  { name: "Jump Rope", target: "Conditioning", tier: "ACCESSORY" },
+  { name: "Trap Bar Deadlift", target: "General", tier: "ACCESSORY" },
+  { name: "Power Clean", target: "General", tier: "ACCESSORY" },
+  { name: "Neck Harness", target: "General", tier: "ACCESSORY" },
 ];
 
 type Library = {
@@ -160,11 +181,17 @@ export function classifyExercise(name: string): { target: string; tier: Tier } {
  * Names matching `query`, prefix matches first so the inline completion has something
  * to extend. `history` (names the coach already used) outranks the built-in catalog.
  */
-export function suggestExercises(query: string, history: string[], limit = 8): string[] {
+/** The targets the combat-sports catalog files its work under: a fighter sees these first. */
+const COMBAT_TARGETS = new Set(["sparring", "grappling", "striking", "conditioning"]);
+
+export function suggestExercises(query: string, history: string[], limit = 8, fighter = false): string[] {
   const lib = library();
   const pool: string[] = [];
   const seen = new Set<string>();
-  for (const name of [...history, ...lib.entries.map((e) => e.name)]) {
+  const catalog = fighter
+    ? [...lib.entries].sort((a, b) => Number(COMBAT_TARGETS.has(key(b.target))) - Number(COMBAT_TARGETS.has(key(a.target))))
+    : lib.entries;
+  for (const name of [...history, ...catalog.map((e) => e.name)]) {
     const k = key(name);
     if (k === "" || seen.has(k) || lib.hidden.has(k)) continue;
     seen.add(k);
@@ -182,9 +209,9 @@ export function suggestExercises(query: string, history: string[], limit = 8): s
 }
 
 /** The rest of the best prefix match, for the greyed completion inside the input. */
-export function completionFor(query: string, history: string[]): string {
+export function completionFor(query: string, history: string[], fighter = false): string {
   if (query.trim() === "") return "";
-  const [best] = suggestExercises(query, history, 1);
+  const [best] = suggestExercises(query, history, 1, fighter);
   // Sliced off the raw name, so only a literal prefix can extend what is typed.
   if (!best || !best.toLowerCase().startsWith(query.toLowerCase())) return "";
   return best.slice(query.length);

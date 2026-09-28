@@ -10,7 +10,7 @@ import {
   type CheckinQuestionInput,
 } from "@/app/athletes/actions";
 import { CheckinIcon, ICON_NAMES } from "@/components/CheckinIcon";
-import { COLORS, colorOf, parseConfig, PRESETS, type CheckinKind, type CheckinQuestionData } from "@/lib/checkins";
+import { COLORS, colorOf, countsForReadiness, isBodyweight, parseConfig, PRESETS, type CheckinKind, type CheckinQuestionData } from "@/lib/checkins";
 import { t, weekdayShort } from "@/lib/i18n";
 
 const BLANK: CheckinQuestionInput = { label: "", cadence: "DAILY", days: [], kind: "SCALE", config: { min: 1, max: 5 }, icon: "check", color: "blue" };
@@ -49,10 +49,10 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
   return (
     <div className="mt-3">
       <div className="flex items-center gap-2">
-        <span className="text-[10px] tracking-[0.14em] text-muted-2" title={t("What the athlete app asks before training, after their bodyweight.")}>
+        <span className="text-[10px] tracking-[0.14em] text-muted-2" title={t("What the athlete app asks before training.")}>
           {t("CHECK-IN")}
         </span>
-        {order.length === 0 && <span className="text-[11px] text-muted-2">{t("bodyweight only")}</span>}
+        {order.length === 0 && <span className="text-[11px] text-muted-2">{t("nothing asked")}</span>}
         <Link href={`/tracking?athlete=${athleteId}&view=wellness#checkins`} className="ml-auto text-[11px] text-muted hover:text-accent">
           {t("See answers")} →
         </Link>
@@ -77,6 +77,11 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
             </span>
             <span className="max-w-[160px] truncate">{q.label}</span>
             <span className="text-[10px] text-muted-2">{whenAsked(q)}</span>
+            {countsForReadiness(q) && (
+              <span title={t("Counts toward readiness")} className="text-[10px] font-semibold text-muted-2">
+                R
+              </span>
+            )}
           </button>
         ))}
         <button
@@ -91,6 +96,7 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
       {editing && (
         <QuestionEditor
           initial={editing === "new" ? null : editing}
+          hasBodyweight={order.some(isBodyweight)}
           onClose={() => setEditing(null)}
           onSave={async (input) => {
             if (editing === "new") await addCheckinQuestion(athleteId, input);
@@ -167,11 +173,14 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 /** Writing or rewriting one question: presets to start from, then every part of it. */
 function QuestionEditor({
   initial,
+  hasBodyweight,
   onClose,
   onSave,
   onRemove,
 }: {
   initial: CheckinQuestionData | null;
+  /** The athlete is already asked their bodyweight: one weigh-in is enough. */
+  hasBodyweight: boolean;
   onClose: () => void;
   onSave: (input: CheckinQuestionInput) => Promise<void>;
   onRemove: (() => Promise<void>) | null;
@@ -228,7 +237,7 @@ function QuestionEditor({
         {!initial && (
           <Section label={t("START FROM A PRESET")}>
             <div className="flex flex-wrap gap-1.5">
-              {PRESETS.map((p) => (
+              {PRESETS.filter((p) => !(hasBodyweight && p.config.bodyweight)).map((p) => (
                 <button
                   key={p.key}
                   type="button"
@@ -309,6 +318,12 @@ function QuestionEditor({
         </Section>
 
         <Section label={t("ANSWER")}>
+          {isBodyweight(q) ? (
+            <p className="text-[12px] text-muted">
+              {t("A weigh-in, in the athlete's unit. It goes to their bodyweight log, so the trend and the weight cut read it.")}
+            </p>
+          ) : (
+          <>
           <div className="grid grid-cols-3 gap-1.5">
             {KIND_TILES.map((k) => (
               <button
@@ -326,6 +341,8 @@ function QuestionEditor({
             ))}
           </div>
           <KindSettings q={q} onConfig={(config) => patch({ config })} />
+          </>
+          )}
         </Section>
 
         <Section label={t("ICON")}>
@@ -424,6 +441,19 @@ function KindSettings({ q, onConfig }: { q: CheckinQuestionInput; onConfig: (con
         {pick(max, (n) => onConfig({ ...q.config, max: n }), 3, 10)}
         <input value={q.config.high ?? ""} maxLength={40} onChange={(e) => onConfig({ ...q.config, high: e.target.value })} placeholder={t("Best, e.g. Great")} className={field} />
         <span className="col-span-2 text-[11px] text-muted-2">{t("Put the good end high: scales feed the readiness score, higher is better.")}</span>
+        <label className="col-span-2 mt-1 flex items-center gap-2 text-[12px] text-foreground">
+          <input
+            type="checkbox"
+            checked={q.config.readiness !== false}
+            onChange={(e) => {
+              const next = { ...q.config };
+              delete next.readiness;
+              onConfig(e.target.checked ? next : { ...next, readiness: false });
+            }}
+            className="size-4 accent-[var(--accent)]"
+          />
+          {t("Counts toward readiness")}
+        </label>
       </div>
     );
   }

@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { OverviewBoard, type BoardRow } from "@/components/OverviewBoard";
+import { OverviewBoard, type BoardRow, type Issue, type IssueCategory } from "@/components/OverviewBoard";
 import { RefreshButton } from "@/components/RefreshButton";
 import { Sidebar } from "@/components/Sidebar";
-import { bodyweightSummary, classLimit, dailyWeights, projectWeight } from "@/lib/bodyweight";
+import { bodyweightSummary, dailyWeights, projectWeight, weightToMake } from "@/lib/bodyweight";
 import { loadSettings } from "@/lib/coach-settings";
-import { today as calendarToday, weekStartOf, ymdOf } from "@/lib/dates";
+import { formatDate, today as calendarToday, weekStartOf, ymdOf } from "@/lib/dates";
 import { LOCALE, t, weekdayShort } from "@/lib/i18n";
 import {
   athleteTraining,
@@ -17,7 +17,9 @@ import {
   trainingFlags,
   type FlagAction,
 } from "@/lib/overview";
-import { getBodyweights, getCheckins, getNextMeets, getOverview, getRecentCheckins, getRecentPrs, getTrainingWindow, getUnreviewed } from "@/lib/queries";
+import { getActiveInjuries, getBodyweights, getCheckins, getNextMeets, getOverview, getRecentCheckins, getRecentPrs, getTimedRows, getTrainingWindow, getUnreviewed } from "@/lib/queries";
+import { injuryLabel } from "@/lib/injuries";
+import { acwr, acwrZone, dailyLoad } from "@/lib/load";
 import { latestReadiness } from "@/lib/checkins";
 import { formatEffort } from "@/lib/setlog";
 import { Trophy } from "@/components/CheckinIcon";
@@ -34,7 +36,17 @@ type FeedItem = {
   text: string;
   detail?: string;
   action: { label: string; href: string };
-  kind: "flag" | "pr" | "checkin";
+  kind: "pr" | "checkin";
+};
+
+/** Which count across the top a flag adds to. */
+const CATEGORY: Record<FlagAction, IssueCategory> = {
+  program: "program",
+  sessions: "review",
+  link: "link",
+  checkins: "wellness",
+  review: "training",
+  weight: "weight",
 };
 
 export default async function OverviewPage() {
@@ -50,7 +62,7 @@ export default async function OverviewPage() {
   const from = [addDays(today, -(COMPLIANCE_DAYS - 1)), week[0]].sort()[0];
   const to = [today, week[6]].sort()[1];
 
-  const [checkins, sessions, weights, meets, answers, prs, unreviewed] = await Promise.all([
+  const [checkins, sessions, weights, meets, answers, prs, unreviewed, injuries] = await Promise.all([
     getRecentCheckins(coach.id),
     getTrainingWindow(ids, from, to),
     // Three weeks is enough for this week's average and the one before.
@@ -59,11 +71,19 @@ export default async function OverviewPage() {
     getCheckins(ids, addDays(today, -6)),
     getRecentPrs(coach.id),
     getUnreviewed(coach.id),
+    getActiveInjuries(ids, today),
   ]);
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  // Acute:chronic load for the fighters, the only ones whose load is counted in minutes.
+  const fighterLoad = new Map(
+    await Promise.all(
+      athletes
+        .filter((a) => a.sport === "FIGHTER")
+        .map(async (a) => [a.id, acwr(dailyLoad(await getTimedRows(a.id)), today)] as const),
+    ),
+  );
   const linksOn = syncEnabled();
 
-  const feedFlags: FeedItem[] = [];
   const rows: BoardRow[] = athletes.map((athlete) => {
     const unit = athlete.unit === "LB" ? "lb" : "kg";
     const block = currentBlock(athlete.blocks, now);
@@ -73,21 +93,23 @@ export default async function OverviewPage() {
     const bodyweight = bodyweightSummary(daily, today);
     const meet = meets.get(athlete.id);
     const nextMeet = meet
-      ? { name: meet.name, days: daysBetween(today, ymdOf(meet.date)), weightClass: meet.weightClass, limit: classLimit(meet.weightClass) }
+      ? { name: meet.name, days: daysBetween(today, ymdOf(meet.date)), weightClass: meet.weightClass, limit: weightToMake(meet).limit }
       : null;
 
     const review = block
       ? `/tracking?athlete=${athlete.id}&block=${block.id}${window?.status === "active" ? `&week=${window.week}` : ""}`
       : `/tracking?athlete=${athlete.id}`;
+    const wellness = `/tracking?athlete=${athlete.id}&view=wellness`;
     const hrefFor: Record<FlagAction, { label: string; href: string }> = {
-      program: { label: t("Program"), href: block ? `/programming?athlete=${athlete.id}&phase=${block.id}` : `/programming?athlete=${athlete.id}` },
-      review: { label: t("Review"), href: review },
+      program: { label: t("Open programming"), href: block ? `/programming?athlete=${athlete.id}&phase=${block.id}` : `/programming?athlete=${athlete.id}` },
+      review: { label: t("Open tracking"), href: review },
       link: { label: t("Send link"), href: `/athletes?link=${athlete.id}` },
-      checkins: { label: t("Check-ins"), href: `/tracking?athlete=${athlete.id}&view=wellness#checkins` },
+      checkins: { label: t("See check-ins"), href: `${wellness}#checkins` },
+      weight: { label: t("See weight"), href: wellness },
       sessions: (() => {
         const u = unreviewed.get(athlete.id);
         return {
-          label: t("Review"),
+          label: t("Review sessions"),
           href: u ? `/tracking?athlete=${athlete.id}&block=${u.blockId}&week=${u.week}&show=unreviewed` : review,
         };
       })(),
@@ -112,25 +134,50 @@ export default async function OverviewPage() {
         ? [{ text: t(toReview === 1 ? "{n} session to review" : "{n} sessions to review", { n: toReview }), action: "sessions" as const }]
         : []),
     ];
-    flags.forEach((flag, i) =>
-      feedFlags.push({
-        key: `${athlete.id}-${i}`,
-        athleteId: athlete.id,
-        athlete: athlete.name,
-        text: flag.text,
-        action: hrefFor[flag.action],
-        kind: "flag",
-      }),
-    );
+    const issues: Issue[] = flags.map((flag, i) => ({
+      key: `${athlete.id}-${i}`,
+      text: flag.text,
+      category: CATEGORY[flag.action],
+      urgent: flag.urgent ?? false,
+      fix: hrefFor[flag.action],
+    }));
+    // A fighter's load jumping well past the last month is worth a look before it hurts.
+    const ratio = fighterLoad.get(athlete.id) ?? null;
+    if (ratio !== null && acwrZone(ratio) === "spike") {
+      issues.push({
+        key: `${athlete.id}-load`,
+        text: t("Load spike: {n}× the last month", { n: ratio }),
+        category: "load",
+        urgent: true,
+        fix: { label: t("See load"), href: `/tracking?athlete=${athlete.id}&view=load` },
+      });
+    }
+    // A bad injury, or a knock to the head, is worth a word before the next session.
+    const hurt = injuries.get(athlete.id) ?? [];
+    for (const injury of hurt.filter((i) => i.severity >= 4 || i.area === "head")) {
+      issues.push({
+        key: `${athlete.id}-injury-${injury.id}`,
+        text: t("{injury} injury, {n}/5 — since {date}", { injury: injuryLabel(injury), n: injury.severity, date: formatDate(injury.day) }),
+        category: "wellness",
+        urgent: true,
+        fix: { label: t("See injury"), href: wellness },
+      });
+    }
+    const checkin = answers.get(athlete.id);
+    const readiness = checkin ? latestReadiness(checkin.questions, checkin.answers) : null;
 
     const weight = bodyweight.avg7 ?? bodyweight.latest?.weight ?? null;
     return {
       id: athlete.id,
       name: athlete.name,
+      sport: athlete.sport ?? "LIFTER",
       unit,
       href: review,
       running: window?.status === "active",
-      flagged: flags.length > 0,
+      issues,
+      readiness: readiness?.score != null ? { score: readiness.score, day: readiness.day } : null,
+      injuries: hurt.map((i) => ({ label: injuryLabel(i), severity: i.severity })),
+      load: ratio,
       prs: prs.filter((p) => p.athleteId === athlete.id && p.loggedAt >= weekAgo).length,
       phase:
         block && window
@@ -158,10 +205,12 @@ export default async function OverviewPage() {
             },
       meet: nextMeet && {
         name: nextMeet.name,
+        fight: meet?.kind === "FIGHT",
+        opponent: meet?.opponent ?? null,
         days: nextMeet.days,
         weightClass: nextMeet.weightClass,
         limit: nextMeet.limit,
-        projected: meet ? (projectWeight(daily, today, ymdOf(meet.date))?.weight ?? null) : null,
+        projected: meet ? (projectWeight(daily, today, weightToMake(meet).day)?.weight ?? null) : null,
       },
     };
   });
@@ -199,34 +248,35 @@ export default async function OverviewPage() {
     };
   });
 
-  const programs = new Set(athletes.flatMap((a) => a.blocks.map((b) => b.programId))).size;
-  const phases = athletes.reduce((n, a) => n + a.blocks.length, 0);
-
   return (
     <div className="flex h-screen">
       <Sidebar athletes={athletes} coachUsername={coach.username} coachName={coach.name} section="overview" />
 
       <main className="min-w-0 flex-1 overflow-auto">
         <div className="mx-auto w-full max-w-[1400px] px-6 py-7">
-          <h1 className="text-[22px] font-semibold tracking-tight">{t("Overview")}</h1>
-          <p className="mt-1 text-[12px] text-muted">
-            {now.toLocaleDateString(LOCALE[settings.language], {
-              weekday: "long",
-              day: "numeric",
-              month: "long",
-              year: "numeric",
-            })}
-          </p>
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h1 className="text-[22px] font-semibold tracking-tight">{t("Overview")}</h1>
+              <p className="mt-1 text-[12px] text-muted">
+                {now.toLocaleDateString(LOCALE[settings.language], {
+                  weekday: "long",
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                })}
+              </p>
+            </div>
+            <RefreshButton />
+          </div>
 
           <OverviewBoard
             rows={rows}
-            stats={{ athletes: athletes.length, programs, phases }}
             week={week.map((ymd) => ({
               ymd,
               day: weekdayShort((settings.weekStart + week.indexOf(ymd)) % 7),
               today: ymd === today,
             }))}
-            feed={<Feed flags={feedFlags} prs={prItems} checkins={checkinItems} />}
+            activity={<Activity prs={prItems} checkins={checkinItems} />}
           />
         </div>
       </main>
@@ -234,30 +284,25 @@ export default async function OverviewPage() {
   );
 }
 
-/** Warnings first, then PRs, then what athletes logged, newest first — each with one thing to do about it. */
-function Feed({ flags, prs, checkins }: { flags: FeedItem[]; prs: FeedItem[]; checkins: FeedItem[] }) {
+/** PRs, then what athletes logged, newest first — each a click from its session. */
+function Activity({ prs, checkins }: { prs: FeedItem[]; checkins: FeedItem[] }) {
+  if (prs.length + checkins.length === 0) return null;
   return (
     <section id="feed" className="mt-7 scroll-mt-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-[11px] tracking-[0.16em] text-muted-2">{t("NEEDS ATTENTION AND CHECK-INS")}</h2>
-        <RefreshButton />
-      </div>
-      {flags.length + prs.length + checkins.length === 0 ? (
-        <p className="mt-2 rounded-xl border border-border bg-surface px-4 py-3 text-[13px] text-muted">{t("All caught up.")}</p>
-      ) : (
-        <div className="mt-2 max-h-[420px] divide-y divide-border overflow-auto rounded-xl border border-border bg-surface">
-          {[...flags, ...prs, ...checkins].map((item) => (
+      <h2 className="text-[11px] tracking-[0.16em] text-muted-2">{t("RECENT ACTIVITY")}</h2>
+      <div className="mt-2 max-h-[360px] divide-y divide-border overflow-auto rounded-xl border border-border bg-surface">
+          {[...prs, ...checkins].map((item) => (
             <div key={item.key} className={`flex items-center gap-3 px-4 py-2.5 ${item.kind === "pr" ? "bg-pr/[0.06]" : ""}`}>
               {item.kind === "pr" ? (
                 <Trophy size={12} className="shrink-0 text-pr" />
               ) : (
-                <span aria-hidden className={`size-2 shrink-0 rounded-full ${item.kind === "flag" ? "bg-warn" : "bg-ok"}`} />
+                <span aria-hidden className="size-2 shrink-0 rounded-full bg-ok" />
               )}
               <Avatar name={item.athlete} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13px]">
                   <span className="font-medium">{item.athlete}</span>
-                  <span className={item.kind === "flag" ? "text-foreground" : item.kind === "pr" ? "font-medium text-pr" : "text-muted"}>
+                  <span className={item.kind === "pr" ? "font-medium text-pr" : "text-muted"}>
                     {" · "}
                     {item.text}
                   </span>
@@ -272,8 +317,7 @@ function Feed({ flags, prs, checkins }: { flags: FeedItem[]; prs: FeedItem[]; ch
               </Link>
             </div>
           ))}
-        </div>
-      )}
+      </div>
     </section>
   );
 }

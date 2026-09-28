@@ -27,6 +27,11 @@ export default async function CompetitionPage({
     weightClass: meet.weightClass,
     bodyweight: meet.bodyweight,
     date: meet.date.toISOString(),
+    kind: meet.kind,
+    opponent: meet.opponent,
+    weighIn: meet.weighIn ? meet.weighIn.toISOString().slice(0, 10) : null,
+    targetWeight: meet.targetWeight,
+    outcome: meet.outcome,
     attempts: meet.attempts.map((a) => ({
       id: a.id,
       lift: a.lift,

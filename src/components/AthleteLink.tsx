@@ -7,6 +7,7 @@ import {
   createAccessLink,
   revokeAccessLink,
   type AthleteLink as LinkData,
+  type LinkKind,
 } from "@/app/athletes/link-actions";
 import { Popover } from "@/components/Popover";
 import { t } from "@/lib/i18n";
@@ -20,12 +21,16 @@ export function AthleteLinkButton({
   name,
   hasLink,
   initiallyOpen = false,
+  kind = "athlete",
 }: {
   athleteId: string;
   name: string;
   hasLink: boolean;
   initiallyOpen?: boolean;
+  /** "viewer": the read-only Tracking link for a second coach. */
+  kind?: LinkKind;
 }) {
+  const viewer = kind === "viewer";
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(initiallyOpen);
   const [link, setLink] = useState<LinkData | null>(null);
@@ -39,14 +44,14 @@ export function AthleteLinkButton({
   // Opened from the palette: fetch once on arrival, the way a click would.
   useEffect(() => {
     if (!initiallyOpen) return;
-    startTransition(async () => setLink(await athleteLink(athleteId)));
-  }, [initiallyOpen, athleteId]);
+    startTransition(async () => setLink(await athleteLink(athleteId, kind)));
+  }, [initiallyOpen, athleteId, kind]);
 
   function toggle() {
     const next = !open;
     setOpen(next);
     setCopied(false);
-    if (next) load(() => athleteLink(athleteId));
+    if (next) load(() => athleteLink(athleteId, kind));
   }
 
   return (
@@ -55,18 +60,22 @@ export function AthleteLinkButton({
         ref={anchor}
         type="button"
         onClick={toggle}
-        title={t("The link {name} checks in with", { name })}
+        title={viewer ? t("A read-only view of {name}'s Tracking", { name }) : t("The link {name} checks in with", { name })}
         className={`rounded-lg border px-3 py-1.5 text-[12px] hover:border-accent hover:text-accent ${
           hasLink ? "border-border text-muted" : "border-dashed border-border text-muted-2"
         }`}
       >
-        {t("Athlete link")}
+        {viewer ? t("Viewer link") : t("Athlete link")}
       </button>
 
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={anchor} width={300}>
-        <div className="text-[13px] font-semibold">{t("Check-in link for {name}", { name })}</div>
+        <div className="text-[13px] font-semibold">
+          {viewer ? t("Viewer link for {name}", { name }) : t("Check-in link for {name}", { name })}
+        </div>
         <p className="mt-1 text-[11px] text-muted">
-          {t("They open it on their phone to see their training and log every set. You see it here.")}
+          {viewer
+            ? t("For another coach: they see {name}'s Tracking but can't change anything or read your messages.", { name })
+            : t("They open it on their phone to see their training and log every set. You see it here.")}
         </p>
 
         {!link ? (
@@ -100,7 +109,7 @@ export function AthleteLinkButton({
               <button
                 type="button"
                 disabled={pending}
-                onClick={() => load(() => createAccessLink(athleteId))}
+                onClick={() => load(() => createAccessLink(athleteId, kind))}
                 title={t("The old link stops working.")}
                 className="text-[11px] text-muted hover:text-foreground disabled:opacity-50"
               >
@@ -109,7 +118,7 @@ export function AthleteLinkButton({
               <button
                 type="button"
                 disabled={pending}
-                onClick={() => load(() => revokeAccessLink(athleteId))}
+                onClick={() => load(() => revokeAccessLink(athleteId, kind))}
                 className="text-[11px] text-muted-2 hover:text-accent disabled:opacity-50"
               >
                 {t("Turn off")}
@@ -120,7 +129,7 @@ export function AthleteLinkButton({
           <button
             type="button"
             disabled={pending}
-            onClick={() => load(() => createAccessLink(athleteId))}
+            onClick={() => load(() => createAccessLink(athleteId, kind))}
             className="mt-3 w-full rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white disabled:opacity-60"
           >
             {t("Create link")}

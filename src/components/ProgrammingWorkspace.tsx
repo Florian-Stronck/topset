@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { injuryLabel, type InjuryData } from "@/lib/injuries";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { createExampleAthlete } from "@/app/athletes/actions";
@@ -60,6 +62,7 @@ export function ProgrammingWorkspace({
   roster,
   exerciseHistory,
   meets,
+  injuries,
 }: {
   phase: BlockData;
   program: ProgramSummary;
@@ -69,6 +72,8 @@ export function ProgrammingWorkspace({
   roster: { id: string; name: string }[];
   exerciseHistory: string[];
   meets: MeetSummary[];
+  /** Injuries the athlete has now, worst first — kept in sight while the plan is written. */
+  injuries: InjuryData[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -92,6 +97,7 @@ export function ProgrammingWorkspace({
 
   const activeWeek = Math.min(week, block.weeks.length);
   const tightIntensity = usePref("tightIntensity");
+  const columns = usePref("columns");
   const copied = usePref("clipboard");
 
   // The whole-program view opens where the phase view is, until a week is picked in it.
@@ -208,6 +214,13 @@ export function ProgrammingWorkspace({
         title: tightIntensity ? t("Spread intensity across the week") : t("Keep intensity beside reps"),
         keywords: "columns layout width notes compact wide",
         run: () => togglePref("tightIntensity"),
+      },
+      {
+        id: "view-time",
+        group: "View",
+        title: columns.time ? t("Hide the TIME column") : t("Show the TIME column"),
+        keywords: "columns duration rounds seconds minutes interval timed",
+        run: () => setPref("columns", { ...columns, time: !columns.time }),
       },
       {
         id: "program-rename",
@@ -584,7 +597,7 @@ export function ProgrammingWorkspace({
     // Pushed in several passes; keep each group together under one heading.
     const groups = [...new Set(list.map((c) => c.group))];
     return list.sort((a, b) => groups.indexOf(a.group) - groups.indexOf(b.group));
-  }, [activeWeek, athlete, tightIntensity, copied, view, programOpen, wholeProgram, block, history, program, programs, router]);
+  }, [activeWeek, athlete, tightIntensity, columns, copied, view, programOpen, wholeProgram, block, history, program, programs, router]);
 
   // Above the sidebar's: "Tracking" here knows which phase to open.
   useCommands("workspace", commands, 1);
@@ -603,6 +616,21 @@ export function ProgrammingWorkspace({
         onView={setView}
         week={activeWeek}
       />
+
+      {injuries.length > 0 && (
+        <Link
+          href={`/tracking?athlete=${athlete.id}&view=wellness`}
+          title={t("Injuries on file now. Open them in Tracking.")}
+          className="mx-6 mt-2 flex w-fit flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-miss/40 bg-miss/10 px-3 py-1.5 text-[12px] hover:border-miss"
+        >
+          <span className="text-[10px] font-semibold tracking-[0.14em] text-miss">{t("INJURED")}</span>
+          {injuries.map((i) => (
+            <span key={i.id} className="text-foreground">
+              {injuryLabel(i)} <span className="tabular-nums text-muted">{i.severity}/5</span>
+            </span>
+          ))}
+        </Link>
+      )}
 
       {view === "program" ? (
         <WholeProgramSheet

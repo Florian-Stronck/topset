@@ -30,6 +30,7 @@ export type AthleteSummary = {
   id: string;
   name: string;
   unit: "KG" | "LB";
+  sport?: "LIFTER" | "FIGHTER";
   squat1RM: number | null;
   bench1RM: number | null;
   dead1RM: number | null;
@@ -78,11 +79,13 @@ export function currentBlock(blocks: BlockSummary[], today: Date): BlockSummary 
 }
 
 /** What a flag's one button does: open the plan, open Tracking, or hand out the link. */
-export type FlagAction = "program" | "review" | "link" | "checkins" | "sessions";
+export type FlagAction = "program" | "review" | "link" | "checkins" | "sessions" | "weight";
 
 export type Flag = {
   text: string;
   action: FlagAction;
+  /** Worth doing today rather than this week: nothing to train on, nothing logged, a class missed. */
+  urgent?: boolean;
 };
 
 /** How close to the end of a program the athlete is flagged for a new one — the coach's call. */
@@ -103,7 +106,7 @@ export function flagsFor(
   const flags: Flag[] = [];
 
   if (athlete.blocks.length === 0) {
-    return [{ text: t("No program yet"), action: "program" }];
+    return [{ text: t("No program yet"), action: "program", urgent: true }];
   }
 
   const block = currentBlock(athlete.blocks, today);
@@ -124,12 +127,13 @@ export function flagsFor(
             ? t("Program has run out — nothing programmed next")
             : t(window.daysLeft === 1 ? "Program ends in {n} day — nothing next" : "Program ends in {n} days — nothing next", { n: window.daysLeft }),
         action: "program",
+        urgent: window.daysLeft <= 2,
       });
     }
   }
 
   if (window.status === "done") {
-    flags.push({ text: t("No program running today"), action: "program" });
+    flags.push({ text: t("No program running today"), action: "program", urgent: true });
   }
 
   // The block's own maxes are what its target weights resolve against.
@@ -291,8 +295,8 @@ export function trainingFlags(
   if (training.due14 >= 2 && training.lastDone === null) {
     flags.push(
       linksOn && !hasLink
-        ? { text: t("Nothing logged in two weeks, and no check-in link yet"), action: "link" }
-        : { text: t("Nothing logged in the last two weeks"), action: "review" },
+        ? { text: t("Nothing logged in two weeks, and no check-in link yet"), action: "link", urgent: true }
+        : { text: t("Nothing logged in the last two weeks"), action: "review", urgent: true },
     );
   } else if (training.missed7 >= 2) {
     flags.push({ text: t("Missed {n} sessions in the last 7 days", { n: training.missed7 }), action: "review" });
@@ -333,7 +337,8 @@ export function trainingFlags(
         class: meet.weightClass ?? String(meet.limit),
         n: meet.days,
       }),
-      action: "review",
+      action: "weight",
+      urgent: meet.days <= 14,
     });
   }
 

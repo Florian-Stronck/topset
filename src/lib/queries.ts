@@ -1,7 +1,9 @@
 import { bodyweightEntry } from "@/lib/bodyweight";
 import { currentBlock, type AthleteSummary, type WindowSession } from "@/lib/overview";
-import { questionData, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
-import { sessionsOf } from "@/lib/schedule";
+import { isBodyweight, questionData, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
+import { injuryData, type InjuryData } from "@/lib/injuries";
+import type { TimedRow } from "@/lib/load";
+import { dateOfDay, sessionsOf } from "@/lib/schedule";
 import { prisma } from "@/lib/prisma";
 import type { BlockData } from "@/lib/types";
 
@@ -183,6 +185,7 @@ export async function getOverview(today: Date) {
     id: athlete.id,
     name: athlete.name,
     unit: athlete.unit,
+    sport: athlete.sport,
     squat1RM: athlete.squat1RM,
     bench1RM: athlete.bench1RM,
     dead1RM: athlete.dead1RM,
@@ -418,7 +421,7 @@ export async function getNextMeets(athleteIds: string[], from: Date) {
   const meets = await prisma.meet.findMany({
     where: { athleteId: { in: athleteIds }, date: { gte: from } },
     orderBy: { date: "asc" },
-    select: { athleteId: true, name: true, date: true, weightClass: true },
+    select: { athleteId: true, name: true, date: true, kind: true, opponent: true, weightClass: true, targetWeight: true, weighIn: true },
   });
   const out = new Map<string, (typeof meets)[number]>();
   for (const m of meets) if (!out.has(m.athleteId)) out.set(m.athleteId, m);
@@ -446,7 +449,11 @@ export async function getCheckins(athleteIds: string[], from?: string): Promise<
     if (!e) out.set(id, (e = { questions: [], answers: [] }));
     return e;
   };
-  for (const row of questions) entry(row.athleteId).questions.push(questionData(row));
+  // The weigh-in question answers into the bodyweight log, which has its own panel.
+  for (const row of questions) {
+    const q = questionData(row);
+    if (!isBodyweight(q)) entry(row.athleteId).questions.push(q);
+  }
   for (const { athleteId, updatedAt, ...answer } of answers) entry(athleteId).answers.push({ ...answer, updatedAt: updatedAt.toISOString() });
   return out;
 }
@@ -581,4 +588,50 @@ export async function getRecentPrs(coachId: string, days = 14): Promise<RecentPr
     week: l.row.day.week.order,
     loggedAt: l.loggedAt,
   }));
+}
+
+/** Whether the athlete has any timed row at all: Tracking only offers Load when so. */
+export async function hasTimedRows(athleteId: string): Promise<boolean> {
+  const row = await prisma.exerciseRow.findFirst({
+    where: { duration: { not: null }, exercise: { not: "" }, day: { rest: false, week: { block: { athleteId } } } },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/** Every timed row the athlete has on a training day, dated, with its logged rounds — for Load. */
+export async function getTimedRows(athleteId: string): Promise<TimedRow[]> {
+  const rows = await prisma.exerciseRow.findMany({
+    where: { duration: { not: null }, exercise: { not: "" }, day: { rest: false, week: { block: { athleteId } } } },
+    select: {
+      sets: true,
+      duration: true,
+      intensityType: true,
+      intensity: true,
+      logs: { select: { seconds: true, rpe: true, rir: true, done: true } },
+      day: { select: { index: true, week: { select: { order: true, block: { select: { startDate: true } } } } } },
+    },
+  });
+  return rows.map(({ day, duration, ...row }) => ({
+    ...row,
+    duration: duration!,
+    ymd: dateOfDay(day.week.block.startDate, day.week.order, day.index),
+  }));
+}
+
+/** The athlete's injuries on file, current and past. */
+export async function injuriesFor(athleteId: string): Promise<InjuryData[]> {
+  const rows = await prisma.injury.findMany({ where: { athleteId, deletedAt: null }, orderBy: { day: "desc" } });
+  return rows.map(injuryData);
+}
+
+/** The injuries each of these athletes has on a day, worst first. */
+export async function getActiveInjuries(athleteIds: string[], today: string): Promise<Map<string, InjuryData[]>> {
+  const rows = await prisma.injury.findMany({
+    where: { athleteId: { in: athleteIds }, deletedAt: null, day: { lte: today }, OR: [{ endDay: null }, { endDay: { gt: today } }] },
+    orderBy: [{ severity: "desc" }, { day: "desc" }],
+  });
+  const out = new Map<string, InjuryData[]>();
+  for (const r of rows) out.set(r.athleteId, [...(out.get(r.athleteId) ?? []), injuryData(r)]);
+  return out;
 }

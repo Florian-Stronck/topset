@@ -2,12 +2,13 @@
 
 import { assertCoach } from "@/lib/role";
 import { revalidatePath } from "next/cache";
-import type { IntensityType, Tier, Unit } from "@prisma/client";
+import type { IntensityType, Sport, Tier, Unit } from "@prisma/client";
 import { applyAllProgressions } from "@/app/programming/actions";
 import { loadSettings } from "@/lib/coach-settings";
 import { snapStart } from "@/lib/dates";
 import { prisma } from "@/lib/prisma";
-import { COLORS, formatDays, KINDS, parseConfig, type CheckinCadence, type CheckinConfig, type CheckinKind } from "@/lib/checkins";
+import { t } from "@/lib/i18n";
+import { COLORS, formatDays, KINDS, parseConfig, type CheckinCadence, type CheckinConfig, type CheckinKind, bodyweightQuestionId } from "@/lib/checkins";
 import { CHECKIN_ICONS } from "@/components/CheckinIcon";
 
 function revalidateAll() {
@@ -18,6 +19,7 @@ function revalidateAll() {
 export async function createAthlete(input: {
   name: string;
   unit: Unit;
+  sport?: Sport;
   squat1RM?: number | null;
   bench1RM?: number | null;
   dead1RM?: number | null;
@@ -25,15 +27,27 @@ export async function createAthlete(input: {
   assertCoach();
   const coach = await prisma.coach.findFirst({ select: { id: true } });
   if (!coach) throw new Error("No coach found — run `npm run db:seed`.");
+  // The weigh-in question is written in the coach's language.
+  await loadSettings();
 
   const athlete = await prisma.athlete.create({
     data: {
       coachId: coach.id,
       name: input.name.trim() || "New athlete",
       unit: input.unit,
+      sport: input.sport === "FIGHTER" ? "FIGHTER" : "LIFTER",
       squat1RM: input.squat1RM ?? null,
       bench1RM: input.bench1RM ?? null,
       dead1RM: input.dead1RM ?? null,
+    },
+  });
+  // Asked their bodyweight from day one, as a question the coach can edit or take away.
+  await prisma.checkinQuestion.create({
+    data: {
+      id: bodyweightQuestionId(athlete.id),
+      athleteId: athlete.id,
+      order: 0,
+      ...questionFields({ label: t("Bodyweight"), cadence: "DAILY", days: [], kind: "NUMBER", config: { bodyweight: true }, icon: "weight", color: "blue" }),
     },
   });
 
@@ -180,6 +194,7 @@ export async function updateAthleteProfile(
   patch: {
     name?: string;
     unit?: Unit;
+    sport?: Sport;
     squat1RM?: number | null;
     bench1RM?: number | null;
     dead1RM?: number | null;
@@ -233,7 +248,16 @@ function revalidateCheckins() {
 export async function addCheckinQuestion(athleteId: string, input: CheckinQuestionInput) {
   assertCoach();
   const last = await prisma.checkinQuestion.findFirst({ where: { athleteId }, orderBy: { order: "desc" }, select: { order: true } });
-  const q = await prisma.checkinQuestion.create({ data: { athleteId, order: (last?.order ?? -1) + 1, ...questionFields(input) } });
+  const order = (last?.order ?? -1) + 1;
+  // One weigh-in per athlete, under the id every copy of the database gives it.
+  if (input.kind === "NUMBER" && input.config.bodyweight) {
+    const id = bodyweightQuestionId(athleteId);
+    const fields = { ...questionFields(input), archived: false };
+    await prisma.checkinQuestion.upsert({ where: { id }, create: { id, athleteId, order, ...fields }, update: fields });
+    revalidateCheckins();
+    return id;
+  }
+  const q = await prisma.checkinQuestion.create({ data: { athleteId, order, ...questionFields(input) } });
   revalidateCheckins();
   return q.id;
 }
@@ -348,6 +372,7 @@ export async function copyProgram(
                       exercise: row.exercise,
                       sets: row.sets,
                       reps: row.reps,
+                      repsMax: row.repsMax ?? null,
                       intensityType: row.intensityType,
                       intensity: row.intensity,
                       intensityMax: row.intensityMax,
@@ -356,6 +381,8 @@ export async function copyProgram(
                       tempo: row.tempo,
                       restTime: row.restTime,
                       videoUrl: row.videoUrl,
+                      duration: row.duration ?? null,
+                      session: row.session ?? null,
                       rules: {
                         create: row.rules.map((rule) => ({
                           order: rule.order,

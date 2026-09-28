@@ -32,7 +32,10 @@ export function IntensityEditor({
   value,
   resolved,
   onCommit,
+  kinds: offered,
 }: {
+  /** The kinds to offer, in the menu's order; every kind when left out. The one in use always shows. */
+  kinds?: IntensityType[];
   value: IntensityValue;
   /** The weight it works out to, or null to leave it out. */
   resolved: string | null;
@@ -84,7 +87,7 @@ export function IntensityEditor({
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={196}>
         <div>
           <div role="menu" className="rounded-md border border-border bg-surface-2 p-1">
-            {KINDS.map((k) => {
+            {KINDS.filter((k) => !offered || offered.includes(k.value) || k.value === value.intensityType).map((k) => {
               const on = k.value === value.intensityType;
               return (
                 <button

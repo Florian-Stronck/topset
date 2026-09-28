@@ -25,6 +25,7 @@ export function BodyweightPanel({
   today,
   entries: initial,
   meet,
+  readOnly = false,
 }: {
   athleteId: string;
   unit: string;
@@ -32,6 +33,8 @@ export function BodyweightPanel({
   /** Oldest first. */
   entries: BodyweightEntry[];
   meet: { name: string; day: string; weightClass: string | null; limit: number | null } | null;
+  /** The viewer link: weigh-ins can't be added or deleted. */
+  readOnly?: boolean;
 }) {
   const [entries, setEntries] = useState(initial);
   const [synced, setSynced] = useState(initial);
@@ -121,43 +124,47 @@ export function BodyweightPanel({
             )}
           </>
         ) : (
-          <span className="text-[12px] text-muted-2">{t("No weigh-ins yet. The athlete logs them on Today in the app, or add one here.")}</span>
+          <span className="text-[12px] text-muted-2">
+            {readOnly ? t("No weigh-ins yet.") : t("No weigh-ins yet. The athlete logs them on Today in the app, or add one here.")}
+          </span>
         )}
       </div>
 
       {daily.length > 1 && <Chart daily={daily} limit={limit} today={today} unit={unit} />}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <input
-          type="date"
-          value={day}
-          max={today}
-          onChange={(e) => setDay(e.target.value || today)}
-          className="h-8 rounded-lg border border-border bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
-        />
-        <input
-          id="bodyweight-weight"
-          type="text"
-          inputMode="decimal"
-          value={draft}
-          placeholder={unit}
-          aria-label={t("Bodyweight in {u}", { u: unit })}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") add();
-          }}
-          className="h-8 w-24 rounded-lg border border-border bg-surface-2 px-2 text-center text-[12px] tabular-nums outline-none placeholder:text-muted-2 focus:border-accent"
-        />
-        <button
-          type="button"
-          onClick={add}
-          disabled={!valid || pending}
-          className="h-8 rounded-lg border border-border px-3 text-[12px] text-muted hover:border-accent hover:text-accent disabled:opacity-40"
-        >
-          {t("Add weigh-in")}
-        </button>
-        {error && <span className="text-[11px] text-miss">{error}</span>}
-      </div>
+      {!readOnly && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            type="date"
+            value={day}
+            max={today}
+            onChange={(e) => setDay(e.target.value || today)}
+            className="h-8 rounded-lg border border-border bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
+          />
+          <input
+            id="bodyweight-weight"
+            type="text"
+            inputMode="decimal"
+            value={draft}
+            placeholder={unit}
+            aria-label={t("Bodyweight in {u}", { u: unit })}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") add();
+            }}
+            className="h-8 w-24 rounded-lg border border-border bg-surface-2 px-2 text-center text-[12px] tabular-nums outline-none placeholder:text-muted-2 focus:border-accent"
+          />
+          <button
+            type="button"
+            onClick={add}
+            disabled={!valid || pending}
+            className="h-8 rounded-lg border border-border px-3 text-[12px] text-muted hover:border-accent hover:text-accent disabled:opacity-40"
+          >
+            {t("Add weigh-in")}
+          </button>
+          {error && <span className="text-[11px] text-miss">{error}</span>}
+        </div>
+      )}
 
       {entries.length > 0 && (
         <ul className="mt-3 max-h-[168px] divide-y divide-border/60 overflow-auto border-t border-border text-[12px]">
@@ -168,17 +175,19 @@ export function BodyweightPanel({
                 {e.weight} {unit}
               </span>
               <span className="flex-1 truncate text-[11px] text-muted-2">
-                {e.source === "coach" ? t("added by you") : t("from the app")}
+                {e.source === "coach" ? (readOnly ? t("added by the coach") : t("added by you")) : t("from the app")}
                 {e.note ? ` · ${e.note}` : ""}
               </span>
-              <button
-                type="button"
-                onClick={() => remove(e.id)}
-                title={t("Delete this weigh-in")}
-                className="rounded px-1.5 text-muted-2 opacity-40 hover:text-miss focus:opacity-100 group-hover:opacity-100"
-              >
-                ×
-              </button>
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={() => remove(e.id)}
+                  title={t("Delete this weigh-in")}
+                  className="rounded px-1.5 text-muted-2 opacity-40 hover:text-miss focus:opacity-100 group-hover:opacity-100"
+                >
+                  ×
+                </button>
+              )}
             </li>
           ))}
         </ul>

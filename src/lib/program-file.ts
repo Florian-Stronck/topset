@@ -27,6 +27,8 @@ export type ProgramRule = {
 export type Prescription = {
   sets: number | null;
   reps: number | null;
+  /** Absent from files written before rep ranges. */
+  repsMax?: number | null;
   intensityType: IntensityType;
   intensity: number | null;
   intensityMax: number | null;
@@ -35,6 +37,8 @@ export type Prescription = {
   tempo: string | null;
   restTime: string | null;
   videoUrl: string | null;
+  /** Seconds per set; absent from files written before timed sets. */
+  duration?: number | null;
 };
 
 export type ProgramRow = Prescription & {
@@ -42,6 +46,7 @@ export type ProgramRow = Prescription & {
   tier: Tier;
   target: string;
   exercise: string;
+  session?: string | null;
   rules: ProgramRule[];
 };
 
@@ -95,7 +100,7 @@ const INTENSITY_TYPES: IntensityType[] = [
   "RANGE",
   "BACKOFF",
 ];
-const FIELDS: ProgField[] = ["SETS", "REPS", "INTENSITY"];
+const FIELDS: ProgField[] = ["SETS", "REPS", "INTENSITY", "DURATION"];
 const OPS: ProgOp[] = ["ADD", "MULTIPLY"];
 
 type SourcePhase = {
@@ -142,6 +147,7 @@ function toPhase(block: SourcePhase): ProgramPhase {
           exercise: row.exercise,
           sets: row.sets,
           reps: row.reps,
+          repsMax: row.repsMax ?? null,
           intensityType: row.intensityType,
           intensity: row.intensity,
           intensityMax: row.intensityMax,
@@ -150,6 +156,8 @@ function toPhase(block: SourcePhase): ProgramPhase {
           tempo: row.tempo,
           restTime: row.restTime,
           videoUrl: row.videoUrl,
+          duration: row.duration ?? null,
+          session: row.session ?? null,
           rules: row.rules.map((rule) => ({
             order: rule.order,
             field: rule.field,
@@ -276,6 +284,7 @@ function parsePrescription(value: Record<string, unknown>, where: string): Presc
   return {
     sets: optionalNum(value.sets, `${where} sets`, 0, 100),
     reps: optionalNum(value.reps, `${where} reps`, 0, 1000),
+    repsMax: optionalNum(value.repsMax, `${where} rep range`, 0, 1000),
     intensityType: pick(value.intensityType ?? "RPE", INTENSITY_TYPES, `${where} intensity type`),
     intensity: optionalNum(value.intensity, `${where} intensity`, -10000, 10000),
     intensityMax: optionalNum(value.intensityMax, `${where} intensity max`, -10000, 10000),
@@ -284,12 +293,14 @@ function parsePrescription(value: Record<string, unknown>, where: string): Presc
     tempo: optionalText(value.tempo, `${where} tempo`, 40),
     restTime: optionalText(value.restTime, `${where} rest`, 40),
     videoUrl: optionalText(value.videoUrl, `${where} video`, 500),
+    duration: optionalNum(value.duration, `${where} duration`, 1, 24 * 3600),
   };
 }
 
 const EMPTY: Prescription = {
   sets: null,
   reps: null,
+  repsMax: null,
   intensityType: "RPE",
   intensity: null,
   intensityMax: null,
@@ -298,6 +309,7 @@ const EMPTY: Prescription = {
   tempo: null,
   restTime: null,
   videoUrl: null,
+  duration: null,
 };
 
 function parseRow(value: unknown, r: number, where: string) {
@@ -307,6 +319,7 @@ function parseRow(value: unknown, r: number, where: string) {
     tier: pick(row.tier, TIERS, `${where} tier`),
     target: text(row.target, `${where} target`),
     exercise: text(row.exercise, `${where} exercise`),
+    session: optionalText(row.session, `${where} session`, 40),
     rules: list(row.rules ?? [], `${where} rules`, LIMITS.rulesPerRow).map((rule, i) =>
       parseRule(rule, i, where),
     ),

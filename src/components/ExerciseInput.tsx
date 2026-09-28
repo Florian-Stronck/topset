@@ -17,9 +17,12 @@ export function ExerciseInput({
   onCommit,
   placeholder,
   className = "",
+  fighter = false,
 }: {
   value: string | null;
   history: string[];
+  /** Offer the combat-sports catalog first. */
+  fighter?: boolean;
   onCommit: (name: string | null, picked: boolean) => void;
   placeholder?: string;
   className?: string;
@@ -46,9 +49,9 @@ export function ExerciseInput({
 
   // The list opens on typing, never on focus alone: a focused cell has to leave the
   // arrow keys to the grid, or a coach can no longer walk down a column.
-  const options = open ? suggestExercises(cycling?.query ?? draft, history) : [];
+  const options = open ? suggestExercises(cycling?.query ?? draft, history, 8, fighter) : [];
   const completion =
-    open && active < 0 && cycling === null ? completionFor(draft, history) : "";
+    open && active < 0 && cycling === null ? completionFor(draft, history, fighter) : "";
 
   useLayoutEffect(() => {
     if (open) setRect(inputRef.current?.getBoundingClientRect() ?? null);
@@ -88,7 +91,7 @@ export function ExerciseInput({
       e.preventDefault();
       e.stopPropagation();
       const query = cycling?.query ?? draft;
-      const list = suggestExercises(query, history);
+      const list = suggestExercises(query, history, 8, fighter);
       if (list.length === 0) return;
 
       const step = e.shiftKey ? -1 : 1;

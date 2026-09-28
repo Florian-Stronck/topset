@@ -48,12 +48,15 @@ export function ProgressView({
   today,
   series,
   history,
+  readOnly = false,
 }: {
   block: BlockData;
   athlete: AthleteData;
   today: string;
   series: Record<"prescribed" | "estimated", LiftSeries[]>;
   history: ExerciseHistory[];
+  /** The viewer link: no updating the athlete's 1RMs. */
+  readOnly?: boolean;
 }) {
   const prefs = usePref("tracking");
   const targetColors = usePref("targetColors");
@@ -151,7 +154,7 @@ export function ProgressView({
         run: () => setTrackingPref({ tonnageBy: prefs.tonnageBy === "lift" ? "target" : "lift" }),
       },
       ...bests
-        .filter((b) => b.onFile !== b.e1rm)
+        .filter((b) => !readOnly && b.onFile !== b.e1rm)
         .map(
           (b): Command => ({
             id: `use-1rm-${b.lift}`,
@@ -207,7 +210,7 @@ export function ProgressView({
                   {best.exercise} · {best.weight} {unit} × {best.reps}
                   {best.rpe !== null && ` @ RPE ${best.rpe}`}
                 </div>
-                {best.onFile !== best.e1rm && (
+                {!readOnly && best.onFile !== best.e1rm && (
                   <button
                     type="button"
                     onClick={() => saveAs1rm(best.lift, best.e1rm)}

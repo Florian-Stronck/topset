@@ -1,4 +1,6 @@
 import { redirect } from "next/navigation";
+import { today as calendarToday, ymdOf } from "@/lib/dates";
+import { isActive, sortInjuries } from "@/lib/injuries";
 import { HistoryProvider } from "@/components/history";
 import { ProgrammingWorkspace } from "@/components/ProgrammingWorkspace";
 import { Sidebar } from "@/components/Sidebar";
@@ -8,6 +10,7 @@ import {
   getCoach,
   getExerciseHistory,
   getMeetsForAthlete,
+  injuriesFor,
   getProgramBlocks,
   getWorkspace,
 } from "@/lib/queries";
@@ -32,16 +35,19 @@ export default async function ProgrammingPage({
 
   const { programs, program, phase } = await getWorkspace(athlete.id, params.program, params.phase);
 
-  const [exerciseHistory, meets, programBlocks] = await Promise.all([
+  const [exerciseHistory, meets, programBlocks, injuries] = await Promise.all([
     getExerciseHistory(coach.id),
     getMeetsForAthlete(athlete.id),
     program ? getProgramBlocks(program.id) : Promise.resolve([]),
+    injuriesFor(athlete.id),
   ]);
+  const today = ymdOf(calendarToday());
 
   const meetData: MeetSummary[] = meets.map((meet) => ({
     id: meet.id,
     name: meet.name,
     date: meet.date.toISOString().slice(0, 10),
+    kind: meet.kind,
     attempts: meet.attempts.map((a) => ({ lift: a.lift, number: a.number, weight: a.weight })),
   }));
 
@@ -69,6 +75,7 @@ export default async function ProgrammingPage({
               roster={roster}
               exerciseHistory={exerciseHistory}
               meets={meetData}
+              injuries={sortInjuries(injuries.filter((i) => isActive(i, today)), today)}
             />
           </HistoryProvider>
         ) : (

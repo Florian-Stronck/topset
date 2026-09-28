@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { bodyweightEntry, type BodyweightEntry } from "@/lib/bodyweight";
+import { cleanInjury, injuryData, type InjuryData, type InjuryInput } from "@/lib/injuries";
 import { prisma } from "@/lib/prisma";
 import { messageData, type MessageData } from "@/lib/queries";
 import { assertCoach } from "@/lib/role";
@@ -88,4 +89,27 @@ export async function deleteMessage(id: string) {
   assertCoach();
   await prisma.coachMessage.updateMany({ where: { id, deletedAt: null }, data: { deletedAt: new Date() } });
   refresh();
+}
+
+/*
+ * Injuries from the coach's side: one noted down at the gym, or the athlete's changed
+ * (cleared up, say). Synced like weigh-ins, deletes as tombstones.
+ */
+
+export async function saveCoachInjury(athleteId: string, input: InjuryInput): Promise<InjuryData> {
+  assertCoach();
+  const data = cleanInjury(input);
+  const row = input.id
+    ? await prisma.injury.update({ where: { id: input.id, athleteId }, data })
+    : await prisma.injury.create({ data: { ...data, athleteId, source: "coach" } });
+  refresh();
+  revalidatePath("/programming");
+  return injuryData(row);
+}
+
+export async function deleteCoachInjury(id: string) {
+  assertCoach();
+  await prisma.injury.updateMany({ where: { id, deletedAt: null }, data: { deletedAt: new Date() } });
+  refresh();
+  revalidatePath("/programming");
 }

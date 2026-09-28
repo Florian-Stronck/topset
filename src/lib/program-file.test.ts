@@ -9,6 +9,7 @@ const row = (order: number, exercise: string, sets: number | null, rules: Progra
   exercise,
   sets,
   reps: 5,
+  repsMax: null,
   intensityType: "RPE",
   intensity: 8,
   intensityMax: null,
@@ -17,6 +18,7 @@ const row = (order: number, exercise: string, sets: number | null, rules: Progra
   tempo: null,
   restTime: null,
   videoUrl: null,
+  duration: null,
   rules,
 });
 

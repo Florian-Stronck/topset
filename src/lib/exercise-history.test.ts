@@ -33,7 +33,7 @@ test("every logged set of an exercise, oldest first, across phases", () => {
       block("Peak", "2026-09-14", [row("b", "paused  squat", 160)]),
       block("Base", "2026-09-07", [row("a", "Paused Squat", 150), row("c", "Leg Press", null)]),
     ],
-    { id: "x", name: "A", unit: "KG", squat1RM: 200, bench1RM: null, dead1RM: null },
+    { id: "x", name: "A", unit: "KG", sport: "LIFTER", squat1RM: 200, bench1RM: null, dead1RM: null },
   );
   assert.equal(history.length, 1);
   assert.equal(history[0].name, "paused squat");

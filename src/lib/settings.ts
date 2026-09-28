@@ -1,4 +1,4 @@
-import type { IntensityType, MeetLift, Tier, Unit } from "@prisma/client";
+import type { IntensityType, MeetLift, Sport, Tier, Unit } from "@prisma/client";
 import { cache } from "react";
 import { t } from "@/lib/i18n";
 
@@ -50,6 +50,8 @@ export type CustomExercise = {
 export type CoachSettings = {
   // Units and numbers
   defaultUnit: Unit;
+  /** What a new athlete trains for, until the coach says otherwise. */
+  defaultSport: Sport;
   roundKg: number;
   roundLb: number;
   e1rmFormula: E1rmFormula;
@@ -123,6 +125,7 @@ export type CoachSettings = {
 
 export const DEFAULTS: CoachSettings = {
   defaultUnit: "KG",
+  defaultSport: "LIFTER",
   roundKg: 2.5,
   roundLb: 5,
   e1rmFormula: "rpe",

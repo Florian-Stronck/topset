@@ -30,6 +30,8 @@ export const MERGED_COLUMNS: Record<string, readonly string[]> = {
   CheckinAnswer: ["id", "athleteId", "questionId", "day", "value", "createdAt", "updatedAt", "deletedAt"],
   // The coach writes the text, the athlete app when it was read.
   CoachMessage: ["id", "athleteId", "day", "dayId", "rowId", "body", "readAt", "createdAt", "updatedAt", "deletedAt"],
+  // Either side reports or clears an injury.
+  Injury: ["id", "athleteId", "area", "side", "day", "endDay", "severity", "note", "source", "createdAt", "updatedAt", "deletedAt"],
   // Videos the athlete sent: only the athlete app writes them, so they only ever come down.
   AthleteVideo: [
     "id",
@@ -75,6 +77,14 @@ export function validMergedRow(table: string, row: Row): boolean {
     return typeof row.questionId === "string" && row.questionId !== "" && (row.value === null || row.value === undefined || typeof row.value === "string");
   }
   if (table === "CoachMessage") return typeof row.body === "string";
+  if (table === "Injury") {
+    return (
+      typeof row.area === "string" &&
+      row.area !== "" &&
+      typeof row.severity === "number" &&
+      (row.endDay === null || row.endDay === undefined || (typeof row.endDay === "string" && /^\d{4}-\d{2}-\d{2}$/.test(row.endDay)))
+    );
+  }
   return true;
 }
 

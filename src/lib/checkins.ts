@@ -15,7 +15,10 @@ import { addDays } from "@/lib/schedule";
  * - TEXT    the text
  *
  * The scale questions together make the day's readiness: each one read as a share of its
- * range and put back on 1–5, then averaged.
+ * range and put back on 1–5, then averaged — all but the ones the coach leaves out of it.
+ *
+ * Bodyweight is a question like the others, a NUMBER marked `bodyweight`: its answers go to
+ * the bodyweight log rather than here, so the trend and the weight cut read them.
  */
 
 export type CheckinKind = "NUMBER" | "SCALE" | "SINGLE" | "MULTI" | "YESNO" | "TEXT";
@@ -26,6 +29,10 @@ export const KINDS: CheckinKind[] = ["NUMBER", "SCALE", "SINGLE", "MULTI", "YESN
 export type CheckinConfig = {
   /** NUMBER: what it is counted in — "kcal", "h", "L". */
   unit?: string;
+  /** NUMBER: this is the weigh-in, answered into the bodyweight log in the athlete's unit. */
+  bodyweight?: true;
+  /** SCALE: false leaves it out of the readiness score. */
+  readiness?: false;
   /** SCALE: the ends and what they mean. */
   min?: number;
   max?: number;
@@ -101,6 +108,7 @@ export function parseConfig(kind: CheckinKind, raw: string | CheckinConfig | nul
   } else if (raw && typeof raw === "object") obj = raw as Record<string, unknown>;
 
   if (kind === "NUMBER") {
+    if (obj.bodyweight === true) return { bodyweight: true };
     const unit = clip(obj.unit, 12);
     return unit ? { unit } : {};
   }
@@ -110,6 +118,7 @@ export function parseConfig(kind: CheckinKind, raw: string | CheckinConfig | nul
     let max = int(obj.max, 5);
     if (max <= min) [min, max] = [1, 5];
     const out: CheckinConfig = { min, max };
+    if (obj.readiness === false) out.readiness = false;
     const low = clip(obj.low, 40);
     const high = clip(obj.high, 40);
     if (low) out.low = low;
@@ -123,6 +132,19 @@ export function parseConfig(kind: CheckinKind, raw: string | CheckinConfig | nul
   }
   return {};
 }
+
+/** The weigh-in question: answered into the bodyweight log. */
+export function isBodyweight(q: Pick<CheckinQuestionData, "kind" | "config">): boolean {
+  return q.kind === "NUMBER" && q.config.bodyweight === true;
+}
+
+/** Whether a scale question's answers make up the readiness score. */
+export function countsForReadiness(q: Pick<CheckinQuestionData, "kind" | "config">): boolean {
+  return q.kind === "SCALE" && q.config.readiness !== false;
+}
+
+/** The id an athlete's weigh-in question gets, the same on every copy of the database. */
+export const bodyweightQuestionId = (athleteId: string) => `bw-${athleteId}`;
 
 /** A stored question row as the app works with it. */
 export function questionData(row: {
@@ -273,7 +295,7 @@ export function readinessOf(questions: CheckinQuestionData[], answers: CheckinAn
   const low: DayReadiness["low"] = [];
   for (const a of answers) {
     const q = questions.find((x) => x.id === a.questionId);
-    if (!q) continue;
+    if (!q || !countsForReadiness(q)) continue;
     const s = scaleScore(q, a.value);
     if (s === null) continue;
     scores.push(s);
@@ -292,7 +314,11 @@ export type ReadinessDay = DayReadiness & {
 /** The latest day with a scale answer: its readiness, and whatever the athlete wrote that day. */
 export function latestReadiness(questions: CheckinQuestionData[], answers: CheckinAnswerData[]): ReadinessDay | null {
   const byId = new Map(questions.map((q) => [q.id, q]));
-  const days = [...new Set(answers.filter((a) => byId.get(a.questionId)?.kind === "SCALE").map((a) => a.day))].sort();
+  const counts = (id: string) => {
+    const q = byId.get(id);
+    return q !== undefined && countsForReadiness(q);
+  };
+  const days = [...new Set(answers.filter((a) => counts(a.questionId)).map((a) => a.day))].sort();
   const day = days.at(-1);
   if (!day) return null;
   const that = answers.filter((a) => a.day === day);
@@ -311,6 +337,7 @@ export type Preset = {
 
 /** Questions a coach can start from; every field stays editable. Labels are translated when picked. */
 export const PRESETS: Preset[] = [
+  { key: "bodyweight", label: "Bodyweight", kind: "NUMBER", config: { bodyweight: true }, icon: "weight", color: "blue" },
   { key: "calories", label: "Calories", kind: "NUMBER", config: { unit: "kcal" }, icon: "flame", color: "orange" },
   { key: "sleep", label: "Sleep", kind: "NUMBER", config: { unit: "h" }, icon: "moon", color: "blue" },
   { key: "sleep-quality", label: "Sleep quality", kind: "SCALE", config: { min: 1, max: 5, low: "Poor", high: "Great" }, icon: "bed", color: "blue" },
@@ -334,6 +361,16 @@ export const PRESETS: Preset[] = [
     config: { options: ["Creatine", "Protein", "Caffeine", "Vitamin D"] },
     icon: "pill",
     color: "purple",
+  },
+  // For fighters: a head knock after sparring is worth asking about every day it happens.
+  { key: "head", label: "Headache or dizziness after sparring", kind: "YESNO", config: {}, icon: "thermometer", color: "red" },
+  {
+    key: "sparred",
+    label: "Sparring today",
+    kind: "SINGLE",
+    config: { options: ["None", "Light", "Hard"] },
+    icon: "heart",
+    color: "red",
   },
   { key: "notes", label: "Notes", kind: "TEXT", config: {}, icon: "note", color: "purple" },
 ];

@@ -1,4 +1,5 @@
 import { jsPDF } from "jspdf";
+import { volumeText } from "@/lib/duration";
 import { formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
 import type { BlockWithDays } from "@/lib/queries";
 import { WEEKDAYS } from "@/lib/types";
@@ -51,6 +52,8 @@ type ExerciseItem = {
   target: string;
   sets: number | null;
   reps: number | null;
+  repsMax: number | null;
+  duration: number | null;
   prescription: string;
   weight: number | null;
   ramp: number[];
@@ -114,6 +117,8 @@ function layoutWeek(doc: jsPDF, block: BlockWithDays, week: number): Item[] {
         video: show.video && row.videoUrl ? row.videoUrl : null,
         sets: cell?.sets ?? null,
         reps: cell?.reps ?? null,
+        repsMax: row.repsMax,
+        duration: row.duration,
         prescription: cell ? pdfSafe(formatPrescription(cell, athlete.unit)) : "—",
         weight: resolved?.weight ?? null,
         ramp: resolved?.ramp ?? [],
@@ -228,6 +233,8 @@ function exercise(
     target: string;
     sets: number | null;
     reps: number | null;
+    repsMax: number | null;
+    duration: number | null;
     prescription: string;
     weight: number | null;
     ramp: number[];
@@ -256,9 +263,10 @@ function exercise(
   doc.setFont("helvetica", "normal");
   doc.setFontSize(11);
   doc.setTextColor(...INK);
-  doc.text(`${o.sets ?? "—"} × ${o.reps ?? "—"}`, M, y);
+  const volume = volumeText(o);
+  doc.text(volume, M, y);
 
-  const volumeWidth = doc.getTextWidth(`${o.sets ?? "—"} × ${o.reps ?? "—"}`);
+  const volumeWidth = doc.getTextWidth(volume);
   doc.setFontSize(10);
   doc.setTextColor(...MUTED);
   doc.text(`@ ${o.prescription}`, M + volumeWidth + 8, y);

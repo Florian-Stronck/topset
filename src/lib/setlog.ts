@@ -1,3 +1,5 @@
+import { formatDuration } from "@/lib/duration";
+
 /** One set as the athlete logged it. */
 export type SetLogData = {
   id: string;
@@ -7,6 +9,8 @@ export type SetLogData = {
   rpe: number | null;
   /** Reps in reserve, when effort was logged that way; a set has one or the other. */
   rir: number | null;
+  /** How long the set took, for a timed row. */
+  seconds?: number | null;
   done: boolean;
   /** Flagged by the athlete as a personal record. */
   pr: boolean;
@@ -53,8 +57,12 @@ export function completion(done: number, prescribed: number): "done" | "partial"
   return done >= prescribed ? "done" : "partial";
 }
 
-/** "180×3 @8" — a logged set in the space of a chip. */
-export function formatSet(log: { weight: number | null; reps: number | null } & Effort): string {
+/** "180×3 @8" — a logged set in the space of a chip; "3:00 @8" for a timed one. */
+export function formatSet(log: { weight: number | null; reps: number | null; seconds?: number | null } & Effort): string {
+  if (log.seconds && log.weight === null) {
+    const effort = formatEffort(log);
+    return `${formatDuration(log.seconds)}${effort === "" ? "" : ` ${effort}`}`;
+  }
   const w = log.weight ?? "—";
   const r = log.reps === null ? "" : `×${log.reps}`;
   const effort = formatEffort(log);

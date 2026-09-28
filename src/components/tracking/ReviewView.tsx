@@ -14,7 +14,8 @@ import { estimate1RM, formatPrescription, maxesOf, resolveDay } from "@/lib/inte
 import { setTrackingPref, usePref } from "@/lib/prefs";
 import type { AthleteCheckins, MessageData } from "@/lib/queries";
 import { dateOfDay } from "@/lib/schedule";
-import { formatEffort } from "@/lib/setlog";
+import { formatDuration, volumeText } from "@/lib/duration";
+import { formatEffort, formatSet } from "@/lib/setlog";
 import {
   attentionOf,
   keepRow,
@@ -112,6 +113,7 @@ export function ReviewView({
   previous,
   show,
   hasLink,
+  readOnly = false,
 }: {
   block: BlockData;
   athlete: AthleteData;
@@ -127,6 +129,8 @@ export function ReviewView({
   /** A filter asked for in the link (from Overview, say). */
   show: ReviewFilter | null;
   hasLink: boolean;
+  /** The viewer link: another coach looks, but can't review, write notes, or see them. */
+  readOnly?: boolean;
 }) {
   const [block, setBlock] = useState(initialBlock);
   const [messages, setMessages] = useState(initialMessages);
@@ -136,7 +140,10 @@ export function ReviewView({
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());
   const [, startTransition] = useTransition();
-  const prefs = usePref("tracking");
+  const stored = usePref("tracking");
+  // Review marks are the coach's own, so the viewer never filters by them.
+  const prefs = readOnly && stored.filter === "unreviewed" ? { ...stored, filter: "all" as const } : stored;
+  const filters = readOnly ? REVIEW_FILTERS.filter((f) => f !== "unreviewed") : REVIEW_FILTERS;
   const attentionRef = useRef<HTMLDivElement>(null);
 
   // Fresh data from the server (a refresh, or an action's revalidation) replaces ours.
@@ -418,9 +425,9 @@ export function ReviewView({
         run: () => attentionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }),
       },
     ];
-    return list;
+    return readOnly ? list.filter((c) => !["session-review", "session-feedback", "session-next-unreviewed", "week-review-all", "track-filter-unreviewed"].includes(c.id)) : list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allSessions, collapsed, focusedSession, prefs, sessions, shown, videos, weekCount, activeWeek]);
+  }, [allSessions, collapsed, focusedSession, prefs, sessions, shown, videos, weekCount, activeWeek, readOnly]);
   useCommands("tracking-review", commands, 1);
 
   const sendFor = (s: Session) => async (body: string) => {
@@ -439,17 +446,21 @@ export function ReviewView({
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-medium">{t("Nothing logged in this phase yet")}</div>
             <div className="text-[12px] text-muted">
-              {t("Send {name} their check-in link and every set they log on their phone shows up here.", { name: athlete.name })}
+              {readOnly
+                ? t("Every set {name} logs on their phone shows up here.", { name: athlete.name })
+                : t("Send {name} their check-in link and every set they log on their phone shows up here.", { name: athlete.name })}
             </div>
           </div>
-          <AthleteLinkButton athleteId={athlete.id} name={athlete.name} hasLink={hasLink} />
+          {!readOnly && <AthleteLinkButton athleteId={athlete.id} name={athlete.name} hasLink={hasLink} />}
         </div>
       )}
 
       <WeekTiles weeks={sessionsByWeek} stats={stats} active={activeWeek} onSelect={setWeek} />
 
       <div ref={attentionRef} className="mt-4 flex scroll-mt-4 flex-wrap items-center gap-2">
-        <AttentionChip n={attention.unreviewed} label={t("to review")} tone="accent" on={prefs.filter === "unreviewed"} onClick={() => setTrackingPref({ filter: prefs.filter === "unreviewed" ? "all" : "unreviewed" })} />
+        {!readOnly && (
+          <AttentionChip n={attention.unreviewed} label={t("to review")} tone="accent" on={prefs.filter === "unreviewed"} onClick={() => setTrackingPref({ filter: prefs.filter === "unreviewed" ? "all" : "unreviewed" })} />
+        )}
         <AttentionChip n={attention.missed} label={t("missed")} tone="miss" on={prefs.filter === "missed"} onClick={() => setTrackingPref({ filter: prefs.filter === "missed" ? "all" : "missed" })} />
         <AttentionChip n={attention.offPlan} label={t("off plan")} tone="warn" on={prefs.filter === "offplan"} onClick={() => setTrackingPref({ filter: prefs.filter === "offplan" ? "all" : "offplan" })} />
         <AttentionChip n={attention.prs} label={t("PRs")} tone="pr" on={prefs.filter === "prs"} onClick={() => setTrackingPref({ filter: prefs.filter === "prs" ? "all" : "prs" })} />
@@ -473,7 +484,7 @@ export function ReviewView({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-y border-border/60 py-2">
-        <Seg value={prefs.filter} options={REVIEW_FILTERS.map((f) => ({ value: f, label: t(FILTER_LABEL[f]) }))} onChange={(f) => setTrackingPref({ filter: f })} label={t("Filter")} />
+        <Seg value={prefs.filter} options={filters.map((f) => ({ value: f, label: t(FILTER_LABEL[f]) }))} onChange={(f) => setTrackingPref({ filter: f })} label={t("Filter")} />
         <select
           value={prefs.lifts}
           aria-label={t("Exercises")}
@@ -520,6 +531,7 @@ export function ReviewView({
             expandAll={prefs.expandAll}
             showCues={prefs.showCues}
             onToggleRow={toggleRow}
+            readOnly={readOnly}
             onReviewed={(on) => setReviewed([s.day.id], on)}
             onSend={sendFor(s)}
             onEdit={async (id, body) => {
@@ -652,6 +664,7 @@ function SessionCard({
   expandAll,
   showCues,
   onToggleRow,
+  readOnly,
   onReviewed,
   onSend,
   onEdit,
@@ -670,6 +683,7 @@ function SessionCard({
   expandAll: boolean;
   showCues: boolean;
   onToggleRow: (rowId: string) => void;
+  readOnly: boolean;
   onReviewed: (on: boolean) => void;
   onSend: (body: string) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
@@ -706,7 +720,7 @@ function SessionCard({
             {weekdayShort(s.weekday)} {formatDate(s.ymd)} · {t("{done}/{of} exercises", { done, of: s.lines.length })}
           </span>
         </button>
-        {s.unreviewed && <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent">{t("to review")}</span>}
+        {s.unreviewed && !readOnly && <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent">{t("to review")}</span>}
         {s.readiness.score !== null && (
           <span title={answerText} className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ${low ? "bg-warn/15 text-warn" : "bg-surface-3 text-muted"}`}>
             {t("Readiness {n}/5", { n: s.readiness.score })}
@@ -719,7 +733,7 @@ function SessionCard({
           </span>
         ))}
         <span className="ml-auto flex items-center gap-1.5">
-          {s.status !== "upcoming" && (
+          {s.status !== "upcoming" && !readOnly && (
             <button
               type="button"
               onClick={() => onReviewed(!reviewed)}
@@ -763,7 +777,7 @@ function SessionCard({
               </div>
             )}
           </div>
-          {s.status !== "upcoming" && <Feedback session={s} onSend={onSend} onEdit={onEdit} onDelete={onDelete} />}
+          {s.status !== "upcoming" && !readOnly && <Feedback session={s} onSend={onSend} onEdit={onEdit} onDelete={onDelete} />}
         </>
       )}
     </section>
@@ -777,6 +791,8 @@ function doneText(row: RowData, unit: string): string | null {
     if (row.actualWeight === null) return null;
     return `${row.actualWeight} ${unit}${row.performedRpe !== null ? ` @${row.performedRpe}` : ""}`;
   }
+  // Rounds read as the time each one took.
+  if (row.duration !== null) return done.map((l) => formatSet(l)).join(", ");
   const weights = new Set(done.map((l) => l.weight));
   const efforts = done.map((l) => formatEffort(l)).filter(Boolean);
   if (weights.size === 1) {
@@ -806,19 +822,17 @@ function ExerciseLine({
   onToggle: () => void;
 }) {
   const { row, target, off, pr, e1rm, previous } = line;
-  const plan = `${row.sets ?? "—"}×${row.reps ?? "—"} @ ${formatPrescription(row, athleteUnit)}`;
+  const plan = `${volumeText(row)} @ ${formatPrescription(row, athleteUnit)}`;
   const done = doneText(row, unit);
   const delta = e1rm !== null && previous?.e1rm != null ? Math.round((e1rm - previous.e1rm) * 10) / 10 : null;
   const cues = [row.coachNotes, row.tempo && `${t("Tempo")} ${row.tempo}`, row.restTime && `${t("Rest")} ${row.restTime}`].filter(Boolean).join(" · ");
-  const edge = pr ? "border-l-pr" : off?.level === "miss" ? "border-l-miss" : off ? "border-l-warn" : "border-l-transparent";
-
   return (
-    <div className={`border-t border-l-[3px] border-t-border/60 ${edge}`}>
+    <div className="border-t border-border/60">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="grid w-full grid-cols-[minmax(140px,1.1fr)_minmax(200px,2fr)_minmax(110px,auto)_20px] items-center gap-3 px-4 py-2 pl-[13px] text-left hover:bg-surface-2/60"
+        className="grid w-full grid-cols-[minmax(140px,1.1fr)_minmax(200px,2fr)_minmax(110px,auto)_20px] items-center gap-3 px-4 py-2 text-left hover:bg-surface-2/60"
       >
         <span className="min-w-0">
           <span className="flex items-center gap-1.5 text-[12px] font-medium">
@@ -862,7 +876,7 @@ function ExerciseLine({
       </button>
 
       {open && (
-        <div className="grid gap-4 bg-surface-2/40 px-4 pb-3 pl-[29px] pt-1 md:grid-cols-2">
+        <div className="grid gap-4 bg-surface-2/40 px-4 pb-3 pl-8 pt-1 md:grid-cols-2">
           <div className="min-w-0">
             {row.logs && row.logs.length > 0 ? (
               <table className="text-[11px] tabular-nums">
@@ -870,7 +884,7 @@ function ExerciseLine({
                   {row.logs.map((l) => (
                     <tr key={l.setIndex}>
                       <td className="pr-4 text-muted-2">{t("Set {n}", { n: l.setIndex + 1 })}</td>
-                      <td className={`pr-3 ${l.done ? "text-foreground" : "text-muted-2"}`}>{l.weight === null ? "—" : `${l.weight} ${unit}`}</td>
+                      <td className={`pr-3 ${l.done ? "text-foreground" : "text-muted-2"}`}>{l.weight !== null ? `${l.weight} ${unit}` : l.seconds ? formatDuration(l.seconds) : "—"}</td>
                       <td className={`pr-3 ${l.done ? "text-foreground" : "text-muted-2"}`}>{l.reps === null ? "—" : `× ${l.reps}`}</td>
                       <td className="pr-3 text-muted">{formatEffort(l) || "—"}</td>
                       <td className={l.done ? "pr-3 text-ok" : "pr-3 text-muted-2"}>{l.done ? "✓" : t("not done")}</td>

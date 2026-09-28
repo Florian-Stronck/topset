@@ -59,12 +59,16 @@ model Athlete {
   coach    Coach   @relation(fields: [coachId], references: [id], onDelete: Cascade)
   name     String
   unit     Unit    @default(KG)
+  /// What the athlete trains for. Decides what the screens lead with, never what data is kept.
+  sport    Sport   @default(LIFTER)
   squat1RM Float?
   bench1RM Float?
   dead1RM  Float?
   /// Secret for the athlete's check-in link. Null until the coach hands one out; a new one
   /// replaces the old, so a lost phone is one click away from locked out.
   accessToken String? @unique
+  /// Secret for a read-only view of the athlete's Tracking, for a second coach.
+  viewToken   String? @unique
   blocks   Block[]
   programs Program[]
   meets    Meet[]
@@ -73,8 +77,35 @@ model Athlete {
   answers     CheckinAnswer[]
   messages    CoachMessage[]
   videos      AthleteVideo[]
+  injuries    Injury[]
 
   @@index([coachId])
+}
+
+/// An injury, from the athlete app or the coach. Both sides write it, so it syncs like
+/// weigh-ins: the newer edit wins, deletes are tombstones. `day` is when it started.
+model Injury {
+  id        String    @id @default(cuid())
+  athleteId String
+  athlete   Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  /// One of the areas in src/lib/injuries.ts.
+  area      String
+  /// "L", "R", or null for the middle of the body.
+  side      String?
+  /// `YYYY-MM-DD` it started, on the athlete's calendar.
+  day       String
+  /// `YYYY-MM-DD` it cleared up; null while it's still there.
+  endDay    String?
+  /// 1 (a niggle) to 5 (can't train it).
+  severity  Int       @default(2)
+  note      String?
+  /// "athlete" or "coach": who entered it.
+  source    String    @default("athlete")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([athleteId, day])
 }
 
 /// An athlete's plan. It is a name and an ordered list of phases — everything else
@@ -99,6 +130,15 @@ model Meet {
   weightClass String?
   bodyweight  Float?
   date        DateTime
+  /// A powerlifting meet with nine attempts, or a fight.
+  kind        MeetKind  @default(MEET)
+  // A fight's own details; a meet leaves them empty.
+  opponent     String?
+  weighIn      DateTime?
+  /// The weight to make at the weigh-in, in the athlete's unit.
+  targetWeight Float?
+  /// Free text: "W — TKO R2".
+  outcome      String?
   createdAt   DateTime  @default(now())
   attempts    Attempt[]
 
@@ -185,6 +225,8 @@ model ExerciseRow {
   // week, so the prescription belongs on it rather than in a per-week side table.
   sets          Int?
   reps          Int?
+  /// The top of a rep range ("8–10"); null for a single number. `reps` holds the bottom.
+  repsMax       Int?
   intensityType IntensityType @default(RPE)
   intensity     Float?
   intensityMax  Float?
@@ -195,6 +237,11 @@ model ExerciseRow {
   /// Rest between sets, free text ("2-3 min").
   restTime      String?
   videoUrl      String?
+  /// Seconds per set — a round, an interval. Null for a row counted in reps alone.
+  duration      Int?
+  /// Which of the day's sessions the row is in ("AM", "PM", "Sparring"); null when the
+  /// day has only one. Rows of a session sit together in `order`.
+  session       String?
 
   // What the athlete actually did.
   actualWeight Float?
@@ -226,6 +273,8 @@ model SetLog {
   rpe      Float?
   /// Reps in reserve, when the athlete logged effort that way. A set has an RPE or an RIR.
   rir      Float?
+  /// How long the set took, for a timed row.
+  seconds  Int?
   done     Boolean     @default(false)
   /// The athlete flagged this set as a personal record.
   pr       Boolean     @default(false)
@@ -375,6 +424,11 @@ enum Unit {
   LB
 }
 
+enum Sport {
+  LIFTER
+  FIGHTER
+}
+
 enum Tier {
   PRIMARY
   SECONDARY
@@ -387,6 +441,12 @@ enum ProgField {
   SETS
   REPS
   INTENSITY
+  DURATION
+}
+
+enum MeetKind {
+  MEET
+  FIGHT
 }
 
 enum ProgOp {

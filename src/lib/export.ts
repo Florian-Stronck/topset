@@ -7,6 +7,8 @@ import { activeSettings, tierLabel } from "@/lib/settings";
 import { formatDate, today, weekdayOfDay, ymdOf } from "@/lib/dates";
 import { imageSize } from "@/lib/branding";
 import { t } from "@/lib/i18n";
+import { formatDuration } from "@/lib/duration";
+import { repsText } from "@/lib/reps";
 
 type RowOut = BlockWithDays["weeks"][number]["days"][number]["rows"][number];
 type WeekColumn = {
@@ -16,11 +18,12 @@ type WeekColumn = {
 };
 
 /** The per-row columns, minus the ones the coach switched off for exports. */
-function weekColumns(): WeekColumn[] {
+function weekColumns(timed: boolean): WeekColumn[] {
   const show = activeSettings().exportColumns;
   const cols: (WeekColumn | false)[] = [
     { title: "Sets", width: 10, value: (r) => r.sets },
-    { title: "Reps", width: 10, value: (r) => r.reps },
+    { title: "Reps", width: 10, value: (r) => (r.repsMax ? repsText(r) : r.reps) },
+    timed && { title: "Time", width: 10, value: (r) => formatDuration(r.duration) || null },
     { title: "Intensity", width: 12, value: (_, e) => e.prescription },
     { title: "Target weight", width: 13, value: (_, e) => e.weight },
     show.tempo && { title: "Tempo", width: 10, value: (r) => r.tempo },
@@ -32,6 +35,11 @@ function weekColumns(): WeekColumn[] {
     { title: "Athlete notes", width: 26, value: (r) => r.athleteNotes },
   ];
   return cols.filter((c): c is WeekColumn => Boolean(c));
+}
+
+/** Any row of the phase timed: only then does the sheet carry a Time column. */
+function isTimed(block: BlockWithDays) {
+  return block.weeks.some((w) => w.days.some((d) => d.rows.some((r) => r.duration !== null)));
 }
 
 const LEFT_HEADERS = ["#", "Tier", "Target", "Exercise"];
@@ -57,7 +65,7 @@ function buildMatrix(block: BlockWithDays): Matrix {
   // The header and every target weight come off the block's own maxes.
   const maxes = maxesOf(block, athlete);
   const rows: Matrix = [];
-  const columns = weekColumns();
+  const columns = weekColumns(isTimed(block));
 
   rows.push([`${block.program.name} — ${block.phase}`, athlete.name]);
   rows.push([
@@ -254,7 +262,7 @@ function addPhaseSheet(wb: ExcelJS.Workbook, block: BlockWithDays, name: string)
 
   ws.getRow(1).font = { bold: true, size: 14 };
 
-  const columns = weekColumns();
+  const columns = weekColumns(isTimed(block));
   ws.columns.forEach((col, i) => {
     col.width = i < LEFT_HEADERS.length ? [5, 12, 14, 24][i] : (columns[i - LEFT_HEADERS.length]?.width ?? 10);
   });

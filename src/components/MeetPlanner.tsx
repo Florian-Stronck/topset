@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { useCommands, type Command } from "@/lib/commands";
-import type { AttemptResult, MeetLift } from "@prisma/client";
+import type { AttemptResult, MeetKind, MeetLift } from "@prisma/client";
 import {
   applyResultsAsMaxes,
   createMeet,
@@ -64,6 +64,7 @@ export function MeetPlanner({
   const [creating, setCreating] = useState(false);
 
   const now = new Date(today);
+  const fighter = athlete.sport === "FIGHTER";
   const meet = meets.find((m) => m.id === activeMeetId) ?? meets[0] ?? null;
 
   const commands = useMemo<Command[]>(() => {
@@ -71,7 +72,7 @@ export function MeetPlanner({
       {
         id: "meet-new",
         group: "Competition",
-        title: t("New meet…"),
+        title: fighter ? t("New fight…") : t("New meet…"),
         keywords: "add competition create",
         run: () => {
           setCreating(true);
@@ -89,17 +90,19 @@ export function MeetPlanner({
         })),
     ];
     if (meet) {
-      list.push(
-        {
-          id: "meet-rename",
-          group: "Competition",
-          title: t("Rename meet"),
-          run: () => {
-            const input = document.querySelector<HTMLInputElement>('[data-focus="meet-name"] input');
-            input?.focus();
-            input?.select();
-          },
+      list.push({
+        id: "meet-rename",
+        group: "Competition",
+        title: t("Rename meet"),
+        run: () => {
+          const input = document.querySelector<HTMLInputElement>('[data-focus="meet-name"] input');
+          input?.focus();
+          input?.select();
         },
+      });
+    }
+    if (meet?.kind === "MEET") {
+      list.push(
         {
           id: "meet-plan",
           group: "Competition",
@@ -125,7 +128,7 @@ export function MeetPlanner({
       }
     }
     return list;
-  }, [athlete.id, meet, meets, router]);
+  }, [athlete.id, fighter, meet, meets, router]);
   useCommands("competition", commands);
 
   return (
@@ -135,7 +138,8 @@ export function MeetPlanner({
           <div>
             <h1 className="text-[22px] font-semibold tracking-tight">{t("Competition")}</h1>
             <p className="mt-1 text-[12px] text-muted">
-              {athlete.name} · {t("attempts planned off the 1RMs, results written back onto them")}
+              {athlete.name}
+              {!fighter && meet?.kind !== "FIGHT" && ` · ${t("attempts planned off the 1RMs, results written back onto them")}`}
             </p>
           </div>
           <button
@@ -143,13 +147,14 @@ export function MeetPlanner({
             onClick={() => setCreating((c) => !c)}
             className="rounded-full border border-border px-3 py-1.5 text-[12px] text-muted hover:border-accent hover:text-accent"
           >
-            {t("+ New meet")}
+            {fighter ? t("+ New fight") : t("+ New meet")}
           </button>
         </div>
 
         {creating && (
           <NewMeetForm
             athleteId={athlete.id}
+            kind={fighter ? "FIGHT" : "MEET"}
             onDone={(id) => {
               setCreating(false);
               router.push(`/competition?athlete=${athlete.id}&meet=${id}`);
@@ -183,7 +188,9 @@ export function MeetPlanner({
         ) : (
           !creating && (
             <div className="mt-6 rounded-xl border border-dashed border-border px-6 py-12 text-center">
-              <div className="text-[13px] text-muted">No meet on the calendar for {athlete.name}.</div>
+              <div className="text-[13px] text-muted">
+                {fighter ? t("No fight on the calendar for {name}.", { name: athlete.name }) : t("No meet on the calendar for {name}.", { name: athlete.name })}
+              </div>
               <button
                 type="button"
                 onClick={() => setCreating(true)}
@@ -235,6 +242,8 @@ function MeetCard({
       void updateMeet(meet.id, patch);
     });
   }
+
+  if (meet.kind === "FIGHT") return <FightCard meet={meet} unit={unit} today={today} onPatch={patchMeet} />;
 
   return (
     <section className="mt-5">
@@ -343,6 +352,89 @@ function MeetCard({
   );
 }
 
+/**
+ * A fight: who, when, the weight to make and when it is checked, and how it went. The
+ * weight cut itself shows on the bodyweight chart in Tracking, drawn to the weigh-in.
+ */
+function FightCard({
+  meet,
+  unit,
+  today,
+  onPatch,
+}: {
+  meet: MeetData;
+  unit: string;
+  today: Date;
+  onPatch: (patch: Parameters<typeof updateMeet>[1]) => void;
+}) {
+  const days = daysUntil(meet.date, today);
+  const date =
+    "rounded border border-border bg-surface-2 px-1.5 py-0.5 text-[11px] outline-none focus:ring-1 focus:ring-accent/60";
+  return (
+    <section className="mt-5 rounded-xl border border-border bg-surface p-4">
+      <div className="flex flex-wrap items-start gap-4">
+        <div className="min-w-[220px] flex-1">
+          <div className="text-[10px] tracking-[0.14em] text-accent">{t("FIGHT")}</div>
+          <div data-focus="meet-name" className="-ml-2">
+            <TextInput
+              value={meet.name}
+              placeholder={t("Event name")}
+              className="!text-[16px] font-semibold"
+              onCommit={(v) => v && onPatch({ name: v })}
+            />
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 pl-0.5 text-[11px] text-muted-2">
+            <input
+              type="date"
+              value={meet.date.slice(0, 10)}
+              onChange={(e) => e.target.value && onPatch({ date: e.target.value })}
+              className={date}
+            />
+            <span className={days >= 0 && days <= 42 ? "text-accent" : ""}>{countdown(meet.date, today)}</span>
+          </div>
+        </div>
+
+        <Field label={t("OPPONENT")}>
+          <TextInput value={meet.opponent} placeholder="—" onCommit={(v) => onPatch({ opponent: v })} />
+        </Field>
+        <Field label={t("CLASS")}>
+          <TextInput value={meet.weightClass} placeholder={t("e.g. 70 kg")} onCommit={(v) => onPatch({ weightClass: v })} />
+        </Field>
+        <Field label={t("PROMOTION")}>
+          <TextInput value={meet.federation} placeholder="—" onCommit={(v) => onPatch({ federation: v })} />
+        </Field>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-end gap-4">
+        <div>
+          <div className="text-[10px] tracking-[0.14em] text-muted-2">{t("WEIGH-IN")}</div>
+          <input
+            type="date"
+            value={meet.weighIn ?? ""}
+            onChange={(e) => onPatch({ weighIn: e.target.value || null })}
+            className={`mt-0.5 ${date} !py-1`}
+          />
+        </div>
+        <Field label={t("WEIGHT TO MAKE ({unit})", { unit })}>
+          <NumberInput value={meet.targetWeight} align="left" onCommit={(v) => onPatch({ targetWeight: v })} />
+        </Field>
+        <Field label={t("WEIGHED IN ({unit})", { unit })}>
+          <NumberInput value={meet.bodyweight} align="left" onCommit={(v) => onPatch({ bodyweight: v })} />
+        </Field>
+        <div className="min-w-[200px] flex-1">
+          <div className="text-[10px] tracking-[0.14em] text-muted-2">{t("RESULT")}</div>
+          <div className="mt-0.5 rounded border border-border bg-surface-2">
+            <TextInput value={meet.outcome} placeholder={t("e.g. W — TKO R2")} onCommit={(v) => onPatch({ outcome: v })} />
+          </div>
+        </div>
+      </div>
+      <p className="mt-3 text-[11px] text-muted-2">
+        {t("The cut shows on the bodyweight chart in Tracking, drawn to the weigh-in.")}
+      </p>
+    </section>
+  );
+}
+
 function LiftCard({
   lift,
   meet,
@@ -428,20 +520,26 @@ function LiftCard({
 
 function NewMeetForm({
   athleteId,
+  kind,
   onDone,
   onCancel,
 }: {
   athleteId: string;
+  /** A fight for a fighter, a meet for a lifter. */
+  kind: MeetKind;
   onDone: (id: string) => void;
   onCancel: () => void;
 }) {
   const [pending, setPending] = useState(false);
   const [form, setForm] = useState({
+    kind,
     name: "",
     date: new Date().toISOString().slice(0, 10),
     federation: "",
     weightClass: "",
+    opponent: "",
   });
+  const fight = form.kind === "FIGHT";
 
   const field =
     "w-full rounded border border-border bg-surface px-2 py-1.5 text-[12px] outline-none focus:ring-1 focus:ring-accent/60";
@@ -458,12 +556,12 @@ function NewMeetForm({
       onKeyDown={formKeys(create, onCancel, pending)}
       className="mt-4 rounded-xl border border-border bg-surface-2 p-3"
     >
-      <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("NEW MEET")}</div>
+      <div className="text-[11px] tracking-[0.14em] text-muted-2">{fight ? t("NEW FIGHT") : t("NEW MEET")}</div>
       <div className="mt-2 grid gap-1.5 sm:grid-cols-4">
         <input
           autoFocus
           value={form.name}
-          placeholder={t("Meet name")}
+          placeholder={fight ? t("Event name") : t("Meet name")}
           onChange={(e) => setForm({ ...form, name: e.target.value })}
           className={field}
         />
@@ -473,12 +571,21 @@ function NewMeetForm({
           onChange={(e) => setForm({ ...form, date: e.target.value })}
           className={field}
         />
-        <input
-          value={form.federation}
-          placeholder={t("Federation")}
-          onChange={(e) => setForm({ ...form, federation: e.target.value })}
-          className={field}
-        />
+        {fight ? (
+          <input
+            value={form.opponent}
+            placeholder={t("Opponent")}
+            onChange={(e) => setForm({ ...form, opponent: e.target.value })}
+            className={field}
+          />
+        ) : (
+          <input
+            value={form.federation}
+            placeholder={t("Federation")}
+            onChange={(e) => setForm({ ...form, federation: e.target.value })}
+            className={field}
+          />
+        )}
         <input
           value={form.weightClass}
           placeholder={t("Weight class")}

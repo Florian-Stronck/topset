@@ -13,6 +13,7 @@ const FIELDS: { value: ProgField; label: string }[] = [
   { value: "REPS", label: "Reps" },
   { value: "SETS", label: "Sets" },
   { value: "INTENSITY", label: "Intensity" },
+  { value: "DURATION", label: "Time (seconds)" },
 ];
 
 export function ProgressionRules({

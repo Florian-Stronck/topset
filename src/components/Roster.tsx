@@ -16,6 +16,8 @@ import type { CheckinQuestionData } from "@/lib/checkins";
 export type RosterEntry = AthleteData & {
   /** Whether a check-in link is out. The link itself is only fetched when asked for. */
   hasLink: boolean;
+  /** Whether a read-only Tracking link for a second coach is out. */
+  hasViewLink: boolean;
   /** What the athlete app asks in the check-in, in order. */
   questions: CheckinQuestionData[];
   programs: {
@@ -163,9 +165,14 @@ function AthleteCard({ athlete, linkOpen }: { athlete: RosterEntry; linkOpen: bo
           </div>
         </div>
 
-        <UnitToggle unit={athlete.unit} onChange={(u) => patch({ unit: u })} />
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <SportToggle sport={athlete.sport} onChange={(sport) => patch({ sport })} />
+          <UnitToggle unit={athlete.unit} onChange={(u) => patch({ unit: u })} />
+        </div>
       </div>
 
+      {/* A fighter's 1RMs stay out of the way until some are on file. */}
+      {(athlete.sport === "LIFTER" || total > 0) && (
       <div data-maxes className="mt-3 flex items-center gap-2">
         {MAXES.map((m) => (
           <div key={m.key} className="flex-1 rounded-lg border border-border bg-surface-2 px-2 py-1.5">
@@ -185,6 +192,7 @@ function AthleteCard({ athlete, linkOpen }: { athlete: RosterEntry; linkOpen: bo
           </div>
         </div>
       </div>
+      )}
 
       <CheckinQuestions athleteId={athlete.id} questions={athlete.questions} />
 
@@ -204,8 +212,28 @@ function AthleteCard({ athlete, linkOpen }: { athlete: RosterEntry; linkOpen: bo
           </a>
         )}
         <AthleteLinkButton athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasLink} initiallyOpen={linkOpen} />
+        <AthleteLinkButton kind="viewer" athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasViewLink} />
         <DeleteAthleteButton athlete={athlete} />
       </div>
+    </div>
+  );
+}
+
+/** Lifter or fighter: what the screens lead with for this athlete. */
+export function SportToggle({ sport, onChange }: { sport: AthleteData["sport"]; onChange: (s: AthleteData["sport"]) => void }) {
+  return (
+    <div role="group" aria-label={t("Trains for")} className="flex shrink-0 overflow-hidden rounded-full border border-border text-[11px]">
+      {(["LIFTER", "FIGHTER"] as const).map((s) => (
+        <button
+          key={s}
+          type="button"
+          aria-pressed={s === sport}
+          onClick={() => s !== sport && onChange(s)}
+          className={`px-2.5 py-1 ${s === sport ? "bg-accent-soft font-medium text-accent" : "text-muted-2 hover:text-foreground"}`}
+        >
+          {s === "LIFTER" ? t("Lifter") : t("Fighter")}
+        </button>
+      ))}
     </div>
   );
 }
@@ -290,14 +318,16 @@ export function NewAthleteButton({
   const router = useRouter();
   const [open, setOpen] = useState(initiallyOpen);
   const [pending, setPending] = useState(false);
-  const { defaultUnit } = useSettings().settings;
-  const [form, setForm] = useState({
+  const { defaultUnit, defaultSport } = useSettings().settings;
+  const blank = () => ({
     name: "",
     unit: defaultUnit as AthleteData["unit"],
+    sport: defaultSport as AthleteData["sport"],
     squat1RM: "",
     bench1RM: "",
     dead1RM: "",
   });
+  const [form, setForm] = useState(blank);
 
   const field =
     "w-full rounded border border-border bg-surface px-2 py-1.5 text-[12px] outline-none focus:ring-1 focus:ring-accent/60";
@@ -312,13 +342,14 @@ export function NewAthleteButton({
     const id = await createAthlete({
       name: form.name,
       unit: form.unit,
+      sport: form.sport,
       squat1RM: num(form.squat1RM),
       bench1RM: num(form.bench1RM),
       dead1RM: num(form.dead1RM),
     });
     setPending(false);
     setOpen(false);
-    setForm({ name: "", unit: defaultUnit, squat1RM: "", bench1RM: "", dead1RM: "" });
+    setForm(blank());
     router.push(`/programming?athlete=${id}`);
   }
 
@@ -353,6 +384,10 @@ export function NewAthleteButton({
             className={`mt-2 ${field}`}
           />
 
+          <div className="mt-1.5">
+            <SportToggle sport={form.sport} onChange={(sport) => setForm({ ...form, sport })} />
+          </div>
+
           <select
             value={form.unit}
             onChange={(e) => setForm({ ...form, unit: e.target.value as AthleteData["unit"] })}
@@ -362,7 +397,7 @@ export function NewAthleteButton({
             <option value="LB">{t("lb")}</option>
           </select>
 
-          <div className="mt-1.5 flex gap-1.5">
+          {form.sport === "LIFTER" && <div className="mt-1.5 flex gap-1.5">
             {(["squat1RM", "bench1RM", "dead1RM"] as const).map((k, i) => (
               <input
                 key={k}
@@ -373,7 +408,7 @@ export function NewAthleteButton({
                 className={field}
               />
             ))}
-          </div>
+          </div>}
 
           <div className="mt-2.5 flex justify-end gap-1.5">
             <button

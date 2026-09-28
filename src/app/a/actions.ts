@@ -15,6 +15,7 @@ import {
 } from "@/lib/athlete-videos";
 import { bodyweightEntry, type BodyweightEntry } from "@/lib/bodyweight";
 import { answerDay, asksOn, cleanAnswer, questionData } from "@/lib/checkins";
+import { cleanInjury, injuryData, type InjuryData, type InjuryInput } from "@/lib/injuries";
 import { prisma } from "@/lib/prisma";
 import { PUSH_KINDS, type PushPrefs } from "@/lib/push-kinds";
 import { rowActuals } from "@/lib/setlog";
@@ -30,6 +31,7 @@ export type SetPatch = {
   reps?: number | null;
   rpe?: number | null;
   rir?: number | null;
+  seconds?: number | null;
   done?: boolean;
   /** Flagged as a personal record. */
   pr?: boolean;
@@ -48,6 +50,7 @@ function clean(patch: SetPatch): SetPatch {
     reps: num(patch.reps, 200, true),
     rpe: num(patch.rpe, 10),
     rir: num(patch.rir, 10),
+    seconds: num(patch.seconds, 24 * 3600, true),
     done: typeof patch.done === "boolean" ? patch.done : undefined,
     pr: typeof patch.pr === "boolean" ? patch.pr : undefined,
   };
@@ -414,6 +417,37 @@ export async function setClipSet(token: string, id: string, setIndex: number | n
   const { count } = await prisma.athleteVideo.updateMany({
     where: { id, athleteId: athlete.id, deletedAt: null },
     data: { setIndex: cleanSetIndex(setIndex) },
+  });
+  if (count > 0) await changed(token);
+}
+
+/**
+ * An injury reported, or changed, from the phone: a new one when there's no id, else the
+ * athlete's own one. Clearing it up is an end day, not a delete, so the history keeps it.
+ */
+export async function saveInjury(token: string, input: InjuryInput): Promise<InjuryData> {
+  const athlete = await getAthleteByToken(token);
+  if (!athlete) throw new Error("Not found.");
+  const data = cleanInjury(input);
+  let row;
+  if (input.id) {
+    const { count } = await prisma.injury.updateMany({ where: { id: input.id, athleteId: athlete.id, deletedAt: null }, data });
+    if (count === 0) throw new Error("Not found.");
+    row = await prisma.injury.findUniqueOrThrow({ where: { id: input.id } });
+  } else {
+    row = await prisma.injury.create({ data: { ...data, athleteId: athlete.id, source: "athlete" } });
+  }
+  await changed(token);
+  return injuryData(row);
+}
+
+/** Takes an injury back, reported by mistake. A tombstone, so the coach's copy drops it too. */
+export async function deleteInjury(token: string, id: string) {
+  const athlete = await getAthleteByToken(token);
+  if (!athlete) throw new Error("Not found.");
+  const { count } = await prisma.injury.updateMany({
+    where: { id, athleteId: athlete.id, deletedAt: null },
+    data: { deletedAt: new Date() },
   });
   if (count > 0) await changed(token);
 }

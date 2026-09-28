@@ -62,8 +62,10 @@ describe("project", () => {
     assert.deepEqual(project(base, [rule({})], 1, "KG"), {
       sets: 3,
       reps: 5,
+      repsMax: null,
       intensity: 100,
       intensityMax: null,
+      duration: null,
     });
   });
 
@@ -138,5 +140,31 @@ describe("describeRule", () => {
 
   test("negative amounts use a real minus sign", () => {
     assert.equal(describeRule(rule({ amount: -1 }), "WEIGHT"), "−1 rep/wk");
+  });
+});
+
+describe("timed sets", () => {
+  test("a DURATION rule adds seconds, rounded to five", () => {
+    const timed = { ...base, duration: 180 };
+    const r = rule({ field: "DURATION", amount: 30, everyWeeks: 1, startWeek: 2 });
+    assert.equal(project(timed, [r], 1, "KG").duration, 180);
+    assert.equal(project(timed, [r], 3, "KG").duration, 240);
+    const pct = rule({ field: "DURATION", op: "MULTIPLY", amount: 1.1 });
+    assert.equal(project(timed, [pct], 2, "KG").duration, 200);
+    assert.equal(describeRule(r, "RPE"), "+30s/wk");
+  });
+
+  test("an untimed row stays untimed", () => {
+    const r = rule({ field: "DURATION", amount: 30 });
+    assert.equal(project(base, [r], 3, "KG").duration, null);
+  });
+});
+
+describe("rep ranges", () => {
+  test("a REPS rule moves the whole range", () => {
+    const ranged = { ...base, reps: 8, repsMax: 10 };
+    const p = project(ranged, [rule({ field: "REPS", amount: 1 })], 3, "KG");
+    assert.equal(p.reps, 10);
+    assert.equal(p.repsMax, 12);
   });
 });

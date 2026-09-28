@@ -17,9 +17,13 @@ export type Rule = {
 export type BaseValues = {
   sets: number | null;
   reps: number | null;
+  /** A rep range's top; moves with the bottom, keeping the range's width. */
+  repsMax?: number | null;
   intensity: number | null;
   intensityMax: number | null;
   intensityType: IntensityType;
+  /** Seconds per set; absent on rows made before timed sets existed. */
+  duration?: number | null;
 };
 
 /**
@@ -49,9 +53,11 @@ function roundIntensity(value: number, type: IntensityType, unit: Unit): number 
 export type ProjectedValues = {
   sets: number | null;
   reps: number | null;
+  repsMax: number | null;
   intensity: number | null;
   /** A range's top end, moved by whatever the rules did to its bottom end. */
   intensityMax: number | null;
+  duration: number | null;
 };
 
 /** Applies every enabled rule, in order, to the base week's values. */
@@ -59,6 +65,7 @@ export function project(base: BaseValues, rules: Rule[], week: number, unit: Uni
   let sets = base.sets;
   let reps = base.reps;
   let intensity = base.intensity;
+  let duration = base.duration ?? null;
 
   for (const rule of [...rules].sort((a, b) => a.order - b.order)) {
     if (!rule.enabled) continue;
@@ -71,6 +78,9 @@ export function project(base: BaseValues, rules: Rule[], week: number, unit: Uni
       reps = Math.max(1, Math.round(step(reps, rule, times)));
     } else if (rule.field === "INTENSITY" && intensity !== null) {
       intensity = roundIntensity(step(intensity, rule, times), base.intensityType, unit);
+    } else if (rule.field === "DURATION" && duration !== null) {
+      // Whole five seconds: a round of 3:07 is nobody's plan.
+      duration = Math.max(5, Math.round(step(duration, rule, times) / 5) * 5);
     }
   }
 
@@ -85,13 +95,17 @@ export function project(base: BaseValues, rules: Rule[], week: number, unit: Uni
         )
       : base.intensityMax;
 
-  return { sets, reps, intensity, intensityMax };
+  const repsMax =
+    base.repsMax != null && base.reps !== null && reps !== null ? base.repsMax + (reps - base.reps) : (base.repsMax ?? null);
+
+  return { sets, reps, repsMax, intensity, intensityMax, duration };
 }
 
 const FIELD_LABEL: Record<ProgField, string> = {
   SETS: "set",
   REPS: "rep",
   INTENSITY: "intensity",
+  DURATION: "second",
 };
 
 export function describeRule(rule: Rule, intensityType: IntensityType): string {
@@ -102,7 +116,9 @@ export function describeRule(rule: Rule, intensityType: IntensityType): string {
         : intensityType === "WEIGHT" || intensityType === "RANGE"
           ? "kg"
           : " RPE"
-      : ` ${t(Math.abs(rule.amount) === 1 ? FIELD_LABEL[rule.field] : `${FIELD_LABEL[rule.field]}s`)}`;
+      : rule.field === "DURATION"
+        ? "s"
+        : ` ${t(Math.abs(rule.amount) === 1 ? FIELD_LABEL[rule.field] : `${FIELD_LABEL[rule.field]}s`)}`;
 
   const cadence = rule.everyWeeks === 1 ? t("wk") : t("{n} wks", { n: rule.everyWeeks });
   const window =

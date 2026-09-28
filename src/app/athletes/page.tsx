@@ -20,10 +20,12 @@ export default async function AthletesPage({
     id: a.id,
     name: a.name,
     unit: a.unit,
+    sport: a.sport,
     squat1RM: a.squat1RM,
     bench1RM: a.bench1RM,
     dead1RM: a.dead1RM,
     hasLink: a.accessToken !== null,
+    hasViewLink: a.viewToken !== null,
     questions: a.questions.map(questionData),
     programs: a.programs.map((p) => ({
       id: p.id,

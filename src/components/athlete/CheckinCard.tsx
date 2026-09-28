@@ -5,19 +5,21 @@ import type { Unit } from "@prisma/client";
 import { deleteBodyweight, logBodyweight, saveCheckinAnswer } from "@/app/a/actions";
 import { CheckinIcon } from "@/components/CheckinIcon";
 import type { DayCheckin } from "@/lib/athlete-queries";
-import { colorOf, formatAnswer, picked, readinessOf, type CheckinQuestionData } from "@/lib/checkins";
+import { colorOf, formatAnswer, isBodyweight, picked, readinessOf, type CheckinQuestionData } from "@/lib/checkins";
 import { shortDate, weekdayShort } from "@/lib/athlete-format";
 import type { BodyweightEntry } from "@/lib/bodyweight";
 import { t } from "@/lib/i18n";
 
 /**
- * The day's check-in: bodyweight first, then the questions the coach asks on the day, each
- * answered the way it was written — a number, a scale, options, yes or no, or a few words.
- * Each answer saves on its own; once every one is in, the card folds to a line of answers
- * that opens again. Weigh-ins still go to the bodyweight log, so the trend and the meet
- * projection read them as before.
+ * The day's check-in: the questions the coach asks on the day, each answered the way it was
+ * written — a number, a scale, options, yes or no, or a few words. Each answer saves on its
+ * own; once every one is in, the card folds to a line of answers that opens again. The
+ * bodyweight question is one of them, but its answer goes to the bodyweight log, so the
+ * trend and the weight cut read it.
  */
 export function CheckinCard(props: Parameters<typeof CheckinForm>[0]) {
+  // A coach who asks nothing gets no card.
+  if (props.initial.questions.length === 0) return null;
   if (props.day > props.today) return <UpcomingCheckin day={props.day} questions={props.initial.questions} />;
   return <CheckinForm {...props} />;
 }
@@ -48,8 +50,10 @@ function CheckinForm({
     Object.fromEntries(initial.answers.map((a) => [a.questionId, a.value])),
   );
   const onDay = weights.find((e) => e.day === weighDay) ?? null;
-  const answered = questions.filter((q) => (values[q.id] ?? null) !== null).length + (onDay ? 1 : 0);
-  const total = questions.length + 1;
+  const has = (q: CheckinQuestionData, v: Record<string, string | null> = values) =>
+    isBodyweight(q) ? onDay !== null : (v[q.id] ?? null) !== null;
+  const answered = questions.filter((q) => has(q)).length;
+  const total = questions.length;
   const complete = answered === total;
   const [open, setOpen] = useState(!complete);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +72,7 @@ function CheckinForm({
     setValues(next);
     enqueue(() => saveCheckinAnswer(token, q.id, day, raw));
     // The last answer folds the card away; typing fields fold only once left.
-    if (!complete && onDay && questions.every((x) => (next[x.id] ?? null) !== null) && q.kind !== "TEXT" && q.kind !== "NUMBER") {
+    if (!complete && questions.every((x) => has(x, next)) && q.kind !== "TEXT" && q.kind !== "NUMBER") {
       setOpen(false);
     }
   }
@@ -96,14 +100,11 @@ function CheckinForm({
             {t("CHECK-IN")} <span className="tabular-nums">{answered}/{total}</span>
           </div>
           <div className="truncate text-[13px] text-muted">
-            {complete && onDay
-              ? [
-                  `${t("Bodyweight")} ${onDay.weight} ${u}`,
-                  ...questions.map((q) => `${q.label} ${formatAnswer(q, values[q.id] ?? null, yesNo)}`),
-                ].join(" · ")
-              : questions.length > 0
-                ? t("A few questions from your coach")
-                : t("Log your bodyweight")}
+            {complete
+              ? questions
+                  .map((q) => (isBodyweight(q) ? `${q.label} ${onDay?.weight} ${u}` : `${q.label} ${formatAnswer(q, values[q.id] ?? null, yesNo)}`))
+                  .join(" · ")
+              : t("A few questions from your coach")}
           </div>
         </div>
         {score !== null && (
@@ -116,35 +117,34 @@ function CheckinForm({
 
       {open && (
         <div className="mt-3 space-y-4">
-          <div>
-            <div className="flex items-center gap-2 text-[14px]">
-              <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-surface-3 text-foreground">
-                <CheckinIcon name="weight" size={15} />
-              </span>
-              <span className="min-w-0 flex-1 font-medium">{t("Bodyweight")}</span>
-              {!onDay && last && (
-                <span className="shrink-0 text-[11px] text-muted-2">
-                  {t("Last {w} {u} · {date}", { w: last.weight, u, date: shortDate(last.day) })}
-                </span>
-              )}
-            </div>
-            <div className="mt-2">
-              <NumberAnswer
-                key={onDay?.id ?? "none"}
-                value={onDay ? String(onDay.weight) : null}
-                unit={u}
-                placeholder={last ? String(last.weight) : undefined}
-                onSave={(v) => {
-                  const n = v === null ? null : Number(v);
-                  if (n !== null && (n <= 0 || n > 1000)) return setError(t("That weight doesn't look right."));
-                  weigh(n);
-                }}
-              />
-            </div>
-          </div>
-          {questions.map((q) => (
-            <Question key={q.id} q={q} value={values[q.id] ?? null} onSave={(value, raw) => save(q, value, raw)} />
-          ))}
+          {questions.map((q) =>
+            isBodyweight(q) ? (
+              <div key={q.id}>
+                <QuestionHead q={q}>
+                  {!onDay && last && (
+                    <span className="shrink-0 text-[11px] text-muted-2">
+                      {t("Last {w} {u} · {date}", { w: last.weight, u, date: shortDate(last.day) })}
+                    </span>
+                  )}
+                </QuestionHead>
+                <div className="mt-2">
+                  <NumberAnswer
+                    key={onDay?.id ?? "none"}
+                    value={onDay ? String(onDay.weight) : null}
+                    unit={u}
+                    placeholder={last ? String(last.weight) : undefined}
+                    onSave={(v) => {
+                      const n = v === null ? null : Number(v);
+                      if (n !== null && (n <= 0 || n > 1000)) return setError(t("That weight doesn't look right."));
+                      weigh(n);
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <Question key={q.id} q={q} value={values[q.id] ?? null} onSave={(value, raw) => save(q, value, raw)} />
+            ),
+          )}
         </div>
       )}
 
@@ -162,19 +162,27 @@ function Question({
   value: string | null;
   onSave: (value: string | null, raw?: unknown) => void;
 }) {
-  const color = colorOf(q.color);
   return (
     <div>
-      <div className="flex items-center gap-2 text-[14px]">
-        <span className="grid size-7 shrink-0 place-items-center rounded-lg text-white" style={{ background: color }}>
-          <CheckinIcon name={q.icon} size={15} />
-        </span>
-        <span className="min-w-0 flex-1 font-medium">{q.label}</span>
+      <QuestionHead q={q}>
         {q.cadence === "WEEKLY" && <span className="shrink-0 text-[11px] text-muted-2">{t("this week")}</span>}
-      </div>
+      </QuestionHead>
       <div className="mt-2">
         <Answer q={q} value={value} onSave={onSave} />
       </div>
+    </div>
+  );
+}
+
+/** A question's icon and wording, with anything to add on the right. */
+function QuestionHead({ q, children }: { q: CheckinQuestionData; children?: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 text-[14px]">
+      <span className="grid size-7 shrink-0 place-items-center rounded-lg text-white" style={{ background: colorOf(q.color) }}>
+        <CheckinIcon name={q.icon} size={15} />
+      </span>
+      <span className="min-w-0 flex-1 font-medium">{q.label}</span>
+      {children}
     </div>
   );
 }
@@ -413,12 +421,9 @@ function UpcomingCheckin({ day, questions }: { day: string; questions: CheckinQu
         <div className="text-[11px] text-muted-2">{t("Opens on {day}", { day: weekdayShort(day) })}</div>
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
-        {[{ id: "bw", label: t("Bodyweight"), icon: "weight", color: null as string | null }, ...questions].map((q) => (
+        {questions.map((q) => (
           <span key={q.id} className="flex items-center gap-1.5 rounded-lg bg-surface py-1 pl-1 pr-2 text-[12px] text-muted">
-            <span
-              className={`grid size-5 place-items-center rounded-md ${q.color ? "text-white" : "bg-surface-3 text-foreground"}`}
-              style={q.color ? { background: colorOf(q.color) } : undefined}
-            >
+            <span className="grid size-5 place-items-center rounded-md text-white" style={{ background: colorOf(q.color) }}>
               <CheckinIcon name={q.icon} size={12} />
             </span>
             {q.label}

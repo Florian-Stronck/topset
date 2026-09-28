@@ -9,6 +9,7 @@ import { phaseName } from "@/lib/settings";
 import { snapStart, weekdayOfDay } from "@/lib/dates";
 import { isRestName, templateDays, trainingDayName } from "@/lib/days";
 import { prisma } from "@/lib/prisma";
+import { newRowFor } from "@/lib/sport";
 import {
   ATTEMPT_PATTERN,
   ATTEMPT_ROWS,
@@ -34,6 +35,7 @@ function revalidateAll() {
 export type CellPatch = {
   sets?: number | null;
   reps?: number | null;
+  repsMax?: number | null;
   intensityType?: IntensityType;
   intensity?: number | null;
   intensityMax?: number | null;
@@ -41,6 +43,7 @@ export type CellPatch = {
   tempo?: string | null;
   restTime?: string | null;
   videoUrl?: string | null;
+  duration?: number | null;
   actualWeight?: number | null;
   performedRpe?: number | null;
   athleteNotes?: string | null;
@@ -57,7 +60,7 @@ export async function updateCell(rowId: string, patch: CellPatch) {
 
 export async function updateRow(
   rowId: string,
-  patch: { exercise?: string; target?: string; tier?: Tier },
+  patch: { exercise?: string; target?: string; tier?: Tier; session?: string | null },
 ) {
   assertCoach();
   await prisma.exerciseRow.update({ where: { id: rowId }, data: patch });
@@ -74,7 +77,7 @@ export async function addRow(
     where: { dayId },
     orderBy: { order: "desc" },
   });
-  const blank = await blankRow();
+  const blank = await blankRow(dayId);
 
   await prisma.exerciseRow.create({
     data: {
@@ -82,6 +85,8 @@ export async function addRow(
       dayId,
       order: (last?.order ?? -1) + 1,
       ...blank,
+      // A row added at the end of a day joins the session the day ends on.
+      session: last?.session ?? null,
       ...definedOf(init),
       exercise: init.exercise ?? "New exercise",
     },
@@ -107,6 +112,7 @@ export type RowTemplate = {
   }[];
   sets: number | null;
   reps: number | null;
+  repsMax: number | null;
   intensityType: IntensityType;
   intensity: number | null;
   intensityMax: number | null;
@@ -115,12 +121,30 @@ export type RowTemplate = {
   tempo: string | null;
   restTime: string | null;
   videoUrl: string | null;
+  duration: number | null;
 };
 
+/**
+ * Puts rows in a session — the day's AM or PM — or takes them out of one (null). One
+ * write for the lot, so a divider added or renamed is one edit to undo.
+ */
+export async function setRowSessions(rowIds: string[], session: string | null) {
+  assertCoach();
+  if (rowIds.length === 0) return;
+  const name = session?.trim().slice(0, 40) || null;
+  await prisma.exerciseRow.updateMany({ where: { id: { in: rowIds } }, data: { session: name } });
+  await syncFromRow(rowIds[0]);
+  revalidatePath("/programming");
+}
+
 /** A new row as the coach set it up in Settings: tier, target and prescription. */
-async function blankRow() {
-  const { newRow } = await loadSettings();
-  return { ...newRow };
+/** A new row as the coach set it up in Settings — as a % rather than an RPE for a fighter. */
+async function blankRow(dayId: string) {
+  const [{ newRow }, day] = await Promise.all([
+    loadSettings(),
+    prisma.day.findUnique({ where: { id: dayId }, select: { week: { select: { block: { select: { athlete: { select: { sport: true } } } } } } } }),
+  ]);
+  return newRowFor({ ...newRow }, day?.week.block.athlete.sport ?? "LIFTER");
 }
 
 function definedOf<T extends object>(obj: T): Partial<T> {
@@ -153,8 +177,10 @@ export async function insertRow(
   init: { id?: string; exercise?: string; target?: string; tier?: Tier } = {},
 ) {
   assertCoach();
-  const blank = await blankRow();
+  const blank = await blankRow(dayId);
   await prisma.$transaction(async (tx) => {
+    // The new row joins the session of the row it goes under.
+    const above = await tx.exerciseRow.findFirst({ where: { dayId, order: afterOrder }, select: { session: true } });
     await openSlot(tx, dayId, afterOrder);
     await tx.exerciseRow.create({
       data: {
@@ -162,6 +188,7 @@ export async function insertRow(
         dayId,
         order: afterOrder + 1,
         ...blank,
+        session: above?.session ?? null,
         ...definedOf(init),
         exercise: init.exercise ?? "",
       },
@@ -203,6 +230,7 @@ export async function duplicateRow(rowId: string, id?: string) {
         },
         sets: row.sets,
         reps: row.reps,
+        repsMax: row.repsMax ?? null,
         intensityType: row.intensityType,
         intensity: row.intensity,
         intensityMax: row.intensityMax,
@@ -211,6 +239,8 @@ export async function duplicateRow(rowId: string, id?: string) {
         tempo: row.tempo,
         restTime: row.restTime,
         videoUrl: row.videoUrl,
+        duration: row.duration,
+        session: row.session,
       },
     });
   });
@@ -223,7 +253,7 @@ export async function moveRow(rowId: string, direction: "up" | "down") {
   assertCoach();
   const row = await prisma.exerciseRow.findUniqueOrThrow({
     where: { id: rowId },
-    select: { id: true, dayId: true, order: true },
+    select: { id: true, dayId: true, order: true, session: true },
   });
   const neighbour = await prisma.exerciseRow.findFirst({
     where: {
@@ -231,9 +261,17 @@ export async function moveRow(rowId: string, direction: "up" | "down") {
       order: direction === "up" ? { lt: row.order } : { gt: row.order },
     },
     orderBy: { order: direction === "up" ? "desc" : "asc" },
-    select: { id: true, order: true },
+    select: { id: true, order: true, session: true },
   });
   if (!neighbour) return;
+
+  // At the edge of a session, a move crosses into the next one rather than past a row.
+  if (neighbour.session !== row.session) {
+    await prisma.exerciseRow.update({ where: { id: row.id }, data: { session: neighbour.session } });
+    await syncFromDay(row.dayId);
+    revalidatePath("/programming");
+    return;
+  }
 
   await prisma.$transaction(async (tx) => {
     // Park the row below every real slot first: (dayId, order) is unique.
@@ -278,12 +316,14 @@ export async function pasteRows(
     const last = await tx.exerciseRow.findFirst({
       where: { dayId },
       orderBy: { order: "desc" },
-      select: { order: true },
+      select: { order: true, session: true },
     });
     let order = (last?.order ?? -1) + 1;
     for (const { id, template } of create) {
       const { rules, ...prescription } = template;
-      await tx.exerciseRow.create({ data: { id, dayId, order: order++, ...prescription, rules: { create: rules } } });
+      await tx.exerciseRow.create({
+        data: { id, dayId, order: order++, session: last?.session ?? null, ...prescription, rules: { create: rules } },
+      });
     }
   });
   await syncFromDay(dayId);
@@ -371,7 +411,7 @@ export async function fillMeetDay(dayId: string, meetId: string) {
  * and the two stacks keep pointing at the same row.
  */
 export async function restoreRow(
-  row: RowTemplate & { id: string; dayId: string; order: number; fromId: string | null },
+  row: RowTemplate & { id: string; dayId: string; order: number; fromId: string | null; session?: string | null },
 ) {
   assertCoach();
   await prisma.$transaction(async (tx) => {
@@ -531,6 +571,7 @@ export async function addWeek(blockId: string) {
             exercise: row.exercise,
             sets: row.sets,
             reps: row.reps,
+            repsMax: row.repsMax ?? null,
             intensityType: row.intensityType,
             intensity: row.intensity,
             intensityMax: row.intensityMax,
@@ -539,6 +580,8 @@ export async function addWeek(blockId: string) {
             tempo: row.tempo,
             restTime: row.restTime,
             videoUrl: row.videoUrl,
+            duration: row.duration,
+            session: row.session,
             fromId: newestRows.get(slot(day.index, row.order)) ?? null,
           },
         });
@@ -1110,6 +1153,7 @@ async function copyWeekInto(
           exercise: row.exercise,
           sets: row.sets,
           reps: row.reps,
+          repsMax: row.repsMax ?? null,
           intensityType: row.intensityType,
           intensity: row.intensity,
           intensityMax: row.intensityMax,
@@ -1118,6 +1162,8 @@ async function copyWeekInto(
           tempo: row.tempo,
           restTime: row.restTime,
           videoUrl: row.videoUrl,
+          duration: row.duration,
+          session: row.session,
           fromId: previous.get(slot) ?? null,
           rules:
             withRules && row.rules.length > 0
@@ -1219,6 +1265,7 @@ const PLAN_FIELDS = [
   "exercise",
   "sets",
   "reps",
+  "repsMax",
   "intensityType",
   "intensity",
   "intensityMax",
@@ -1227,13 +1274,16 @@ const PLAN_FIELDS = [
   "tempo",
   "restTime",
   "videoUrl",
+  "duration",
+  "session",
 ] as const;
 
 /** Fields a progression rule on that field writes — those keep coming from the rule. */
 const RULED: Record<ProgField, readonly (typeof PLAN_FIELDS)[number][]> = {
   SETS: ["sets"],
-  REPS: ["reps"],
+  REPS: ["reps", "repsMax"],
   INTENSITY: ["intensityType", "intensity", "intensityMax", "rampStep"],
+  DURATION: ["duration"],
 };
 
 /**

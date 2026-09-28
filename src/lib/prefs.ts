@@ -11,7 +11,7 @@ import { useSyncExternalStore } from "react";
 
 const EVENT = "topset:prefs";
 
-export type Column = "progression" | "notes" | "tempo" | "rest" | "video";
+export type Column = "progression" | "notes" | "time" | "tempo" | "rest" | "video";
 
 export type Prefs = {
   /** Intensity sits right next to reps instead of stretching across the week. */
@@ -76,7 +76,7 @@ export type TrackingPrefs = {
 export const PREF_DEFAULTS: Prefs = {
   tightIntensity: false,
   density: "comfortable",
-  columns: { progression: true, notes: true, tempo: false, rest: false, video: false },
+  columns: { progression: true, notes: true, time: false, tempo: false, rest: false, video: false },
   hideRestDays: false,
   sidebarCollapsed: false,
   cellDisplay: "both",

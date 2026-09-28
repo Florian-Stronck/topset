@@ -25,11 +25,20 @@ export const getAthleteByToken = cache(async (token: string) => {
   return prisma.athlete.findUnique({
     // A coach the admin turned off takes their athletes' links with them.
     where: { accessToken: token, coach: { disabledAt: null } },
-    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true },
+    select: { id: true, coachId: true, name: true, unit: true, sport: true, squat1RM: true, bench1RM: true, dead1RM: true },
   });
 });
 
 export type TokenAthlete = NonNullable<Awaited<ReturnType<typeof getAthleteByToken>>>;
+
+/** The athlete behind a viewer link: a read-only Tracking for a second coach. */
+export const getAthleteByViewToken = cache(async (token: string) => {
+  if (!plausibleToken(token)) return null;
+  return prisma.athlete.findUnique({
+    where: { viewToken: token, coach: { disabledAt: null } },
+    select: { id: true, coachId: true, name: true, unit: true, sport: true, squat1RM: true, bench1RM: true, dead1RM: true },
+  });
+});
 
 /**
  * Every phase of every program, down to its days but not what is in them: enough to lay
@@ -80,6 +89,12 @@ export type AthleteRow = {
   target: string;
   sets: number | null;
   reps: number | null;
+  /** The top of a rep range; null for a single number. */
+  repsMax: number | null;
+  /** Seconds per set, for a timed row. */
+  duration: number | null;
+  /** Which of the day's sessions it is in; null when the day has one. */
+  session: string | null;
   /** "RPE 8", "75%", "top −10%" — as the coach wrote it. */
   prescription: string;
   ramp: string | null;
@@ -123,6 +138,9 @@ function toSession(s: ScheduledSession, dayRows: DayRow[], athlete: TokenAthlete
       target: row.target,
       sets: row.sets,
       reps: row.reps,
+      repsMax: row.repsMax,
+      duration: row.duration,
+      session: row.session,
       prescription: formatPrescription(row, athlete.unit),
       ramp: formatRamp(row, athlete.unit),
       loads,

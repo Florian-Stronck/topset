@@ -1,13 +1,15 @@
 "use client";
 
 import type { Unit } from "@prisma/client";
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { logSet, logSets, removeSet, saveAthleteNotes, type SetPatch } from "@/app/a/actions";
 import { Check } from "@/components/athlete/icons";
 import { RowClips } from "@/components/athlete/RowClips";
+import { beep, openAudio } from "@/components/athlete/beep";
 import { Trophy } from "@/components/CheckinIcon";
 import type { AthleteRow, AthleteSession } from "@/lib/athlete-queries";
 import { t } from "@/lib/i18n";
+import { formatDuration, parseDuration, volumeText } from "@/lib/duration";
 import { formatSet, type SetLogData } from "@/lib/setlog";
 
 /** A number as typed on a phone: "82,5" is as good as "82.5"; blank is nothing. */
@@ -23,6 +25,7 @@ const blank = (setIndex: number): SetLogData => ({
   reps: null,
   rpe: null,
   rir: null,
+  seconds: null,
   done: false,
   pr: false,
   loggedAt: new Date().toISOString(),
@@ -158,10 +161,23 @@ export function SessionLogger({
           {t("Nothing written for this day yet.")}
         </div>
       ) : (
+        sessionsOf(rows).map(({ name, rows: group }) => (
+          <section key={name ?? ""} className={name === null ? "" : "mb-4"}>
+            {name !== null && (
+              <h2 className="mb-3 flex items-baseline justify-between border-b border-border pb-1.5 text-[12px] font-semibold tracking-[0.14em] text-muted">
+                <span>{name.toUpperCase()}</span>
+                <span className="font-normal tabular-nums">
+                  {t("{done}/{of} sets", {
+                    done: group.reduce((n, r) => n + r.logs.filter((l) => l.done).length, 0),
+                    of: group.reduce((n, r) => n + Math.max(1, r.sets ?? 1), 0),
+                  })}
+                </span>
+              </h2>
+            )}
         <ol className="relative">
           {/* The thread the exercises hang from, circle to circle. */}
-          {rows.length > 1 && <span aria-hidden className="absolute bottom-8 left-[13px] top-4 w-[2px] rounded bg-accent/70" />}
-          {rows.map((row) => (
+          {group.length > 1 && <span aria-hidden className="absolute bottom-8 left-[13px] top-4 w-[2px] rounded bg-accent/70" />}
+          {group.map((row) => (
             <ExerciseItem
               key={row.id}
               token={token}
@@ -177,9 +193,24 @@ export function SessionLogger({
             />
           ))}
         </ol>
+          </section>
+        ))
       )}
     </div>
   );
+}
+
+/** The day's rows cut into its sessions, in order; one unnamed group when it has fewer than two. */
+function sessionsOf(rows: AthleteRow[]): { name: string | null; rows: AthleteRow[] }[] {
+  const out: { name: string | null; rows: AthleteRow[] }[] = [];
+  for (const row of rows) {
+    const name = row.session?.trim() || null;
+    const last = out[out.length - 1];
+    if (last && last.name === name) last.rows.push(row);
+    else out.push({ name, rows: [row] });
+  }
+  // A day that names one session reads the same as a day that names none.
+  return out.length === 1 ? [{ name: null, rows }] : out;
 }
 
 function ExerciseItem({
@@ -229,12 +260,21 @@ function ExerciseItem({
   const top = topSet(row.logs);
   const lastLogged = row.logs.reduce((m, l) => Math.max(m, l.setIndex + 1), 0);
   const count = Math.max(planned, lastLogged + extra);
+  const timed = row.duration !== null;
 
   /** Ticked off without anything typed means it went as written. */
   const asWritten = (i: number): SetPatch => {
     const log = logOf(i);
+    if (timed) return { done: true, seconds: log?.seconds ?? row.duration };
     return { done: true, weight: log?.weight ?? loadOf(i), reps: log?.reps ?? row.reps };
   };
+
+  /** The timer ran a round: it goes on the first set not yet done, or a new one. */
+  function roundDone(seconds: number) {
+    let i = 0;
+    while (logOf(i)?.done) i++;
+    onLog(i, { ...asWritten(i), seconds });
+  }
 
   function toggleDone() {
     const sets = Array.from({ length: planned }, (_, i) => i);
@@ -277,9 +317,7 @@ function ExerciseItem({
               </span>
             ) : (
               <>
-                <span>{row.sets ?? "—"}</span>
-                <span className="text-muted"> × </span>
-                <span>{row.reps ?? "—"}</span>
+                <span>{volumeText(row)}</span>
                 <span className="text-muted"> @ </span>
                 <span>{row.prescription}</span>
                 {target !== null && row.prescription !== `${target} ${u}` && (
@@ -349,9 +387,15 @@ function ExerciseItem({
             ))}
           </div>
 
-          <div className="mb-2 mt-4 grid grid-cols-[1fr_60px_60px_44px] gap-2 text-[11px] tracking-[0.14em] text-muted">
-            <span>{t("WEIGHT")}</span>
-            <span className="text-center">{t("REPS")}</span>
+          {timed && <RoundTimer seconds={row.duration!} onRound={roundDone} />}
+
+          <div
+            className={`mb-2 mt-4 grid gap-2 text-[11px] tracking-[0.14em] text-muted ${
+              timed ? "grid-cols-[1fr_76px_44px]" : "grid-cols-[1fr_60px_60px_44px]"
+            }`}
+          >
+            <span>{timed ? t("TIME") : t("WEIGHT")}</span>
+            {!timed && <span className="text-center">{t("REPS")}</span>}
             <span className="text-center">{effort}</span>
             <span />
           </div>
@@ -366,6 +410,7 @@ function ExerciseItem({
                   log={log}
                   load={loadOf(i)}
                   reps={row.reps}
+                  duration={row.duration}
                   unit={u}
                   effort={effort}
                   onLog={(patch) => onLog(i, patch)}
@@ -391,7 +436,7 @@ function ExerciseItem({
             >
               + {t("Add set")}
             </button>
-            <button
+            {!timed && <button
               type="button"
               onClick={togglePr}
               disabled={prLogs.length === 0 && !top}
@@ -403,8 +448,8 @@ function ExerciseItem({
             >
               <Trophy size={14} />
               {prLogs.length > 0 ? t("PR!") : t("PR")}
-            </button>
-            <span className="text-[12px] tabular-nums text-muted">
+            </button>}
+            <span className={`text-[12px] tabular-nums text-muted ${timed ? "ml-auto" : ""}`}>
               {t("{done}/{of} sets", { done: doneLogs.length, of: planned })}
             </span>
           </div>
@@ -442,6 +487,7 @@ function SetRow({
   log,
   load,
   reps,
+  duration,
   unit,
   effort,
   onLog,
@@ -453,6 +499,8 @@ function SetRow({
   log: SetLogData | null;
   load: number | null;
   reps: number | null;
+  /** Seconds per set: a timed row logs time rather than weight and reps. */
+  duration: number | null;
   unit: string;
   effort: Effort;
   onLog: (patch: SetPatch) => void;
@@ -468,13 +516,16 @@ function SetRow({
   const own = effort === "RPE" ? log?.rpe : log?.rir;
   const shownEffort = own ?? (other === null || other === undefined ? null : round(10 - other));
 
+  const timed = duration !== null;
   return (
-    <div className="grid grid-cols-[1fr_60px_60px_44px] items-center gap-2">
+    <div className={`grid items-center gap-2 ${timed ? "grid-cols-[1fr_76px_44px]" : "grid-cols-[1fr_60px_60px_44px]"}`}>
       <BigNumber
-        value={log?.weight ?? null}
-        placeholder={load}
+        value={timed ? (log?.seconds ?? null) : (log?.weight ?? null)}
+        placeholder={timed ? duration : load}
+        read={timed ? parseDuration : undefined}
+        show={timed ? formatDuration : undefined}
         done={done}
-        suffix={unit}
+        suffix={timed ? undefined : unit}
         pr={pr}
         prefix={
           onDrop ? (
@@ -495,9 +546,11 @@ function SetRow({
             <span className="mr-2 text-[12px] tabular-nums text-muted-2">{index + 1}</span>
           )
         }
-        onCommit={(v) => onLog({ weight: v })}
+        onCommit={(v) => onLog(timed ? { seconds: v } : { weight: v })}
       />
-      <BigNumber value={log?.reps ?? null} placeholder={reps} done={done} center onCommit={(v) => onLog({ reps: v })} />
+      {!timed && (
+        <BigNumber value={log?.reps ?? null} placeholder={reps} done={done} center onCommit={(v) => onLog({ reps: v })} />
+      )}
       <BigNumber
         value={shownEffort}
         placeholder={null}
@@ -529,10 +582,15 @@ function BigNumber({
   suffix,
   pr = false,
   center = false,
+  read = parse,
+  show = String,
   onCommit,
 }: {
   value: number | null;
   placeholder: number | null;
+  /** Text to value and back, for a field that isn't a plain number — a time. */
+  read?: (text: string) => number | null;
+  show?: (value: number) => string;
   done: boolean;
   pr?: boolean;
   prefix?: React.ReactNode;
@@ -541,11 +599,11 @@ function BigNumber({
   onCommit: (value: number | null) => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const shown = draft ?? (value === null ? "" : String(value));
+  const shown = draft ?? (value === null ? "" : show(value));
 
   function commit() {
     if (draft === null) return;
-    const next = parse(draft);
+    const next = read(draft);
     setDraft(null);
     if (next !== value) onCommit(next);
   }
@@ -562,7 +620,7 @@ function BigNumber({
         inputMode="decimal"
         enterKeyHint="done"
         value={shown}
-        placeholder={placeholder === null ? "—" : String(placeholder)}
+        placeholder={placeholder === null ? "—" : show(placeholder)}
         onChange={(e) => setDraft(e.target.value)}
         onFocus={(e) => e.currentTarget.select()}
         onBlur={commit}
@@ -575,6 +633,101 @@ function BigNumber({
       />
       {suffix && <span className="ml-1 text-[14px] text-muted">{suffix}</span>}
     </label>
+  );
+}
+
+type WakeLock = { release: () => Promise<void> };
+
+/**
+ * A round's countdown, for a timed exercise. When it runs out it beeps, buzzes and logs
+ * the round on the next set; "Done" logs it early, with the time it took. The screen
+ * stays awake while it runs, where the phone allows it.
+ */
+function RoundTimer({ seconds, onRound }: { seconds: number; onRound: (seconds: number) => void }) {
+  const [left, setLeft] = useState(seconds);
+  const [running, setRunning] = useState(false);
+  const endAt = useRef(0);
+  const audio = useRef<AudioContext | null>(null);
+  const wake = useRef<WakeLock | null>(null);
+  const finish = useRef(onRound);
+  useEffect(() => {
+    finish.current = onRound;
+  });
+
+  function release() {
+    void wake.current?.release().catch(() => {});
+    wake.current = null;
+  }
+
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => {
+      const ms = endAt.current - Date.now();
+      if (ms > 0) return setLeft(Math.ceil(ms / 1000));
+      setRunning(false);
+      release();
+      setLeft(seconds);
+      beep(audio.current);
+      navigator.vibrate?.([300, 120, 300]);
+      finish.current(seconds);
+    }, 250);
+    return () => clearInterval(id);
+  }, [running, seconds]);
+
+  useEffect(() => release, []);
+
+  function start() {
+    // Made on the tap: a phone only lets a page make sound that a touch started.
+    audio.current = openAudio(audio.current);
+    const lock = (navigator as Navigator & { wakeLock?: { request: (type: "screen") => Promise<WakeLock> } }).wakeLock;
+    lock
+      ?.request("screen")
+      .then((w) => {
+        wake.current = w;
+      })
+      .catch(() => {});
+    endAt.current = Date.now() + left * 1000;
+    setRunning(true);
+  }
+
+  function pause() {
+    setRunning(false);
+    release();
+  }
+
+  const button = "h-11 flex-1 rounded-xl text-[14px] font-medium";
+  return (
+    <div className="mt-4 rounded-2xl border border-border bg-surface p-3">
+      <div
+        className={`text-center text-[44px] font-semibold leading-none tabular-nums ${running && left <= 10 ? "text-accent" : ""}`}
+        aria-live="off"
+      >
+        {formatDuration(left)}
+      </div>
+      <div className="mt-3 flex gap-2">
+        <button type="button" onClick={running ? pause : start} className={`${button} bg-accent text-white`}>
+          {running ? t("Pause") : left === seconds ? t("Start round") : t("Resume")}
+        </button>
+        {left !== seconds && (
+          <button
+            type="button"
+            onClick={() => {
+              pause();
+              finish.current(seconds - left);
+              setLeft(seconds);
+            }}
+            className={`${button} border border-border`}
+          >
+            {t("Done")}
+          </button>
+        )}
+        {left !== seconds && !running && (
+          <button type="button" onClick={() => setLeft(seconds)} className={`${button} border border-border text-muted`}>
+            {t("Reset")}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

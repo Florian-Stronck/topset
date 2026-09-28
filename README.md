@@ -166,7 +166,7 @@ Running the server for your coaches (Turso database + Vercel, both on free plans
 
 ## For developers
 
-**Stack:** Next.js 16 (App Router, server actions) · React 19 · Prisma 7 on SQLite (better-sqlite3 on the desktop, Turso/libSQL on the server) · Tailwind 4 · Electron for the Windows app · ExcelJS and jsPDF for exports.
+**Stack:** Next.js 16 (App Router, server actions) · React 19 · Prisma 7 on SQLite (better-sqlite3 on the desktop, Turso/libSQL on the server) · Tailwind 4 · Electron for the Windows app · ExcelJS and jsPDF for exports · the injury body map is drawn with [react-muscle-highlighter](https://github.com/soroojshehryar/react-muscle-highlighter) (MIT).
 
 > This Next.js version has breaking changes from older ones. Read `node_modules/next/dist/docs/` before changing framework-level code (see [AGENTS.md](AGENTS.md)).
 

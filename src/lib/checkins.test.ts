@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  countsForReadiness,
+  isBodyweight,
   answerDay,
   asksOn,
   cleanAnswer,
@@ -90,4 +92,20 @@ test("scales of any range read on 1–5, and the day's readiness averages them",
   assert.equal(day.score, 2.5);
   assert.deepEqual(day.low, [{ label: "Sleep", value: "1/5" }]);
   assert.equal(formatAnswer(steps, "9000"), "9000 steps");
+});
+
+test("a scale can be left out of readiness, and the weigh-in keeps its flag", () => {
+  const sleep = q({ id: "s", kind: "SCALE", config: { min: 1, max: 5 } });
+  const mood = q({ id: "m", kind: "SCALE", config: { min: 1, max: 5, readiness: false } });
+  const answers = [
+    { id: "a1", questionId: "s", day: "2026-09-28", value: "5" },
+    { id: "a2", questionId: "m", day: "2026-09-28", value: "1" },
+  ];
+  assert.equal(readinessOf([sleep, mood], answers).score, 5);
+  assert.equal(countsForReadiness(mood), false);
+  assert.deepEqual(parseConfig("SCALE", { min: 1, max: 5, readiness: false }), { min: 1, max: 5, readiness: false });
+  assert.deepEqual(parseConfig("SCALE", '{"min":1,"max":5,"readiness":true}'), { min: 1, max: 5 });
+  const weigh = q({ kind: "NUMBER", config: parseConfig("NUMBER", '{"bodyweight":true,"unit":"kg"}') });
+  assert.equal(isBodyweight(weigh), true);
+  assert.equal(isBodyweight(q({ kind: "NUMBER", config: { unit: "kg" } })), false);
 });

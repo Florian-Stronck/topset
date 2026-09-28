@@ -4,9 +4,13 @@ import { Sidebar } from "@/components/Sidebar";
 import { ProgressView } from "@/components/tracking/ProgressView";
 import { ReviewView } from "@/components/tracking/ReviewView";
 import { TrackingShell, type TrackingView } from "@/components/tracking/TrackingShell";
+import { InjuryPanel } from "@/components/InjuryPanel";
+import { LoadView } from "@/components/tracking/LoadView";
+import { deleteCoachInjury, saveCoachInjury } from "@/app/tracking/actions";
 import { WellnessView } from "@/components/tracking/WellnessView";
-import { classLimit } from "@/lib/bodyweight";
-import { today as calendarToday, ymdOf } from "@/lib/dates";
+import { weightToMake } from "@/lib/bodyweight";
+import { today as calendarToday, weekStartOf, ymdOf } from "@/lib/dates";
+import { acwr, dailyLoad, weekLoad } from "@/lib/load";
 import { blockWindow, startOfDay } from "@/lib/overview";
 import { liftProgress } from "@/lib/progress";
 import { exerciseHistory } from "@/lib/exercise-history";
@@ -17,7 +21,10 @@ import {
   getCheckins,
   getMessages,
   getNextMeets,
+  getTimedRows,
   getWorkspace,
+  hasTimedRows,
+  injuriesFor,
   toBlockData,
 } from "@/lib/queries";
 import { addDays } from "@/lib/schedule";
@@ -42,7 +49,8 @@ export default async function TrackingPage({
   const coach = await getCoach();
   if (coach.athletes.length === 0) redirect("/athletes");
 
-  const view: TrackingView = params.view === "progress" || params.view === "wellness" ? params.view : "review";
+  const view: TrackingView =
+    params.view === "progress" || params.view === "wellness" || params.view === "load" ? params.view : "review";
   const show = REVIEW_FILTERS.includes(params.show as ReviewFilter) ? (params.show as ReviewFilter) : null;
 
   const athlete = coach.athletes.find((a) => a.id === params.athlete) ?? coach.athletes[0];
@@ -53,10 +61,11 @@ export default async function TrackingPage({
   };
   const now = new Date();
   const today = ymdOf(calendarToday());
-  const [{ programs, program, phase }, phases, checkinMap] = await Promise.all([
+  const [{ programs, program, phase }, phases, checkinMap, hasLoad] = await Promise.all([
     getWorkspace(athlete.id, undefined, params.block),
     getAllPhasesForAthlete(athlete.id),
     getCheckins([athlete.id]),
+    hasTimedRows(athlete.id),
   ]);
   const checkins = checkinMap.get(athlete.id) ?? { questions: [], answers: [] };
   const unit = athlete.unit === "LB" ? "lb" : "kg";
@@ -70,9 +79,17 @@ export default async function TrackingPage({
   const unreviewed = blockData ? unreviewedDays(blockData, checkins.answers).size : 0;
 
   async function wellness() {
-    const [weights, meets] = await Promise.all([getBodyweights([athlete.id]), getNextMeets([athlete.id], startOfDay(now))]);
+    const [weights, meets, injuries] = await Promise.all([
+      getBodyweights([athlete.id]),
+      getNextMeets([athlete.id], startOfDay(now)),
+      injuriesFor(athlete.id),
+    ]);
     const meet = meets.get(athlete.id);
     return (
+      <>
+      <div className="mt-5">
+        <InjuryPanel initial={injuries} today={today} save={saveCoachInjury.bind(null, athlete.id)} remove={deleteCoachInjury} />
+      </div>
       <WellnessView
         athleteId={athlete.id}
         unit={unit}
@@ -80,14 +97,32 @@ export default async function TrackingPage({
         checkins={checkins}
         drift={sessionDrift(phases, addDays(today, -(WELLNESS_DAYS - 1)), today)}
         bodyweight={weights.get(athlete.id) ?? []}
-        meet={meet ? { name: meet.name, day: ymdOf(meet.date), weightClass: meet.weightClass, limit: classLimit(meet.weightClass) } : null}
+        meet={meet ? { name: meet.name, weightClass: meet.weightClass, ...weightToMake(meet) } : null}
       />
+      </>
     );
+  }
+
+  async function load() {
+    const daily = dailyLoad(await getTimedRows(athlete.id));
+    const { weekStart } = await loadSettings();
+    const thisWeek = weekStartOf(today, weekStart);
+    const days = [...daily.keys()].sort();
+    // From the first timed week, twelve back at most, through the plan's last one, six ahead at most.
+    const first = weekStartOf(days[0] ?? today, weekStart);
+    const last = weekStartOf(days.at(-1) ?? today, weekStart);
+    const from = first < addDays(thisWeek, -7 * 11) ? addDays(thisWeek, -7 * 11) : first;
+    const to = last > addDays(thisWeek, 7 * 6) ? addDays(thisWeek, 7 * 6) : last < thisWeek ? thisWeek : last;
+    const weeks = [];
+    for (let w = from; w <= to; w = addDays(w, 7)) weeks.push(weekLoad(daily, w));
+    return <LoadView weeks={weeks} current={weekLoad(daily, thisWeek)} ratio={acwr(daily, today)} />;
   }
 
   let body: React.ReactNode;
   if (view === "wellness") {
     body = await wellness();
+  } else if (view === "load") {
+    body = await load();
   } else if (!blockData) {
     body = (
       <div className="mx-auto mt-16 max-w-[720px] text-center">
@@ -146,6 +181,8 @@ export default async function TrackingPage({
         programName={program?.name ?? ""}
         hasLink={athlete.accessToken !== null}
         unreviewed={unreviewed}
+        hasLoad={hasLoad}
+        fighter={athlete.sport === "FIGHTER"}
       >
         {body}
       </TrackingShell>

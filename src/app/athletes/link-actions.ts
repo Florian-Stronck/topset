@@ -19,7 +19,13 @@ export type AthleteLink = {
   local: boolean;
 };
 
-async function linkFor(token: string | null): Promise<AthleteLink> {
+/** The athlete's own check-in link, or the read-only Tracking link for a second coach. */
+export type LinkKind = "athlete" | "viewer";
+
+const COLUMN = { athlete: "accessToken", viewer: "viewToken" } as const;
+const PATH = { athlete: "/a/", viewer: "/a/view/" } as const;
+
+async function linkFor(token: string | null, kind: LinkKind): Promise<AthleteLink> {
   const settings = await loadSettings();
   const configured = settings.athleteAppUrl.trim().replace(/\/+$/, "");
   let origin = configured;
@@ -30,33 +36,35 @@ async function linkFor(token: string | null): Promise<AthleteLink> {
   }
   if (!token) return { url: null, svg: null, local: !configured };
 
-  const url = `${origin}/a/${token}`;
+  const url = `${origin}${PATH[kind]}${token}`;
   const svg = await QRCode.toString(url, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
   return { url, svg, local: !configured };
 }
 
 /** The athlete's current link, if they have one. */
-export async function athleteLink(athleteId: string): Promise<AthleteLink> {
+export async function athleteLink(athleteId: string, kind: LinkKind = "athlete"): Promise<AthleteLink> {
   assertCoach();
   const athlete = await prisma.athlete.findUniqueOrThrow({
     where: { id: athleteId },
-    select: { accessToken: true },
+    select: { accessToken: true, viewToken: true },
   });
-  return linkFor(athlete.accessToken);
+  return linkFor(athlete[COLUMN[kind]], kind);
 }
 
 /** A fresh link. Any link handed out before stops working. */
-export async function createAccessLink(athleteId: string): Promise<AthleteLink> {
+export async function createAccessLink(athleteId: string, kind: LinkKind = "athlete"): Promise<AthleteLink> {
   assertCoach();
   const token = crypto.randomBytes(24).toString("base64url");
-  await prisma.athlete.update({ where: { id: athleteId }, data: { accessToken: token } });
+  await prisma.athlete.update({ where: { id: athleteId }, data: { [COLUMN[kind]]: token } });
   revalidatePath("/athletes");
-  return linkFor(token);
+  revalidatePath("/tracking");
+  return linkFor(token, kind);
 }
 
-export async function revokeAccessLink(athleteId: string): Promise<AthleteLink> {
+export async function revokeAccessLink(athleteId: string, kind: LinkKind = "athlete"): Promise<AthleteLink> {
   assertCoach();
-  await prisma.athlete.update({ where: { id: athleteId }, data: { accessToken: null } });
+  await prisma.athlete.update({ where: { id: athleteId }, data: { [COLUMN[kind]]: null } });
   revalidatePath("/athletes");
-  return linkFor(null);
+  revalidatePath("/tracking");
+  return linkFor(null, kind);
 }

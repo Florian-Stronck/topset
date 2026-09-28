@@ -107,6 +107,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "view-review", group: "Tracking view", title: "Review", keys: ["alt+1"] },
   { id: "view-progress", group: "Tracking view", title: "Progress", keys: ["alt+2"] },
   { id: "view-wellness", group: "Tracking view", title: "Wellness", keys: ["alt+3"] },
+  { id: "view-load", group: "Tracking view", title: "Load", keys: ["alt+4"] },
   { id: "track-autosync", group: "Tracking view", title: "Refresh on its own: on / off" },
   { id: "track-link", group: "Tracking", title: "Athlete check-in link…" },
 
@@ -194,9 +195,11 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "row-copy", group: "Row", title: "Copy the row's prescription", keys: ["alt+c"], when: "grid" },
   { id: "row-paste", group: "Row", title: "Paste it onto this row", keys: ["alt+v"], when: "grid" },
   { id: "day-rest", group: "Row", title: "Training day / rest day", keys: ["alt+r"], when: "grid" },
+  { id: "row-session", group: "Row", title: "Start a new session here", keys: ["alt+s"], when: "grid" },
   { id: "meet-fill", group: "Row", title: "Fill a meet day with its attempts", keys: ["alt+m"], when: "grid" },
 
   { id: "view-tight-intensity", group: "View", title: "Intensity beside reps / across the week" },
+  { id: "view-time", group: "View", title: "Show / hide the TIME column" },
   { id: "view-sidebar", group: "View", title: "Collapse / expand the sidebar" },
   { id: "view-theme", group: "View", title: "Dark / light theme" },
 

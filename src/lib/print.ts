@@ -1,4 +1,5 @@
 import { jsPDF } from "jspdf";
+import { volumeText } from "@/lib/duration";
 import { drawBrandBlock, footerText } from "@/lib/branding";
 import { formatDate, weekdayOfDay } from "@/lib/dates";
 import { dayName } from "@/lib/days";
@@ -96,7 +97,7 @@ export function toPrintPdf(block: BlockWithDays, onlyWeek?: number): Buffer {
           target?.ramp && target.ramp.length > 1 ? `${target.ramp.join(" / ")} ${unit}` : null;
         const values: Record<ColKey, string> = {
           exercise: pdfSafe(row.exercise),
-          volume: `${row.sets ?? "—"} × ${row.reps ?? "—"}`,
+          volume: volumeText(row),
           intensity: pdfSafe(formatPrescription(row, block.athlete.unit)),
           load: ramp ?? (target?.weight != null ? `${target.weight} ${unit}` : ""),
           tempo: pdfSafe(row.tempo ?? ""),

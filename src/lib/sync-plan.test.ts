@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { athleteSignature, coachSignature, logChanges, mergeAthleteColumns, newerRows, stampOf, syncedTable, tableChanges, upsertSql } from "@/lib/sync-plan";
+import { athleteSignature, coachSignature, logChanges, mergeAthleteColumns, newerRows, stampOf, syncedTable, tableChanges, upsertSql, validMergedRow } from "@/lib/sync-plan";
 
 const cols = ["id", "exercise", "sets", "actualWeight", "performedRpe", "athleteNotes"];
 const row = (id: string, exercise: string, actualWeight: number | null = null) => ({
@@ -101,4 +101,27 @@ test("merged rows: only new or newer ones cross", () => {
 
 test("bodyweight is merged, not pushed as a coach table", () => {
   assert.equal(syncedTable("BodyweightLog"), false);
+});
+
+test("an injury syncs only with an area, a severity and real dates", () => {
+  const row = {
+    id: "i1",
+    athleteId: "a1",
+    area: "knee",
+    side: "L",
+    day: "2026-09-20",
+    endDay: null,
+    severity: 3,
+    note: null,
+    source: "athlete",
+    createdAt: "2026-09-20T08:00:00.000Z",
+    updatedAt: "2026-09-20T08:00:00.000Z",
+    deletedAt: null,
+  };
+  assert.equal(validMergedRow("Injury", row), true);
+  assert.equal(validMergedRow("Injury", { ...row, endDay: "2026-09-25" }), true);
+  assert.equal(validMergedRow("Injury", { ...row, area: "" }), false);
+  assert.equal(validMergedRow("Injury", { ...row, severity: "bad" }), false);
+  assert.equal(validMergedRow("Injury", { ...row, endDay: "soon" }), false);
+  assert.equal(syncedTable("Injury"), false);
 });
