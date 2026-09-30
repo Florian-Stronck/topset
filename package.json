@@ -1,6 +1,6 @@
 {
   "name": "topset",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -13,6 +13,7 @@
     "test": "tsx --test \"src/**/*.test.ts\"",
     "desktop": "electron .",
     "desktop:build": "node scripts/make-icon.mjs && next build && node scripts/prepare-desktop.mjs && node scripts/package-desktop.mjs",
+    "desktop:release": "node scripts/make-icon.mjs && next build && node scripts/prepare-desktop.mjs && node scripts/package-desktop.mjs --publish",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma db push --force-reset && tsx prisma/seed.ts"
@@ -26,6 +27,7 @@
     "@prisma/adapter-libsql": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "better-sqlite3": "^13.0.3",
+    "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
     "jspdf": "^4.2.1",
     "mediabunny": "^1.60.0",

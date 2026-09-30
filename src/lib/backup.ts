@@ -17,6 +17,14 @@ export function stagedRestorePath(): string {
   return path.join(path.dirname(databasePath()), "topset-restore.db");
 }
 
+/**
+ * Left by a restore: the next sync makes the server match the restored copy (deletes and
+ * all), rather than merging the server's newer rows back into it.
+ */
+export function syncResetPath(): string {
+  return path.join(path.dirname(databasePath()), "topset-sync-reset");
+}
+
 function tempFile() {
   return path.join(os.tmpdir(), `topset-${crypto.randomUUID()}.db`);
 }
@@ -96,6 +104,7 @@ export async function stageRestore(bytes: Buffer): Promise<{ ok: true; text?: st
     }
 
     fs.copyFileSync(tmp, stagedRestorePath());
+    fs.writeFileSync(syncResetPath(), "");
     return { ok: true };
   } finally {
     fs.rmSync(tmp, { force: true });

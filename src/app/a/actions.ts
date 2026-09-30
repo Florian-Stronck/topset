@@ -7,6 +7,7 @@ import {
   CLIP_TYPES,
   cleanSetIndex,
   clipType,
+  looksLikeVideo,
   MAX_CLIP_BYTES,
   MAX_CLIPS_PER_DAY,
   MAX_CLIPS_PER_ROW,
@@ -14,12 +15,24 @@ import {
   type ClipView,
 } from "@/lib/athlete-videos";
 import { bodyweightEntry, type BodyweightEntry } from "@/lib/bodyweight";
-import { answerDay, asksOn, cleanAnswer, questionData } from "@/lib/checkins";
+import {
+  answerDay,
+  asksOn,
+  cleanAnswer,
+  looksLikeJpeg,
+  MAX_PHOTO_BYTES,
+  MAX_PHOTOS_PER_ANSWER,
+  MAX_PHOTOS_PER_DAY,
+  nutrientOf,
+  questionData,
+  type PhotoView,
+} from "@/lib/checkins";
+import { cleanAmount, isEmpty, nutritionId } from "@/lib/nutrition";
 import { cleanInjury, injuryData, type InjuryData, type InjuryInput } from "@/lib/injuries";
 import { prisma } from "@/lib/prisma";
-import { PUSH_KINDS, type PushPrefs } from "@/lib/push-kinds";
+import { PUSH_KINDS, pushServiceEndpoint, type PushPrefs } from "@/lib/push-kinds";
 import { rowActuals } from "@/lib/setlog";
-import { deleteObject, objectSize, presign, storageConfig } from "@/lib/storage";
+import { deleteObject, objectSize, objectStart, presign, storageConfig } from "@/lib/storage";
 
 /**
  * What the athlete app can write. Every call carries the athlete's token and is checked
@@ -193,6 +206,24 @@ export async function saveCheckinAnswer(token: string, questionId: string, day: 
 
   const value = cleanAnswer(question, raw);
   const filed = answerDay(question, day);
+  const nutrient = nutrientOf(question);
+  if (nutrient) {
+    // Answered into the nutrition log, the day's row, like a weigh-in into the bodyweight log.
+    const amount = cleanAmount(nutrient, value);
+    const id = nutritionId(athlete.id, filed);
+    const held = await prisma.nutritionLog.findUnique({ where: { id } });
+    const live = held && !held.deletedAt ? held : null;
+    const next = { kcal: live?.kcal ?? null, protein: live?.protein ?? null, carbs: live?.carbs ?? null, fat: live?.fat ?? null, [nutrient]: amount };
+    const deletedAt = isEmpty(next) ? new Date() : null;
+    await prisma.nutritionLog.upsert({
+      where: { id },
+      create: { id, athleteId: athlete.id, day: filed, ...next, source: "athlete", deletedAt },
+      update: { ...next, source: "athlete", deletedAt },
+      select: { id: true },
+    });
+    await changed(token);
+    return amount === null ? null : String(amount);
+  }
   const key = { questionId_day: { questionId, day: filed } };
   if (value === null) {
     await prisma.checkinAnswer.updateMany({ where: { questionId, day: filed, deletedAt: null }, data: { deletedAt: new Date() } });
@@ -247,7 +278,7 @@ export async function subscribePush(token: string, signup: PushSignup, timeZone?
   if (!athlete) throw new Error("Not found.");
   const { endpoint, keys } = signup ?? {};
   const short = (v: unknown, max: number) => typeof v === "string" && v.length > 0 && v.length <= max;
-  if (!short(endpoint, 1000) || !endpoint.startsWith("https://") || !short(keys?.p256dh, 200) || !short(keys?.auth, 100)) {
+  if (!short(endpoint, 1000) || !pushServiceEndpoint(endpoint) || !short(keys?.p256dh, 200) || !short(keys?.auth, 100)) {
     throw new Error("That isn't a push sign-up.");
   }
   const zone = cleanZone(timeZone);
@@ -376,10 +407,14 @@ async function confirmClip(token: string, id: string): Promise<ClipView> {
 
   const size = await objectSize(config, clip.storageKey);
   if (size === null) throw new Error("The video didn't arrive. Try again.");
-  if (size > MAX_CLIP_BYTES) {
+  const refuse = async (why: string) => {
     await deleteObject(config, clip.storageKey).catch(() => {});
     await prisma.athleteVideo.update({ where: { id }, data: { deletedAt: new Date() } });
-    throw new Error("That video is too large.");
+    throw new Error(why);
+  };
+  if (size > MAX_CLIP_BYTES) await refuse("That video is too large.");
+  if (!looksLikeVideo((await objectStart(config, clip.storageKey, 12)) ?? new Uint8Array())) {
+    await refuse("That isn't a video Topset can take.");
   }
   const uploadedAt = clip.uploadedAt ?? new Date();
   await prisma.athleteVideo.update({ where: { id }, data: { size, uploadedAt } });
@@ -419,6 +454,93 @@ export async function setClipSet(token: string, id: string, setIndex: number | n
     data: { setIndex: cleanSetIndex(setIndex) },
   });
   if (count > 0) await changed(token);
+}
+
+/**
+ * Makes room for a photo on a check-in answer and hands back a link the phone uploads it
+ * to, straight to storage — the way `startClip` does for videos. The phone has already
+ * shrunk it to a JPEG; `finishPhoto` then checks it arrived and is one.
+ */
+export async function startPhoto(
+  token: string,
+  questionId: string,
+  day: string,
+  size: number,
+): Promise<ClipResult<ClipUpload>> {
+  return answer(async () => {
+    const config = storageConfig();
+    if (!config) throw new Error("Photos aren't set up on this server.");
+    const athlete = await getAthleteByToken(token);
+    if (!athlete) throw new Error("Not found.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(day))) throw new Error("That day isn't a date.");
+    const row = await prisma.checkinQuestion.findFirst({ where: { id: questionId, athleteId: athlete.id } });
+    if (!row) throw new Error("Not found.");
+    const question = questionData(row);
+    if (!question.config.photo || !asksOn(question, day)) throw new Error("Your coach doesn't ask for a photo here.");
+    if (!Number.isInteger(size) || size <= 0) throw new Error("That photo is empty.");
+    if (size > MAX_PHOTO_BYTES) throw new Error("That photo is too large.");
+
+    const filed = answerDay(question, day);
+    const [onAnswer, today] = await Promise.all([
+      prisma.checkinPhoto.count({ where: { questionId, day: filed, deletedAt: null } }),
+      prisma.checkinPhoto.count({ where: { athleteId: athlete.id, createdAt: { gt: new Date(Date.now() - 86_400_000) } } }),
+    ]);
+    if (onAnswer >= MAX_PHOTOS_PER_ANSWER) throw new Error("That's as many photos as this answer takes.");
+    if (today >= MAX_PHOTOS_PER_DAY) throw new Error("That's enough photos for today.");
+
+    const contentType = "image/jpeg";
+    const storageKey = `p/${athlete.id}/${crypto.randomUUID()}.jpg`;
+    const photo = await prisma.checkinPhoto.create({
+      data: { athleteId: athlete.id, questionId, day: filed, contentType, size, storageKey },
+    });
+    const url = presign(config, {
+      method: "PUT",
+      key: storageKey,
+      expiresIn: UPLOAD_LINK_SECONDS,
+      headers: { "Content-Type": contentType, "Content-Length": String(size) },
+    });
+    return { id: photo.id, url, contentType };
+  });
+}
+
+/** The photo is in: checked against storage, it becomes one the coach gets. */
+export async function finishPhoto(token: string, id: string): Promise<ClipResult<PhotoView>> {
+  return answer(async () => {
+    const config = storageConfig();
+    if (!config) throw new Error("Photos aren't set up on this server.");
+    const athlete = await getAthleteByToken(token);
+    if (!athlete) throw new Error("Not found.");
+    const photo = await prisma.checkinPhoto.findFirst({ where: { id, athleteId: athlete.id, deletedAt: null } });
+    if (!photo) throw new Error("Not found.");
+
+    const size = await objectSize(config, photo.storageKey);
+    if (size === null) throw new Error("The photo didn't arrive. Try again.");
+    if (size > MAX_PHOTO_BYTES || !looksLikeJpeg((await objectStart(config, photo.storageKey, 3)) ?? new Uint8Array())) {
+      await deleteObject(config, photo.storageKey).catch(() => {});
+      await prisma.checkinPhoto.update({ where: { id }, data: { deletedAt: new Date() } });
+      throw new Error("That isn't a photo Topset can take.");
+    }
+    await prisma.checkinPhoto.update({ where: { id }, data: { size, uploadedAt: photo.uploadedAt ?? new Date() } });
+    await changed(token);
+    return {
+      id,
+      questionId: photo.questionId,
+      day: photo.day,
+      url: presign(config, { method: "GET", key: photo.storageKey, expiresIn: 6 * 60 * 60 }),
+    };
+  });
+}
+
+/** Takes a photo back: gone from storage, and a tombstone so the coach's app drops it. */
+export async function deletePhoto(token: string, id: string) {
+  const athlete = await getAthleteByToken(token);
+  if (!athlete) throw new Error("Not found.");
+  const photo = await prisma.checkinPhoto.findFirst({ where: { id, athleteId: athlete.id, deletedAt: null } });
+  if (!photo) return;
+  await prisma.checkinPhoto.update({ where: { id }, data: { deletedAt: new Date() } });
+  const config = storageConfig();
+  if (config) await deleteObject(config, photo.storageKey).catch(() => {});
+  await changed(token);
 }
 
 /**

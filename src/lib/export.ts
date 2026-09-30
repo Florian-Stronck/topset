@@ -114,10 +114,13 @@ function buildMatrix(block: BlockWithDays): Matrix {
   return rows;
 }
 
+/** Text a spreadsheet would run as a formula (`=`, `+`, `-`, `@`) gets a `'` in front. */
+export const noFormula = (s: string) => (/^[=+\-@\t\r]/.test(s) ? `'${s}` : s);
+
 export function toCsv(block: BlockWithDays): string {
   const escape = (v: string | number | null | undefined) => {
     if (v === null || v === undefined) return "";
-    const s = String(v);
+    const s = typeof v === "string" ? noFormula(v) : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return buildMatrix(block)

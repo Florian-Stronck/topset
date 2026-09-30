@@ -2,7 +2,7 @@
 // output. electron-builder empties dist-desktop/win-unpacked before packaging, and the
 // app keeps its database, backups and settings beside its exe — so they are moved aside
 // for the build and put back afterwards, whether or not it succeeds. They are put back
-// after the zip is written, so they never end up in it.
+// after the installer is written, so they never end up in it.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
@@ -41,7 +41,9 @@ if (data.length) {
 
 let status = 1;
 try {
-  status = spawnSync("npx", ["electron-builder", "--win"], { stdio: "inherit", shell: true }).status ?? 1;
+  // `--publish always` from desktop:release uploads to GitHub; a plain build never does.
+  const publish = process.argv.includes("--publish") ? ["--publish", "always"] : ["--publish", "never"];
+  status = spawnSync("npx", ["electron-builder", "--win", ...publish], { stdio: "inherit", shell: true }).status ?? 1;
 } finally {
   if (data.length) {
     mkdirSync(appDir, { recursive: true });

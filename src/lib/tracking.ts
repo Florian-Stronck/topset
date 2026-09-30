@@ -3,7 +3,7 @@ import { LOW_READINESS, readinessOf, scaleScore, type CheckinAnswerData, type Ch
 import { daySets, rpeDrift, type DayStatus, type OffPlan } from "@/lib/compliance";
 import { keyOf, type ExerciseHistory, type ExerciseLog, type HistoryBlock } from "@/lib/exercise-history";
 import { estimate1RM, liftOf } from "@/lib/intensity";
-import { addDays, dateOfDay } from "@/lib/schedule";
+import { addDays, NO_MOVES, sessionDate } from "@/lib/schedule";
 import { rpeOf } from "@/lib/setlog";
 import type { AthleteData, BlockData, DayData, RowData } from "@/lib/types";
 import { activeSettings } from "@/lib/settings";
@@ -164,12 +164,16 @@ export type PreviousLog = { ymd: string; weight: number; reps: number | null; rp
  * For every row of a phase, the last time its exercise was logged on an earlier day, in
  * this program or any before it — what "vs last week" compares against.
  */
-export function previousLogs(block: Pick<BlockData, "startDate" | "weeks">, history: ExerciseHistory[]): Record<string, PreviousLog> {
+export function previousLogs(
+  block: Pick<BlockData, "startDate" | "weeks">,
+  history: ExerciseHistory[],
+  moves: ReadonlyMap<string, string> = NO_MOVES,
+): Record<string, PreviousLog> {
   const byName = new Map(history.map((h) => [keyOf(h.name), h.logs]));
   const out: Record<string, PreviousLog> = {};
   for (const week of block.weeks) {
     for (const day of week.days) {
-      const ymd = dateOfDay(block.startDate, week.order, day.index);
+      const ymd = sessionDate(block.startDate, week.order, day, moves);
       for (const row of day.rows) {
         if (!programmed(row)) continue;
         const logs = byName.get(keyOf(row.exercise));
@@ -201,12 +205,16 @@ export function sessionActivity(day: Pick<DayData, "rows">, answers: Pick<Checki
 }
 
 /** The sessions of a phase waiting for the coach's review. */
-export function unreviewedDays(block: Pick<BlockData, "startDate" | "weeks">, answers: CheckinAnswerData[]): Set<string> {
+export function unreviewedDays(
+  block: Pick<BlockData, "startDate" | "weeks">,
+  answers: CheckinAnswerData[],
+  moves: ReadonlyMap<string, string> = NO_MOVES,
+): Set<string> {
   const out = new Set<string>();
   for (const week of block.weeks) {
     for (const day of week.days) {
       if (day.rest) continue;
-      const ymd = dateOfDay(block.startDate, week.order, day.index);
+      const ymd = sessionDate(block.startDate, week.order, day, moves);
       const { hasWork, last } = sessionActivity(day, answers.filter((a) => a.day === ymd));
       if (needsReview(hasWork, last, day.reviewedAt ?? null)) out.add(day.id);
     }
@@ -303,13 +311,18 @@ export function readinessSeries(questions: CheckinQuestionData[], answers: Check
  * RPE against the plan for each session in a stretch of days: the mean of logged minus
  * prescribed, over the rows that have both. For putting beside how ready the athlete felt.
  */
-export function sessionDrift(blocks: HistoryBlock[], from: string, to: string): { ymd: string; drift: number }[] {
+export function sessionDrift(
+  blocks: HistoryBlock[],
+  from: string,
+  to: string,
+  moves: ReadonlyMap<string, string> = NO_MOVES,
+): { ymd: string; drift: number }[] {
   const out: { ymd: string; drift: number }[] = [];
   for (const block of blocks) {
     for (const week of block.weeks) {
       for (const day of week.days) {
         if (day.rest) continue;
-        const ymd = dateOfDay(block.startDate, week.order, day.index);
+        const ymd = sessionDate(block.startDate, week.order, day, moves);
         if (ymd < from || ymd > to) continue;
         const { mean } = rpeDrift(day.rows);
         if (mean !== null) out.push({ ymd, drift: mean });

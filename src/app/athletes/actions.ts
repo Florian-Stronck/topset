@@ -275,7 +275,7 @@ export async function updateCheckinQuestion(id: string, input: CheckinQuestionIn
 /** Takes a question off the athlete's check-in. One already answered is archived, so its answers keep their label. */
 export async function removeCheckinQuestion(id: string) {
   assertCoach();
-  const answered = await prisma.checkinAnswer.count({ where: { questionId: id } });
+  const answered = (await prisma.checkinAnswer.count({ where: { questionId: id } })) + (await prisma.checkinPhoto.count({ where: { questionId: id } }));
   if (answered > 0) await prisma.checkinQuestion.update({ where: { id }, data: { archived: true } });
   else await prisma.checkinQuestion.delete({ where: { id } });
   revalidateCheckins();

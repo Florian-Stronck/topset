@@ -12,14 +12,19 @@ const dev = !app.isPackaged;
 
 
 /**
- * Where the training data lives: beside the app, so the whole folder can be moved or
- * copied to a stick and still be itself. `PORTABLE_EXECUTABLE_DIR` is set by the older
- * single-file build, whose exe ran from a temporary unpack directory.
+ * Where the training data lives: %APPDATA%\Topset, which installer updates never touch.
+ * A folder from the old zip build that already has its database beside Topset.exe keeps
+ * using it there. `PORTABLE_EXECUTABLE_DIR` is set by the even older single-file build,
+ * whose exe ran from a temporary unpack directory.
  */
+function beside() {
+  return path.join(process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(app.getPath("exe")), "topset.db");
+}
+
 function databaseFile() {
   if (dev) return path.join(app.getAppPath(), "dev.db");
-  const beside = process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(app.getPath("exe"));
-  return path.join(beside, "topset.db");
+  if (fs.existsSync(beside())) return beside();
+  return path.join(app.getPath("appData"), "Topset", "topset.db");
 }
 
 /** A path inside the app's own code — the main process and what it loads directly. */
@@ -250,11 +255,63 @@ function dailyBackup(db, file) {
   return rotateBackups(file, backupSettings(db), async (dest) => snapshotTo(db, dest));
 }
 
+/**
+ * First start of an installed copy, with no data yet: offer to bring over a folder from the
+ * zip build. It copies and never moves — the old folder stays exactly as it was, so it is
+ * still there to go back to. The database goes through SQLite (WAL and all); everything
+ * else beside it (sign-in, zoom, backups, videos, photos) is copied as is.
+ */
+async function offerImport(Database, file) {
+  if (dev || fs.existsSync(file)) return;
+  const { response } = await dialog.showMessageBox(window, {
+    type: "question",
+    buttons: ["Choose folder…", "Start empty"],
+    defaultId: 0,
+    cancelId: 1,
+    message: "Bring over your data from an earlier Topset?",
+    detail: "If you used Topset from an unzipped folder, pick that folder (the one with topset.db in it). It is copied, and the old folder is left as it is.",
+  });
+  if (response !== 0) return;
+
+  for (;;) {
+    const picked = await dialog.showOpenDialog(window, { title: "Folder with topset.db", properties: ["openDirectory"] });
+    if (picked.canceled || !picked.filePaths[0]) return;
+    const from = picked.filePaths[0];
+    const source = path.join(from, "topset.db");
+    if (!fs.existsSync(source)) {
+      const again = await dialog.showMessageBox(window, {
+        type: "warning",
+        buttons: ["Pick another", "Start empty"],
+        defaultId: 0,
+        cancelId: 1,
+        message: "There is no topset.db in that folder.",
+      });
+      if (again.response !== 0) return;
+      continue;
+    }
+
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    for (const name of fs.readdirSync(from)) {
+      if (!/^topset-/.test(name) || name === "topset-error.log") continue;
+      fs.cpSync(path.join(from, name), path.join(path.dirname(file), name), { recursive: true, force: false });
+    }
+    const db = new Database(source, { readonly: true, fileMustExist: true });
+    try {
+      // Last, so a copy that fails part-way leaves no database and the offer comes back.
+      snapshotTo(db, file);
+    } finally {
+      db.close();
+    }
+    return;
+  }
+}
+
 /** Brings the database up to the schema this build expects before anything reads it. */
 async function prepareDatabase(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
 
   const Database = require(appFile("node_modules", "better-sqlite3"));
+  await offerImport(Database, file);
   applyStagedRestore(Database, file);
 
   const existed = fs.existsSync(file);
@@ -332,6 +389,8 @@ async function start() {
       NODE_ENV: "production",
       DATABASE_URL: `file:${file}`,
       TOPSET_DESKTOP: "1",
+      // Sent with every sync, so the server can turn away a copy too old for it.
+      TOPSET_APP_VERSION: app.getVersion(),
       TOPSET_CLOUD_FILE: cloudFile(),
       // A desktop app never works on the server's database, whatever the shell has set.
       TURSO_DATABASE_URL: "",
@@ -355,6 +414,40 @@ async function start() {
   await waitForServer(port, server, () => output);
   await window.loadURL(`http://127.0.0.1:${port}/programming`);
 
+  watchForUpdates();
+}
+
+const UPDATE_EVERY_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * Installed copies download new releases from GitHub in the background and ask to restart
+ * once one is ready; "Later" installs it the next time Topset closes. Only an installed copy
+ * has app-update.yml, so dev and the old zip folders never check.
+ */
+function watchForUpdates() {
+  if (dev || !fs.existsSync(path.join(process.resourcesPath, "app-update.yml"))) return;
+  const { autoUpdater } = require("electron-updater");
+  let asked = false;
+
+  autoUpdater.on("error", (error) => console.error("[topset] update check failed", error));
+  autoUpdater.on("update-downloaded", async ({ version }) => {
+    if (asked) return;
+    asked = true;
+    const { response } = await dialog.showMessageBox(window, {
+      type: "info",
+      buttons: ["Restart now", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      message: `Topset ${version} is ready`,
+      detail: "Restart to update now, or it installs the next time you close Topset.",
+    });
+    if (response === 0) autoUpdater.quitAndInstall();
+  });
+
+  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+  check();
+  // Coaches leave it open for days.
+  setInterval(check, UPDATE_EVERY_MS);
 }
 
 app.whenReady().then(() =>

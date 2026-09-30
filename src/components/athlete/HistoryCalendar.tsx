@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import type { DayKind } from "@/lib/calendar";
+import type { DayKind, DayMarks } from "@/lib/calendar";
 import { t } from "@/lib/i18n";
 
-export type CalendarCell = { ymd: string; day: number; inMonth: boolean; kind: DayKind };
+export type CalendarCell = { ymd: string; day: number; inMonth: boolean; kind: DayKind; marks?: DayMarks };
 
 /** How each kind of day is drawn: a filled chip, or for a missed day a ring only. */
 const CHIP: Record<DayKind, string> = {
@@ -13,7 +13,7 @@ const CHIP: Record<DayKind, string> = {
   done: "bg-cal-done text-white",
   pr: "bg-cal-pr text-black",
   meet: "bg-cal-meet text-black",
-  missed: "text-foreground shadow-[inset_0_0_0_1.5px_var(--cal-missed)]",
+  missed: "text-foreground shadow-[inset_0_0_0_var(--cal-missed-ring)_var(--cal-missed)]",
   none: "text-muted",
 };
 
@@ -92,12 +92,18 @@ export function HistoryCalendar({
                   isSelected ? "bg-surface-3" : ""
                 } ${cell.inMonth ? "" : "opacity-35"}`}
               >
-                <span
-                  className={`grid size-9 place-items-center rounded-full text-[14px] tabular-nums ${CHIP[cell.kind]} ${
-                    isToday ? "font-bold outline-2 outline-offset-2 outline-accent" : ""
-                  }`}
-                >
-                  {cell.day}
+                <span className="relative">
+                  <span
+                    className={`grid size-9 place-items-center rounded-full text-[14px] tabular-nums ${
+                      cell.marks?.movedTo && cell.kind === "none" ? MOVED_AWAY : CHIP[cell.kind]
+                    } ${isToday ? "font-bold outline-2 outline-offset-2 outline-accent" : ""}`}
+                  >
+                    {cell.day}
+                  </span>
+                  {cell.marks?.movedFrom && <MovedHere />}
+                  {(cell.marks?.meetings ?? 0) > 0 && (
+                    <span aria-hidden className="absolute -bottom-1 left-1/2 size-1.5 -translate-x-1/2 rounded-full bg-cal-meeting" />
+                  )}
                 </span>
               </button>
             );
@@ -112,6 +118,20 @@ export function HistoryCalendar({
             {t(l.label)}
           </li>
         ))}
+        <li className="flex items-center gap-1.5">
+          <span className="relative size-3">
+            <MovedHere small />
+          </span>
+          {t("Moved here")}
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span className={`size-3 rounded-full ${MOVED_AWAY}`} />
+          {t("Moved away")}
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span className="size-1.5 rounded-full bg-cal-meeting" />
+          {t("Meeting")}
+        </li>
       </ul>
 
       {thisMonth && (
@@ -128,6 +148,25 @@ export function HistoryCalendar({
         </section>
       )}
     </div>
+  );
+}
+
+/** A day a session left: a dashed ring, in the moved colour. */
+const MOVED_AWAY = "text-muted border border-dashed border-cal-moved";
+
+/** The corner badge on a day a session was moved onto. */
+function MovedHere({ small = false }: { small?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={`absolute grid place-items-center rounded-full bg-cal-moved text-white ${
+        small ? "inset-0" : "-right-1 -top-1 size-4 ring-2 ring-surface"
+      }`}
+    >
+      <svg width={small ? 8 : 10} height={small ? 8 : 10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 12h14M13 6l6 6-6 6" />
+      </svg>
+    </span>
   );
 }
 

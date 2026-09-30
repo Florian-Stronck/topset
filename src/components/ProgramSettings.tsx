@@ -9,6 +9,7 @@ import {
   importProgram,
   updateBlock,
   updateBlockMaxes,
+  updateBlockTargets,
   updateProgram,
 } from "@/app/programming/actions";
 import { NumberInput, TextInput } from "@/components/cells";
@@ -25,9 +26,16 @@ const MAXES = [
   { key: "dead1RM", label: "DEADLIFT" },
 ] as const;
 
+const TARGETS = [
+  { key: "kcalTarget", label: "KCAL" },
+  { key: "proteinTarget", label: "PROTEIN" },
+  { key: "carbsTarget", label: "CARBS" },
+  { key: "fatTarget", label: "FAT" },
+] as const;
+
 /**
  * The program's name, then everything about the phase that is open: when it runs, the
- * 1RMs its target weights come off, the files, and the two deletes.
+ * 1RMs its target weights come off, what the athlete eats to, the files, and the two deletes.
  */
 export function ProgramSettings({
   program,
@@ -115,6 +123,26 @@ export function ProgramSettings({
       <p className="mt-1.5 text-[11px] leading-snug text-muted-2">
         In {unit}. Editing these moves this phase&rsquo;s target weights only — the other phases,
         and {athlete.name}&rsquo;s own 1RMs, stay as they are.
+      </p>
+
+      <div className="mt-4 text-[11px] tracking-[0.14em] text-muted-2">{t("NUTRITION — TARGETS PER DAY")}</div>
+      <div className="mt-1.5 flex gap-1.5">
+        {TARGETS.map((m) => (
+          <Label key={m.key} text={t(m.label)} className="flex-1">
+            <NumberInput
+              value={phase[m.key]}
+              align="left"
+              onCommit={(v) =>
+                startTransition(() => {
+                  void updateBlockTargets(phase.id, { [m.key]: v });
+                })
+              }
+            />
+          </Label>
+        ))}
+      </div>
+      <p className="mt-1.5 text-[11px] leading-snug text-muted-2">
+        {t("Kcal, then grams. A day hits when calories land within 10% and protein reaches its target. The next phase starts with these.")}
       </p>
 
       <div className="mt-4 text-[11px] tracking-[0.14em] text-muted-2">{t("PROGRAM FILE")}</div>

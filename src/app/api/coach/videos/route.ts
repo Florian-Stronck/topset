@@ -10,8 +10,8 @@ const DOWNLOAD_LINK_SECONDS = 60 * 60;
 const MAX_IDS = 100;
 
 /**
- * Download links for videos the coach's athletes sent, for their desktop app to keep a
- * copy: `{ ids }` in, `{ urls: { id: link } }` out. Only the coach's own athletes' videos
+ * Download links for videos and check-in photos the coach's athletes sent, for their
+ * desktop app to keep a copy: `{ ids }` in, `{ urls: { id: link } }` out. Only the coach's own athletes' files
  * that finished uploading and weren't taken back get one; the file's place in storage is
  * read from the server's row, never taken from the request.
  */
@@ -25,11 +25,12 @@ export async function POST(request: Request) {
 
     const client = cloudClient();
     try {
+      const pick = (table: string) =>
+        `SELECT "id", "storageKey" FROM "${table}" WHERE "id" IN (${ids.map(() => "?").join(", ")}) ` +
+        `AND "uploadedAt" IS NOT NULL AND "deletedAt" IS NULL AND "id" IN (${ownedIdsSql(table)})`;
       const rs = await client.execute({
-        sql:
-          `SELECT "id", "storageKey" FROM "AthleteVideo" WHERE "id" IN (${ids.map(() => "?").join(", ")}) ` +
-          `AND "uploadedAt" IS NOT NULL AND "deletedAt" IS NULL AND "id" IN (${ownedIdsSql("AthleteVideo")})`,
-        args: [...ids, coach.id],
+        sql: `${pick("AthleteVideo")} UNION ALL ${pick("CheckinPhoto")}`,
+        args: [...ids, coach.id, ...ids, coach.id],
       });
       const urls: Record<string, string> = {};
       for (const row of rs.rows) {

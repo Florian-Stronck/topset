@@ -18,7 +18,11 @@ import { addDays } from "@/lib/schedule";
  * range and put back on 1–5, then averaged — all but the ones the coach leaves out of it.
  *
  * Bodyweight is a question like the others, a NUMBER marked `bodyweight`: its answers go to
- * the bodyweight log rather than here, so the trend and the weight cut read them.
+ * the bodyweight log rather than here, so the trend and the weight cut read them. Nutrition
+ * works the same way: a NUMBER marked with a `nutrient` answers into the nutrition log.
+ *
+ * Any question can also ask for a photo (`photo`): the athlete adds pictures to the answer,
+ * and they are kept as `CheckinPhoto` rows filed under the question and day.
  */
 
 export type CheckinKind = "NUMBER" | "SCALE" | "SINGLE" | "MULTI" | "YESNO" | "TEXT";
@@ -26,11 +30,19 @@ export type CheckinCadence = "DAILY" | "WEEKLY";
 
 export const KINDS: CheckinKind[] = ["NUMBER", "SCALE", "SINGLE", "MULTI", "YESNO", "TEXT"];
 
+export type Nutrient = "kcal" | "protein" | "carbs" | "fat";
+export const NUTRIENTS: Nutrient[] = ["kcal", "protein", "carbs", "fat"];
+export const NUTRIENT_UNIT: Record<Nutrient, string> = { kcal: "kcal", protein: "g", carbs: "g", fat: "g" };
+
 export type CheckinConfig = {
   /** NUMBER: what it is counted in — "kcal", "h", "L". */
   unit?: string;
   /** NUMBER: this is the weigh-in, answered into the bodyweight log in the athlete's unit. */
   bodyweight?: true;
+  /** NUMBER: answered into the nutrition log, as this day's total of it. */
+  nutrient?: Nutrient;
+  /** Any kind: the athlete can add photos to the answer. */
+  photo?: true;
   /** SCALE: false leaves it out of the readiness score. */
   readiness?: false;
   /** SCALE: the ends and what they mean. */
@@ -106,9 +118,17 @@ export function parseConfig(kind: CheckinKind, raw: string | CheckinConfig | nul
       obj = {};
     }
   } else if (raw && typeof raw === "object") obj = raw as Record<string, unknown>;
+  const config = kindConfig(kind, obj);
+  return obj.photo === true ? { ...config, photo: true } : config;
+}
 
+function kindConfig(kind: CheckinKind, obj: Record<string, unknown>): CheckinConfig {
   if (kind === "NUMBER") {
     if (obj.bodyweight === true) return { bodyweight: true };
+    if (NUTRIENTS.includes(obj.nutrient as Nutrient)) {
+      const nutrient = obj.nutrient as Nutrient;
+      return { nutrient, unit: NUTRIENT_UNIT[nutrient] };
+    }
     const unit = clip(obj.unit, 12);
     return unit ? { unit } : {};
   }
@@ -136,6 +156,11 @@ export function parseConfig(kind: CheckinKind, raw: string | CheckinConfig | nul
 /** The weigh-in question: answered into the bodyweight log. */
 export function isBodyweight(q: Pick<CheckinQuestionData, "kind" | "config">): boolean {
   return q.kind === "NUMBER" && q.config.bodyweight === true;
+}
+
+/** The nutrition log column a question answers into, or null for any other question. */
+export function nutrientOf(q: Pick<CheckinQuestionData, "kind" | "config">): Nutrient | null {
+  return q.kind === "NUMBER" && q.config.nutrient ? q.config.nutrient : null;
 }
 
 /** Whether a scale question's answers make up the readiness score. */
@@ -338,7 +363,11 @@ export type Preset = {
 /** Questions a coach can start from; every field stays editable. Labels are translated when picked. */
 export const PRESETS: Preset[] = [
   { key: "bodyweight", label: "Bodyweight", kind: "NUMBER", config: { bodyweight: true }, icon: "weight", color: "blue" },
-  { key: "calories", label: "Calories", kind: "NUMBER", config: { unit: "kcal" }, icon: "flame", color: "orange" },
+  { key: "calories", label: "Calories", kind: "NUMBER", config: { nutrient: "kcal", unit: "kcal" }, icon: "flame", color: "orange" },
+  { key: "protein", label: "Protein", kind: "NUMBER", config: { nutrient: "protein", unit: "g" }, icon: "dumbbell", color: "red" },
+  { key: "carbs", label: "Carbs", kind: "NUMBER", config: { nutrient: "carbs", unit: "g" }, icon: "leaf", color: "amber" },
+  { key: "fat", label: "Fat", kind: "NUMBER", config: { nutrient: "fat", unit: "g" }, icon: "droplet", color: "teal" },
+  { key: "progress-photo", label: "Progress photo", kind: "TEXT", config: { photo: true }, icon: "camera", color: "purple" },
   { key: "sleep", label: "Sleep", kind: "NUMBER", config: { unit: "h" }, icon: "moon", color: "blue" },
   { key: "sleep-quality", label: "Sleep quality", kind: "SCALE", config: { min: 1, max: 5, low: "Poor", high: "Great" }, icon: "bed", color: "blue" },
   { key: "stress", label: "Stress", kind: "SCALE", config: { min: 1, max: 5, low: "Very stressed", high: "Relaxed" }, icon: "gauge", color: "orange" },
@@ -374,3 +403,24 @@ export const PRESETS: Preset[] = [
   },
   { key: "notes", label: "Notes", kind: "TEXT", config: {}, icon: "note", color: "purple" },
 ];
+
+// --- photos -------------------------------------------------------------------------------
+
+/**
+ * The phone shrinks a photo to a JPEG this wide or tall at most before sending it: plenty
+ * for a physique check, and a few hundred KB instead of several MB.
+ */
+export const PHOTO_EDGE = 1600;
+/** The largest photo accepted, for a phone that couldn't shrink it. */
+export const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+/** Photos on one answer, and per athlete per day, so a stuck button can't fill the bucket. */
+export const MAX_PHOTOS_PER_ANSWER = 4;
+export const MAX_PHOTOS_PER_DAY = 12;
+
+/** Whether a file starts like a JPEG — the only kind the phone sends after shrinking. */
+export function looksLikeJpeg(head: Uint8Array): boolean {
+  return head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+}
+
+/** A photo on an answer, as the athlete app shows it. */
+export type PhotoView = { id: string; questionId: string; day: string; url: string };

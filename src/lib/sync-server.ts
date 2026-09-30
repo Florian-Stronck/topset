@@ -1,5 +1,6 @@
 import type { Client, InStatement, InValue } from "@libsql/client";
 import { checkPush, ownedIdsSql, SCOPE, SCOPED_TABLES, type PushTables } from "@/lib/coach-scope";
+import { meetingNews, type MeetingNews } from "@/lib/meetings";
 import { ATHLETE_COLUMNS, MERGED_COLUMNS, MERGED_TABLES, PULL_ONLY_TABLES, newerRows, quote, stampOf, syncedColumns, upsertSql, validMergedRow, type Row } from "@/lib/sync-plan";
 
 /**
@@ -65,6 +66,81 @@ export async function snapshot(client: Client, coachId: string, idsOnly = false)
   return out;
 }
 
+/**
+ * How far the coach's PlanChange log goes. Read before a snapshot, so anything pushed while
+ * it is being read comes down again with the next plan pull.
+ */
+export async function planRev(client: Client, coachId: string): Promise<number> {
+  const [r] = await rows(client, `SELECT COALESCE(MAX("rev"), 0) AS "rev" FROM "PlanChange" WHERE "coachId" = ?`, [coachId]);
+  return Number(r?.rev ?? 0);
+}
+
+/** Log entries per plan pull, well under the response size limit once turned into rows. */
+export const PLAN_PAGE = 2000;
+
+export type PlanData = {
+  /** Where this answer ends in the log; the next pull asks from here. */
+  rev: number;
+  /** There is more after `rev`: ask again straight away. */
+  more: boolean;
+  /** Rows as the server has them now, per table. */
+  rows: Record<string, Row[]>;
+  /** Ids gone from the server, per table. */
+  removed: Record<string, string[]>;
+};
+
+/**
+ * What the coach's other computers changed in their plans since `since`: the rows as they
+ * are now, and the ones that are gone. A row whose last change came from this computer
+ * (`sessionId`) is left out, since it already has it.
+ */
+export async function planData(
+  client: Client,
+  coachId: string,
+  sessionId: string,
+  since: number,
+  limit = PLAN_PAGE,
+): Promise<PlanData> {
+  const log = await rows(
+    client,
+    `SELECT "rev", "table", "rowId", "sessionId" FROM "PlanChange" WHERE "coachId" = ? AND "rev" > ? ORDER BY "rev" LIMIT ?`,
+    [coachId, since, limit],
+  );
+  const rev = log.length ? Number(log[log.length - 1].rev) : since;
+  const latest = new Map<string, Row>();
+  for (const entry of log) latest.set(`${entry.table}/${entry.rowId}`, entry);
+  const wanted = new Map<string, string[]>();
+  for (const entry of latest.values()) {
+    if (entry.sessionId === sessionId || !SCOPED_TABLES.includes(String(entry.table))) continue;
+    const list = wanted.get(String(entry.table)) ?? [];
+    list.push(String(entry.rowId));
+    wanted.set(String(entry.table), list);
+  }
+
+  const out: PlanData = { rev, more: log.length === limit, rows: {}, removed: {} };
+  for (const { table } of SCOPE) {
+    const ids = wanted.get(table);
+    if (!ids) continue;
+    const cols = syncedColumns(table, await columnsOf(client, table));
+    const found: Row[] = [];
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      found.push(
+        ...(await rows(
+          client,
+          `SELECT ${cols.map(quote).join(", ")} FROM ${quote(table)} WHERE "id" IN (${chunk.map(() => "?").join(", ")}) AND "id" IN (${ownedIdsSql(table)})`,
+          [...chunk, coachId],
+        )),
+      );
+    }
+    const here = new Set(found.map((r) => String(r.id)));
+    if (found.length) out.rows[table] = found;
+    const gone = ids.filter((id) => !here.has(id));
+    if (gone.length) out.removed[table] = gone;
+  }
+  return out;
+}
+
 export type AthleteData =
   | { unchanged: true; version: number }
   | { unchanged?: false; version: number; logs: Row[]; rows: Row[]; merged: Record<string, Row[]> };
@@ -113,11 +189,14 @@ function plain(v: unknown): v is InValue {
 /** A note from the coach the athlete hasn't seen: new, or reworded since they had it. */
 export type NewNote = { id: string; athleteId: string; day: string; body: string };
 
+/** A meeting the coach proposed, answered or called off. */
+export type NewMeeting = { id: string; athleteId: string; day: string; time: string; news: MeetingNews };
+
 /** What a push changed that athletes may want to hear about. */
-export type PushNews = { notes: NewNote[]; plans: Set<string> };
+export type PushNews = { notes: NewNote[]; plans: Set<string>; meetings: NewMeeting[] };
 
 export function pushNews(): PushNews {
-  return { notes: [], plans: new Set() };
+  return { notes: [], plans: new Set(), meetings: [] };
 }
 
 /**
@@ -191,6 +270,68 @@ async function planChanges(client: Client, tables: PushTables) {
   return { upserted, removed };
 }
 
+async function existing(client: Client, table: string, ids: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const hit = await rows(client, `SELECT "id" FROM ${quote(table)} WHERE "id" IN (${chunk.map(() => "?").join(", ")})`, chunk);
+    hit.forEach((r) => out.add(String(r.id)));
+  }
+  return out;
+}
+
+/**
+ * A push without what another of the coach's computers has already deleted: removals of
+ * rows no longer here at all, and new rows under a parent no longer here (and so everything
+ * under those). Both are races between two computers, not mistakes, and must not stop sync.
+ * A row pointing at someone else's parent stays in, for `checkPush` to refuse.
+ */
+async function withoutVanished(client: Client, tables: PushTables, owned: Map<string, Set<string>>): Promise<PushTables> {
+  const out: PushTables = {};
+  const kept = new Map<string, Set<string>>();
+  for (const { table, parents } of SCOPE) {
+    const change = tables[table];
+    if (!change) continue;
+    const mine = owned.get(table) ?? new Set<string>();
+
+    const strange = change.remove.filter((id) => !mine.has(id));
+    const there = strange.length ? await existing(client, table, strange) : new Set<string>();
+    const remove = change.remove.filter((id) => mine.has(id) || there.has(id));
+
+    // Parents this push neither has nor brings: gone, unless they turn out to exist.
+    const missing = new Map<string, Set<string>>();
+    for (const p of parents) {
+      const ids = new Set<string>();
+      for (const row of change.upsert) {
+        const v = row[p.column];
+        if (v === null || v === undefined) continue;
+        const id = String(v);
+        const arriving = p.table === table ? change.upsert.some((r) => r.id === id) : kept.get(p.table)?.has(id);
+        if (!owned.get(p.table)?.has(id) && !arriving) ids.add(id);
+      }
+      const found = ids.size ? await existing(client, p.table, [...ids]) : new Set<string>();
+      missing.set(p.column, new Set([...ids].filter((id) => !found.has(id))));
+    }
+    const upsert: Row[] = [];
+    for (const row of change.upsert) {
+      let drop = false;
+      let copy = row;
+      for (const p of parents) {
+        if (!missing.get(p.column)?.has(String(row[p.column]))) continue;
+        // A copy pointing back at a row that is gone just stops pointing.
+        if (p.optional) copy = { ...copy, [p.column]: null };
+        else drop = true;
+      }
+      if (!drop) upsert.push(copy);
+    }
+    kept.set(table, new Set(upsert.map((r) => String(r.id))));
+    out[table] = { upsert, remove };
+  }
+  // Tables sync doesn't know stay in, for `checkPush` to refuse by name.
+  for (const [table, change] of Object.entries(tables)) out[table] ??= change;
+  return out;
+}
+
 /**
  * Checks and applies one push from a coach's desktop app, in one transaction. What it
  * changed that athletes should hear about goes in `news`, once it's in.
@@ -200,12 +341,13 @@ export async function applyPush(
   coachId: string,
   payload: PushPayload,
   news: PushNews = pushNews(),
+  sessionId: string | null = null,
 ): Promise<string | null> {
-  const tables = payload.tables ?? {};
+  const sent = payload.tables ?? {};
   // Only what checking this push needs: the tables it touches, and their parents.
   const needed = new Set<string>();
   for (const { table, parents } of SCOPE) {
-    if (!tables[table]) continue;
+    if (!sent[table]) continue;
     needed.add(table);
     for (const p of parents) needed.add(p.table);
   }
@@ -215,8 +357,10 @@ export async function applyPush(
     if (!MERGED_TABLES.has(table) || PULL_ONLY_TABLES.has(table)) return `${table} can't be synced.`;
     needed.add("Athlete").add(table);
     if (table === "CheckinAnswer") needed.add("CheckinQuestion");
+    if (table === "SessionMove") needed.add("Day");
   }
   const owned = await ownedIds(client, coachId, [...needed]);
+  const tables = await withoutVanished(client, sent, owned);
 
   // Ids sent up that exist but aren't this coach's: someone else's rows.
   const taken = new Set<string>();
@@ -295,17 +439,24 @@ export async function applyPush(
     ...(owned.get("CheckinQuestion") ?? []),
     ...(tables.CheckinQuestion?.upsert ?? []).map((r) => String(r.id)),
   ]);
+  // A moved session has to be one of theirs, as its id is named after it.
+  const days = new Set([...(owned.get("Day") ?? []), ...(tables.Day?.upsert ?? []).map((r) => String(r.id))]);
   const notes: NewNote[] = [];
+  const meetings: NewMeeting[] = [];
   for (const [table, list] of merged) {
     const cols = [...MERGED_COLUMNS[table]];
     const mine = owned.get(table) ?? new Set<string>();
     const isNote = table === "CoachMessage";
+    const isMeeting = table === "Meeting";
     /** A note's text as the server had it, to tell a reworded note from a re-sent one. */
     const bodies = new Map<string, unknown>();
+    /** A meeting as the server had it, to tell what the coach changed. */
+    const before = new Map<string, Row>();
     for (const row of list) {
       if (!validMergedRow(table, row)) return `A ${table} row is missing something.`;
       if (!athletes.has(String(row.athleteId))) return "That athlete isn't yours.";
       if (table === "CheckinAnswer" && !questions.has(String(row.questionId))) return "That question isn't yours.";
+      if (table === "SessionMove" && !days.has(String(row.dayId))) return "That session isn't yours.";
     }
     const ids = list.map((r) => r.id);
     const held = new Map<string, number>();
@@ -313,16 +464,23 @@ export async function applyPush(
       const chunk = ids.slice(i, i + 500);
       const hit = await rows(
         client,
-        `SELECT "id", "updatedAt"${isNote ? `, "body"` : ""} FROM ${quote(table)} WHERE "id" IN (${chunk.map(() => "?").join(", ")})`,
+        `SELECT "id", "updatedAt"${isNote ? `, "body"` : ""}${isMeeting ? `, "day", "time", "minutes", "timeZone", "place", "proposedBy", "status", "deletedAt"` : ""} FROM ${quote(table)} WHERE "id" IN (${chunk.map(() => "?").join(", ")})`,
         chunk,
       );
       for (const r of hit) {
         if (!mine.has(String(r.id))) return `${table} ${r.id} belongs to someone else.`;
         held.set(String(r.id), stampOf(r.updatedAt));
         if (isNote) bodies.set(String(r.id), r.body);
+        if (isMeeting) before.set(String(r.id), r as Row);
       }
     }
     const fresh = newerRows(list, held);
+    if (isMeeting) {
+      for (const r of fresh) {
+        const news = meetingNews(before.get(String(r.id)), r);
+        if (news) meetings.push({ id: String(r.id), athleteId: String(r.athleteId), day: String(r.day), time: String(r.time), news });
+      }
+    }
     if (isNote) {
       for (const r of fresh) {
         if (r.deletedAt || r.readAt) continue;
@@ -340,6 +498,21 @@ export async function applyPush(
   }
 
   if (stmts.length === 0) return null;
+
+  // In the log for the coach's other computers, marked as this one's.
+  const logged: InValue[][] = [];
+  for (const { table } of SCOPE) {
+    const change = tables[table];
+    if (!change) continue;
+    for (const id of [...change.upsert.map((r) => String(r.id)), ...change.remove]) logged.push([coachId, table, id, sessionId]);
+  }
+  for (let i = 0; i < logged.length; i += ROWS_PER_STATEMENT) {
+    const chunk = logged.slice(i, i + ROWS_PER_STATEMENT);
+    stmts.push({
+      sql: `INSERT INTO "PlanChange" ("coachId", "table", "rowId", "sessionId") VALUES ${chunk.map(() => "(?, ?, ?, ?)").join(", ")}`,
+      args: chunk.flat(),
+    });
+  }
 
   // Whose plans this changes: removed rows are traced while they still exist, the rest once in.
   const plan = await planChanges(client, tables);
@@ -364,6 +537,7 @@ export async function applyPush(
 
   await client.migrate(stmts);
   news.notes.push(...notes);
+  news.meetings.push(...meetings);
   for (const [table, ids] of plan.upserted) for (const id of await athletesOf(client, table, ids)) plans.add(id);
   for (const id of plans) news.plans.add(id);
   return null;

@@ -3,7 +3,10 @@ import { formatPrescription, formatRamp, maxesOf, resolveDay } from "@/lib/inten
 import { bodyweightEntry } from "@/lib/bodyweight";
 import { prisma } from "@/lib/prisma";
 import { ymdOf } from "@/lib/dates";
-import { answerDay, asksOn, questionData, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
+import { answerDay, asksOn, nutrientOf, questionData, type CheckinAnswerData, type CheckinQuestionData, type PhotoView } from "@/lib/checkins";
+import { nutritionId, targetOn, targetSpan, type NutritionTarget, type TargetSpan } from "@/lib/nutrition";
+import { byWhen, meetingData, type MeetingData } from "@/lib/meetings";
+import { moveData, movesMap, type MoveData } from "@/lib/moves";
 import { sessionsOf, type Session } from "@/lib/schedule";
 import type { SetLogData } from "@/lib/setlog";
 import { retentionDays, type ClipView } from "@/lib/athlete-videos";
@@ -112,6 +115,8 @@ export type AthleteRow = {
 
 export type AthleteSession = {
   ymd: string;
+  /** Where the plan put it, when the athlete moved it. */
+  movedFrom: string | null;
   dayId: string;
   label: string;
   program: string;
@@ -156,6 +161,7 @@ function toSession(s: ScheduledSession, dayRows: DayRow[], athlete: TokenAthlete
 
   return {
     ymd: s.ymd,
+    movedFrom: s.movedFrom ?? null,
     dayId: s.day.id,
     label: s.day.label,
     program: s.block.program.name,
@@ -174,10 +180,22 @@ export async function getAthleteSchedule(athlete: TokenAthlete): Promise<Schedul
   return (await getAthleteCalendar(athlete)).sessions;
 }
 
-/** The calendar with the phases it was laid out from, rest weeks and all. */
+/** The calendar with the phases it was laid out from, rest weeks and all, and the sessions moved. */
 export async function getAthleteCalendar(athlete: TokenAthlete): Promise<{ phases: Phase[]; sessions: ScheduledSession[] }> {
-  const phases = await phasesFor(athlete.id);
-  return { phases, sessions: sessionsOf<PhaseDay, Phase>(phases) };
+  const [phases, moves] = await Promise.all([phasesFor(athlete.id), movesFor(athlete.id)]);
+  return { phases, sessions: sessionsOf<PhaseDay, Phase>(phases, movesMap(moves)) };
+}
+
+/** The sessions the athlete moved and hasn't moved back. */
+export async function movesFor(athleteId: string): Promise<MoveData[]> {
+  const rows = await prisma.sessionMove.findMany({ where: { athleteId, deletedAt: null }, orderBy: { day: "asc" } });
+  return rows.map(moveData);
+}
+
+/** Every meeting on file that is still standing, soonest first. */
+export async function meetingsFor(athleteId: string): Promise<MeetingData[]> {
+  const rows = await prisma.meeting.findMany({ where: { athleteId, deletedAt: null } });
+  return rows.map(meetingData).sort(byWhen);
 }
 
 /** These days of the calendar in full: what to do, and what has been logged. */
@@ -246,21 +264,61 @@ export async function recentBodyweight(athleteId: string, take = 30) {
   return rows.map(bodyweightEntry);
 }
 
-export type DayCheckin = { questions: CheckinQuestionData[]; answers: CheckinAnswerData[] };
+export type DayCheckin = {
+  questions: CheckinQuestionData[];
+  answers: CheckinAnswerData[];
+  /** Photos on the answers; empty when the server has no bucket. */
+  photos: PhotoView[];
+  /** Whether photos can be sent at all. */
+  photosOn: boolean;
+  /** The phase's nutrition targets for the day, when the check-in asks about nutrition. */
+  target: NutritionTarget | null;
+};
 
-/** The check-in questions asked on a day, in the coach's order, with any answers given. */
+/**
+ * The check-in questions asked on a day, in the coach's order, with any answers given. The
+ * nutrition questions' answers are read from the nutrition log, where they are kept.
+ */
 export async function checkinOn(athleteId: string, day: string): Promise<DayCheckin> {
+  const config = storageConfig();
   const rows = await prisma.checkinQuestion.findMany({ where: { athleteId, archived: false }, orderBy: [{ order: "asc" }, { createdAt: "asc" }] });
   const questions = rows.map(questionData).filter((q) => asksOn(q, day));
-  if (questions.length === 0) return { questions, answers: [] };
-  const answers = await prisma.checkinAnswer.findMany({
-    where: {
-      deletedAt: null,
-      OR: questions.map((q) => ({ questionId: q.id, day: answerDay(q, day) })),
-    },
-    select: { id: true, questionId: true, day: true, value: true },
+  if (questions.length === 0) return { questions, answers: [], photos: [], photosOn: config !== null, target: null };
+  const where = questions.map((q) => ({ questionId: q.id, day: answerDay(q, day) }));
+  const [answers, nutrition, photos] = await Promise.all([
+    prisma.checkinAnswer.findMany({ where: { deletedAt: null, OR: where }, select: { id: true, questionId: true, day: true, value: true } }),
+    prisma.nutritionLog.findMany({ where: { id: { in: questions.map((q) => nutritionId(athleteId, answerDay(q, day))) }, deletedAt: null } }),
+    config && questions.some((q) => q.config.photo)
+      ? prisma.checkinPhoto.findMany({ where: { athleteId, deletedAt: null, uploadedAt: { not: null }, OR: where }, orderBy: { createdAt: "asc" } })
+      : [],
+  ]);
+  for (const q of questions) {
+    const n = nutrientOf(q);
+    const filed = answerDay(q, day);
+    const row = n && nutrition.find((r) => r.day === filed);
+    if (n && row && row[n] !== null) answers.push({ id: `${row.id}-${n}`, questionId: q.id, day: filed, value: String(row[n]) });
+  }
+  return {
+    questions,
+    answers,
+    photos: photos.map((p) => ({
+      id: p.id,
+      questionId: p.questionId,
+      day: p.day,
+      url: presign(config!, { method: "GET", key: p.storageKey, expiresIn: PLAY_LINK_SECONDS }),
+    })),
+    photosOn: config !== null,
+    target: questions.some((q) => nutrientOf(q)) ? targetOn(await targetSpans(athleteId), day) : null,
+  };
+}
+
+/** The athlete's phases that set nutrition targets, as spans of days. */
+async function targetSpans(athleteId: string): Promise<TargetSpan[]> {
+  const phases = await prisma.block.findMany({
+    where: { athleteId },
+    select: { startDate: true, kcalTarget: true, proteinTarget: true, carbsTarget: true, fatTarget: true, _count: { select: { weeks: true } } },
   });
-  return { questions, answers };
+  return phases.map((p) => targetSpan({ ...p, weeks: p._count.weeks })).filter((s): s is TargetSpan => s !== null);
 }
 
 /** A note from the coach as the athlete app shows it, with the session it is about. */
@@ -294,9 +352,15 @@ export async function inboxFor(athleteId: string, days?: string[]): Promise<Inbo
   }));
 }
 
-/** How many of the coach's notes the athlete hasn't opened yet. */
-export async function unreadCount(athleteId: string): Promise<number> {
-  return prisma.coachMessage.count({ where: { athleteId, deletedAt: null, readAt: null } });
+/** How many of the coach's notes the athlete hasn't opened yet, and meetings waiting on their answer. */
+export async function unreadCount(athleteId: string, today?: string): Promise<number> {
+  const [notes, meetings] = await Promise.all([
+    prisma.coachMessage.count({ where: { athleteId, deletedAt: null, readAt: null } }),
+    prisma.meeting.count({
+      where: { athleteId, deletedAt: null, status: "PROPOSED", proposedBy: "coach", ...(today ? { day: { gte: today } } : {}) },
+    }),
+  ]);
+  return notes + meetings;
 }
 
 /** A competition as the athlete app's calendar shows it. */

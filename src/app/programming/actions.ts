@@ -771,6 +771,10 @@ export async function addPhase(programId: string, input: { phase?: string; weeks
 
   const settings = await loadSettings();
   const maxes = await athleteMaxes(program.athleteId);
+  // The eating carries on from the phase before until the coach changes it.
+  const targets = last
+    ? { kcalTarget: last.kcalTarget, proteinTarget: last.proteinTarget, carbsTarget: last.carbsTarget, fatTarget: last.fatTarget }
+    : {};
   const weeks = Math.min(52, Math.max(1, Math.round(input.weeks ?? settings.phaseWeeks)));
   const nth = program.phases.length;
 
@@ -782,6 +786,7 @@ export async function addPhase(programId: string, input: { phase?: string; weeks
       phase: input.phase?.trim() || phaseName(nth),
       startDate: start,
       ...maxes,
+      ...targets,
       weeks: weeksOf(weeks, templateDays(start)),
     },
   });
@@ -1034,6 +1039,26 @@ export async function closePhaseGap(phaseId: string) {
   revalidateAll();
 }
 
+export type PhaseTargets = { kcalTarget?: number | null; proteinTarget?: number | null; carbsTarget?: number | null; fatTarget?: number | null };
+
+/** A phase's macro targets, per day; null clears one. */
+export async function updateBlockTargets(blockId: string, patch: PhaseTargets) {
+  assertCoach();
+  const clean = (v: number | null | undefined, max: number) =>
+    v === undefined ? undefined : v === null || !Number.isFinite(v) || v <= 0 || v > max ? null : Math.round(v);
+  await prisma.block.update({
+    where: { id: blockId },
+    data: {
+      kcalTarget: clean(patch.kcalTarget, 20000),
+      proteinTarget: clean(patch.proteinTarget, 2000),
+      carbsTarget: clean(patch.carbsTarget, 2000),
+      fatTarget: clean(patch.fatTarget, 2000),
+    },
+  });
+  revalidatePath("/programming");
+  revalidatePath("/tracking");
+}
+
 export async function updateBlockMaxes(
   blockId: string,
   patch: { squat1RM?: number | null; bench1RM?: number | null; dead1RM?: number | null },
@@ -1104,6 +1129,10 @@ export async function pastePhase(sourcePhaseId: string, targetProgramId: string,
         phase: name,
         startDate: start,
         ...maxes,
+        // Targets are about the athlete's body, so another athlete starts without them.
+        ...(sameAthlete
+          ? { kcalTarget: source.kcalTarget, proteinTarget: source.proteinTarget, carbsTarget: source.carbsTarget, fatTarget: source.fatTarget }
+          : {}),
       },
     });
     let previous = new Map<string, string>();

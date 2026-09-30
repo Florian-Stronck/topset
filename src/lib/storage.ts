@@ -108,6 +108,17 @@ export async function objectSize(config: StorageConfig, key: string): Promise<nu
   return Number.isFinite(length) ? length : null;
 }
 
+/** The first `bytes` bytes of an object, or null if it isn't there. */
+export async function objectStart(config: StorageConfig, key: string, bytes: number): Promise<Uint8Array | null> {
+  const res = await fetch(presign(config, { method: "GET", key, expiresIn: 60 }), {
+    headers: { Range: `bytes=0-${bytes - 1}` },
+    cache: "no-store",
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Storage answered ${res.status}.`);
+  return new Uint8Array(await res.arrayBuffer()).subarray(0, bytes);
+}
+
 /** Deletes an object; one that is already gone is fine. */
 export async function deleteObject(config: StorageConfig, key: string): Promise<void> {
   const res = await fetch(presign(config, { method: "DELETE", key, expiresIn: 60 }), { method: "DELETE", cache: "no-store" });

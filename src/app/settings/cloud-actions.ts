@@ -48,9 +48,13 @@ type Session = { token: string; coach: { id: string; name: string; username?: st
 
 const usernameOf = (coach: Session["coach"]) => coach.username ?? String(coach.email ?? "").split("@")[0];
 
+/** The password goes to this address, so it has to be https:// — plain http:// only to this computer. */
 function serverOf(input: string): string | null {
   const url = input.trim().replace(/\/+$/, "");
-  return /^https?:\/\/[^\s/]+/.test(url) ? url : null;
+  const parsed = /^https?:\/\/[^\s/]+/.test(url) ? URL.parse(url) : null;
+  if (!parsed) return null;
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  return parsed.protocol === "https:" || (parsed.protocol === "http:" && local) ? url : null;
 }
 
 async function begin(server: string, session: Session): Promise<Result> {

@@ -30,17 +30,47 @@ files:
   - node_modules/better-sqlite3/lib/**
   - node_modules/better-sqlite3/prebuilds/win32-x64.node
   - node_modules/better-sqlite3/package.json
+  # electron-updater and everything it requires, listed because the globs above start from
+  # nothing. After upgrading it, check the list: `npm ls electron-updater --all`.
+  - node_modules/electron-updater/**
+  - node_modules/builder-util-runtime/**
+  - node_modules/fs-extra/**
+  - node_modules/graceful-fs/**
+  - node_modules/jsonfile/**
+  - node_modules/universalify/**
+  - node_modules/js-yaml/**
+  - node_modules/argparse/**
+  - node_modules/lazy-val/**
+  - node_modules/lodash.escaperegexp/**
+  - node_modules/lodash.isequal/**
+  - node_modules/semver/**
+  - node_modules/tiny-typed-emitter/**
+  - node_modules/debug/**
+  - node_modules/ms/**
+  - node_modules/sax/**
 
 # The built site is copied in by hand afterwards — see electron/after-pack.js for why
 # neither the file globs nor extraResources can carry it.
 afterPack: electron/after-pack.js
 
 win:
-  # A folder, not the single-file "portable" exe: that one unpacks the whole app (~380 MB)
-  # into %TEMP% on every launch — 11–17 s before a window appears, against well under a
-  # second run straight from the folder. The data is still kept beside Topset.exe, so the
-  # folder can be moved or copied to a stick as before.
+  # An installer rather than the old zip folder: only an installed copy can update itself.
+  # Per user, so installing and updating never ask for admin. The data is not in the install
+  # folder but in %APPDATA%\Topset (see databaseFile in electron/main.js), which updates and
+  # uninstalls leave alone.
   target:
-    - zip
-  artifactName: Topset.zip
+    - nsis
+  artifactName: Topset-Setup-${version}.${ext}
   icon: electron/icon.ico
+
+nsis:
+  oneClick: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+
+# Where installed copies look for new versions: the public repo's Releases. Uploading needs
+# GH_TOKEN, and only happens with `npm run desktop:release`.
+publish:
+  provider: github
+  owner: Florian-Stronck
+  repo: topset

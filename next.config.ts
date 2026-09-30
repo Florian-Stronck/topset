@@ -26,6 +26,18 @@ const nextConfig: NextConfig = {
       "./.env*",
     ],
   },
+  // No page is ever meant to sit inside another site's, and a file is only what its type says.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

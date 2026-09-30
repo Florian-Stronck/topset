@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
 import { ProgressView } from "@/components/tracking/ProgressView";
 import { ReviewView } from "@/components/tracking/ReviewView";
+import { ScheduleView } from "@/components/tracking/ScheduleView";
 import { TrackingShell, type TrackingView } from "@/components/tracking/TrackingShell";
 import { InjuryPanel } from "@/components/InjuryPanel";
 import { LoadView } from "@/components/tracking/LoadView";
@@ -19,15 +20,21 @@ import {
   getBodyweights,
   getCoach,
   getCheckins,
+  getMeetings,
   getMessages,
+  getMoves,
   getNextMeets,
+  getNutrition,
+  getTargetSpans,
   getTimedRows,
   getWorkspace,
   hasTimedRows,
+  scheduleNews,
   injuriesFor,
   toBlockData,
 } from "@/lib/queries";
-import { addDays } from "@/lib/schedule";
+import { addDays, sessionsOf } from "@/lib/schedule";
+import type { CalendarSession } from "@/components/tracking/ScheduleCalendar";
 import { previousLogs, REVIEW_FILTERS, sessionDrift, unreviewedDays, type ReviewFilter } from "@/lib/tracking";
 import type { BlockData } from "@/lib/types";
 import { loadSettings } from "@/lib/coach-settings";
@@ -50,7 +57,7 @@ export default async function TrackingPage({
   if (coach.athletes.length === 0) redirect("/athletes");
 
   const view: TrackingView =
-    params.view === "progress" || params.view === "wellness" || params.view === "load" ? params.view : "review";
+    params.view === "progress" || params.view === "wellness" || params.view === "load" || params.view === "schedule" ? params.view : "review";
   const show = REVIEW_FILTERS.includes(params.show as ReviewFilter) ? (params.show as ReviewFilter) : null;
 
   const athlete = coach.athletes.find((a) => a.id === params.athlete) ?? coach.athletes[0];
@@ -61,13 +68,15 @@ export default async function TrackingPage({
   };
   const now = new Date();
   const today = ymdOf(calendarToday());
-  const [{ programs, program, phase }, phases, checkinMap, hasLoad] = await Promise.all([
+  const [{ programs, program, phase }, phases, checkinMap, hasLoad, news, moves] = await Promise.all([
     getWorkspace(athlete.id, undefined, params.block),
     getAllPhasesForAthlete(athlete.id),
     getCheckins([athlete.id]),
     hasTimedRows(athlete.id),
+    scheduleNews(athlete.id, today),
+    getMoves(athlete.id),
   ]);
-  const checkins = checkinMap.get(athlete.id) ?? { questions: [], answers: [] };
+  const checkins = checkinMap.get(athlete.id) ?? { questions: [], answers: [], photos: [] };
   const unit = athlete.unit === "LB" ? "lb" : "kg";
 
   // The week asked for, else the one the phase is in today, else its first.
@@ -76,11 +85,16 @@ export default async function TrackingPage({
   const initialWeek = Number.isInteger(asked) && asked >= 1 ? asked : window?.status === "active" ? window.week : 1;
 
   const blockData: BlockData | null = phase && toBlockData(phase);
-  const unreviewed = blockData ? unreviewedDays(blockData, checkins.answers).size : 0;
+  // Sessions the athlete moved, so logs and reviews fall on the day they were done.
+  const moved = Object.fromEntries(moves.map((m) => [m.dayId, m.day]));
+  const moveMap = new Map(Object.entries(moved));
+  const unreviewed = blockData ? unreviewedDays(blockData, checkins.answers, moveMap).size : 0;
 
   async function wellness() {
-    const [weights, meets, injuries] = await Promise.all([
+    const [weights, nutrition, targets, meets, injuries] = await Promise.all([
       getBodyweights([athlete.id]),
+      getNutrition([athlete.id], addDays(today, -(WELLNESS_DAYS - 1))),
+      getTargetSpans(athlete.id),
       getNextMeets([athlete.id], startOfDay(now)),
       injuriesFor(athlete.id),
     ]);
@@ -95,8 +109,10 @@ export default async function TrackingPage({
         unit={unit}
         today={today}
         checkins={checkins}
-        drift={sessionDrift(phases, addDays(today, -(WELLNESS_DAYS - 1)), today)}
+        drift={sessionDrift(phases, addDays(today, -(WELLNESS_DAYS - 1)), today, moveMap)}
         bodyweight={weights.get(athlete.id) ?? []}
+        nutrition={nutrition.get(athlete.id) ?? []}
+        targets={targets}
         meet={meet ? { name: meet.name, weightClass: meet.weightClass, ...weightToMake(meet) } : null}
       />
       </>
@@ -119,7 +135,27 @@ export default async function TrackingPage({
   }
 
   let body: React.ReactNode;
-  if (view === "wellness") {
+  if (view === "schedule") {
+    // Every session with something in it, where it now falls, and whether it was done.
+    type Phase = (typeof phases)[number];
+    const calendar: CalendarSession[] = sessionsOf<Phase["weeks"][number]["days"][number], Phase>(phases, moveMap)
+      .filter((s) => s.day.rows.some((r) => r.exercise.trim() !== ""))
+      .map((s) => ({
+        ymd: s.ymd,
+        label: s.day.label,
+        movedFrom: s.movedFrom ?? null,
+        status: s.day.rows.some((r) => r.actualWeight !== null) ? "done" : s.ymd < today ? "missed" : "plan",
+      }));
+    body = (
+      <ScheduleView
+        athlete={{ id: athlete.id, name: athlete.name }}
+        today={today}
+        moves={moves}
+        meetings={await getMeetings(athlete.id)}
+        calendar={calendar}
+      />
+    );
+  } else if (view === "wellness") {
     body = await wellness();
   } else if (view === "load") {
     body = await load();
@@ -146,7 +182,8 @@ export default async function TrackingPage({
           prescribed: liftProgress(phases, athlete, "prescribed"),
           estimated: liftProgress(phases, athlete, "estimated"),
         }}
-        history={exerciseHistory(phases, athlete)}
+        history={exerciseHistory(phases, athlete, moveMap)}
+        moves={moved}
       />
     );
   } else {
@@ -161,7 +198,8 @@ export default async function TrackingPage({
         videos={videoLists(rowIds)}
         checkins={checkins}
         messages={messages}
-        previous={previousLogs(blockData, exerciseHistory(phases, athlete))}
+        moves={moved}
+        previous={previousLogs(blockData, exerciseHistory(phases, athlete, moveMap), moveMap)}
         show={show}
         hasLink={athlete.accessToken !== null}
       />
@@ -181,6 +219,7 @@ export default async function TrackingPage({
         programName={program?.name ?? ""}
         hasLink={athlete.accessToken !== null}
         unreviewed={unreviewed}
+        scheduleNews={news}
         hasLoad={hasLoad}
         fighter={athlete.sport === "FIGHTER"}
       >

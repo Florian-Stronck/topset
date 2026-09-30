@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import { maxesOf, percentOf1RM, resolveDay } from "@/lib/intensity";
 import type { BlockWithDays, RowWithRules } from "@/lib/queries";
+import { noFormula } from "@/lib/export";
 
 /**
  * Export in the layout Repwise (RPECALC) reads: one tab per week, eight columns.
@@ -135,7 +136,7 @@ export function toRepwiseTsv(block: BlockWithDays): string {
   return toRepwiseSheets(block)
     .map((sheet) => {
       const body = sheet.rows
-        .map((row) => row.map((cell) => (cell === null ? "" : String(cell))).join("\t"))
+        .map((row) => row.map((cell) => (cell === null ? "" : typeof cell === "string" ? noFormula(cell) : String(cell))).join("\t"))
         .join("\r\n");
       return `=== ${sheet.name.toUpperCase()} ===\r\n${body}`;
     })

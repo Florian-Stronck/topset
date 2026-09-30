@@ -5,10 +5,14 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import Database from "better-sqlite3";
 import { clipFileName } from "@/lib/athlete-videos";
+import { syncResetPath } from "@/lib/backup";
+import { SCOPE } from "@/lib/coach-scope";
+import { VERSION_HEADER } from "@/lib/desktop-version";
 import { serial } from "@/lib/serial";
 import {
   ATHLETE_COLUMNS,
   athleteSignature,
+  coachSignature,
   MERGED_COLUMNS,
   PULL_ONLY_TABLES,
   logChanges,
@@ -21,6 +25,8 @@ import {
   tableChanges,
   type Row,
 } from "@/lib/sync-plan";
+import { markPhotoGone, photoFile, photoSettled, photosRoot } from "@/lib/photos";
+import type { PlanData } from "@/lib/sync-server";
 import { newVideoPath, readLedger, writeLedger } from "@/lib/videos";
 
 /**
@@ -29,7 +35,12 @@ import { newVideoPath, readLedger, writeLedger } from "@/lib/videos";
  * coach, never to the database itself:
  *
  * - up, every couple of seconds: whatever the coach changed;
- * - down, every few seconds and on Refresh: what their athletes logged.
+ * - down, every few seconds and on Refresh: what their athletes logged, and plan changes
+ *   made on the coach's other computers.
+ *
+ * What was last sent is kept in the database (SyncSent), so a restart knows exactly what
+ * changed or was deleted here. A row this computer never had is never deleted from the
+ * server: it comes down instead. Two computers editing the same row: the last push wins.
  *
  * Offline is fine: sync fails quietly and catches up when the connection is back.
  */
@@ -53,8 +64,12 @@ export type CloudConfig = {
 
 type State = {
   local: Database.Database | null;
-  /** What was last sent up, per table: id → coach signature. Null until first compared. */
+  /** What was last sent up, per table: id → coach signature. Null until loaded or worked out. */
   sent: Map<string, Map<string, string>> | null;
+  /** Make the server match this computer, deletes and all (Sync everything, or a restore). */
+  takeOver: boolean;
+  /** Where the server's plan log stood when a take-over started; kept once it has gone up. */
+  takeOverRev: number | null;
   /** Athlete columns both sides last agreed on, per row id. */
   base: Map<string, string>;
   /** The server's athlete-data version this copy last took in full; null until then. */
@@ -80,6 +95,8 @@ function state(): State {
   g.__topsetSync ??= {
     local: null,
     sent: null,
+    takeOver: false,
+    takeOverRev: null,
     base: new Map(),
     athleteVersion: null,
     merged: null,
@@ -152,6 +169,7 @@ export async function api<T>(
       method,
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(process.env.TOPSET_APP_VERSION ? { [VERSION_HEADER]: process.env.TOPSET_APP_VERSION } : {}),
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -198,6 +216,56 @@ function insertAll(db: Database.Database, table: string, rows: Row[]) {
     `INSERT INTO ${quote(table)} (${cols.map(quote).join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
   );
   for (const row of rows) insert.run(...cols.map((c) => row[c] ?? null));
+}
+
+// --- what this computer last sent, and how far it has read the server's plan log -------
+
+type Sent = Map<string, Map<string, string>>;
+
+const PLAN_REV = "planRev";
+
+function readMeta(db: Database.Database, key: string): string | null {
+  const row = db.prepare(`SELECT "value" FROM "SyncMeta" WHERE "key" = ?`).get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+function writeMeta(db: Database.Database, key: string, value: string | null): void {
+  if (value === null) db.prepare(`DELETE FROM "SyncMeta" WHERE "key" = ?`).run(key);
+  else db.prepare(`INSERT OR REPLACE INTO "SyncMeta" ("key", "value") VALUES (?, ?)`).run(key, value);
+}
+
+function loadSent(db: Database.Database): Sent {
+  const sent: Sent = new Map();
+  for (const r of db.prepare(`SELECT "table", "id", "sig" FROM "SyncSent"`).all() as { table: string; id: string; sig: string }[]) {
+    let t = sent.get(r.table);
+    if (!t) sent.set(r.table, (t = new Map()));
+    t.set(r.id, r.sig);
+  }
+  return sent;
+}
+
+/** Writes what changed between two versions of `sent`. Call inside a transaction. */
+function saveSent(db: Database.Database, before: Sent, after: Sent): void {
+  const put = db.prepare(`INSERT OR REPLACE INTO "SyncSent" ("table", "id", "sig") VALUES (?, ?, ?)`);
+  const drop = db.prepare(`DELETE FROM "SyncSent" WHERE "table" = ? AND "id" = ?`);
+  for (const table of new Set([...before.keys(), ...after.keys()])) {
+    const was = before.get(table) ?? new Map<string, string>();
+    const now = after.get(table) ?? new Map<string, string>();
+    for (const [id, sig] of now) if (was.get(id) !== sig) put.run(table, id, sig);
+    for (const id of was.keys()) if (!now.has(id)) drop.run(table, id);
+  }
+}
+
+/** Forgets what was sent and read, so the next sync works it out afresh. */
+function forgetSent(db: Database.Database): void {
+  db.prepare(`DELETE FROM "SyncSent"`).run();
+  writeMeta(db, PLAN_REV, null);
+}
+
+/** Synced tables of the local database, parents before children. */
+function inOrder(names: string[]): string[] {
+  const scoped = SCOPE.map((s) => s.table).filter((t) => names.includes(t));
+  return [...scoped, ...names.filter((t) => !scoped.includes(t))];
 }
 
 // --- the steps --------------------------------------------------------------------------
@@ -250,12 +318,134 @@ async function seed(config: CloudConfig): Promise<void> {
     db.pragma("foreign_keys = ON");
   }
 
+  // Worked out afresh against the server's copy on the next sync (see `baseline`).
+  forgetSent(db);
   const s = state();
   s.sent = null;
   s.base = new Map();
   s.athleteVersion = null;
   s.merged = null;
   writeConfig({ ...config, seeded: true });
+}
+
+/**
+ * Where this computer stands against the server, before anything else syncs: what it last
+ * sent, as kept in SyncSent. Without that (the first sync of this version, or after signing
+ * in), the server's copy is merged in: rows only the server has come down, rows only this
+ * computer has go up, and a row both have keeps this computer's version. To take over
+ * instead (Sync everything, a restored backup), everything here goes up and whatever isn't
+ * here goes from the server.
+ */
+async function baseline(config: CloudConfig): Promise<void> {
+  const s = state();
+  const db = local();
+  const reset = syncResetPath();
+  if (fs.existsSync(reset)) s.takeOver = true;
+
+  if (!s.takeOver && readMeta(db, PLAN_REV) !== null) {
+    s.sent = loadSent(db);
+    return;
+  }
+
+  if (s.takeOver) {
+    const { tables: ids, rev } = await api<{ tables: Record<string, Row[]>; rev?: number }>(config.server, "sync?part=ids", {
+      token: config.token,
+    });
+    s.sent = new Map(tables(db).map((t) => [t, new Map((ids[t] ?? []).map((r) => [String(r.id), ""]))]));
+    // Written with the first push, once it has gone through.
+    s.takeOverRev = rev ?? 0;
+    return;
+  }
+
+  const { tables: remote, rev } = await api<{ tables: Record<string, Row[]>; rev?: number }>(config.server, "sync?part=snapshot", {
+    token: config.token,
+  });
+  const sent: Sent = new Map();
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      for (const t of inOrder(tables(db))) {
+        const cols = columnsOf(db, t);
+        const here = new Set((db.prepare(`SELECT "id" FROM ${quote(t)}`).all() as Row[]).map((r) => String(r.id)));
+        const theirs = remote[t] ?? [];
+        const missing = theirs.filter((r) => !here.has(String(r.id)));
+        insertAll(db, t, t === "Coach" ? [] : missing);
+        sent.set(t, new Map(theirs.map((r) => [String(r.id), coachSignature(t, r, cols)])));
+      }
+      forgetSent(db);
+      saveSent(db, new Map(), sent);
+      writeMeta(db, PLAN_REV, String(rev ?? 0));
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  s.sent = sent;
+}
+
+/**
+ * Plan changes from the coach's other computers, applied here. A row edited here and not
+ * yet sent keeps this computer's version, which goes up next and wins; a row deleted there
+ * goes here too, with everything under it.
+ */
+async function pullPlan(config: CloudConfig): Promise<void> {
+  const s = state();
+  const db = local();
+  // Taking over: the server is about to be made to match this computer, not the other way.
+  if (!s.sent || s.takeOver) return;
+  for (;;) {
+    const since = Number(readMeta(db, PLAN_REV) ?? 0);
+    const data = await api<PlanData>(config.server, `sync?part=plan&since=${since}`, { token: config.token });
+    const sent = s.sent;
+    db.transaction(() => {
+      const before: Sent = new Map([...sent].map(([t, m]) => [t, new Map(m)]));
+      applyPlan(db, data, sent);
+      saveSent(db, before, sent);
+      writeMeta(db, PLAN_REV, String(data.rev));
+    })();
+    if (!data.more) return;
+  }
+}
+
+/** The pure-database half of `pullPlan`, apart for testing. Changes `sent` to match. */
+export function applyPlan(db: Database.Database, data: Pick<PlanData, "rows" | "removed">, sent: Sent): void {
+  const names = new Set(tables(db));
+  for (const { table } of [...SCOPE].reverse()) {
+    const ids = data.removed[table];
+    if (!ids || !names.has(table) || table === "Coach") continue;
+    const drop = db.prepare(`DELETE FROM ${quote(table)} WHERE "id" = ?`);
+    for (const id of ids) {
+      drop.run(id);
+      sent.get(table)?.delete(id);
+    }
+  }
+  for (const { table } of SCOPE) {
+    const list = data.rows[table];
+    if (!list || !names.has(table)) continue;
+    const cols = columnsOf(db, table);
+    const athlete = ATHLETE_COLUMNS[table] ?? [];
+    const read = db.prepare(`SELECT * FROM ${quote(table)} WHERE "id" = ?`);
+    let mine = sent.get(table);
+    if (!mine) sent.set(table, (mine = new Map()));
+    for (const row of list) {
+      const held = read.get(row.id) as Row | undefined;
+      // An edit here waiting to go up.
+      if (held && coachSignature(table, held, cols) !== mine.get(row.id)) continue;
+      // Only columns both sides have; the athlete's own ones are for the athlete pull.
+      const given = cols.filter((c) => c in row && (!held || !athlete.includes(c)) && (table !== "Coach" || c === "name" || c === "settings"));
+      try {
+        if (held) {
+          const set = given.filter((c) => c !== "id");
+          if (set.length) db.prepare(`UPDATE ${quote(table)} SET ${set.map((c) => `${quote(c)} = ?`).join(", ")} WHERE "id" = ?`).run(...set.map((c) => row[c] ?? null), row.id);
+        } else if (table !== "Coach") {
+          db.prepare(`INSERT INTO ${quote(table)} (${given.map(quote).join(", ")}) VALUES (${given.map(() => "?").join(", ")})`).run(...given.map((c) => row[c] ?? null));
+        } else continue;
+      } catch {
+        // Under something deleted here and not yet sent: that delete goes up and wins.
+        continue;
+      }
+      mine.set(row.id, coachSignature(table, read.get(row.id) as Row, cols));
+    }
+  }
 }
 
 /** Athlete data down: SetLog wholesale, and the athlete columns row by row. */
@@ -347,14 +537,7 @@ async function push(config: CloudConfig, force: boolean): Promise<void> {
   if (!force && s.sent && version === s.dataVersion) return;
 
   const names = tables(db);
-  if (!s.sent) {
-    // First push since start: compare against what the server has, so anything deleted
-    // here while offline, or before a restore, goes from the server too.
-    const { tables: ids } = await api<{ tables: Record<string, Row[]> }>(config.server, "sync?part=ids", {
-      token: config.token,
-    });
-    s.sent = new Map(names.map((t) => [t, new Map((ids[t] ?? []).map((r) => [String(r.id), ""]))]));
-  }
+  if (!s.sent) return;
 
   const next = new Map<string, Map<string, string>>();
   const agreed = new Map<string, string>();
@@ -411,6 +594,16 @@ async function push(config: CloudConfig, force: boolean): Promise<void> {
   for (const [table, list] of Object.entries(outgoing)) {
     for (const row of list) s.merged?.get(table)?.set(row.id, stampOf(row.updatedAt));
   }
+  const before = s.sent;
+  db.transaction(() => {
+    saveSent(db, before, next);
+    if (s.takeOverRev !== null) writeMeta(db, PLAN_REV, String(s.takeOverRev));
+  })();
+  if (s.takeOver) {
+    s.takeOver = false;
+    s.takeOverRev = null;
+    fs.rmSync(syncResetPath(), { force: true });
+  }
   s.sent = next;
   s.dataVersion = version;
 }
@@ -461,12 +654,20 @@ async function cycle(forcePull: boolean): Promise<void> {
       await seed(config);
       forcePull = true;
     }
-    if (forcePull || Date.now() - s.lastPull >= PULL_EVERY_MS) await pull(config);
+    if (!s.sent) {
+      await baseline(config);
+      forcePull = true;
+    }
+    if (forcePull || Date.now() - s.lastPull >= PULL_EVERY_MS) {
+      await pull(config);
+      await pullPlan(config);
+    }
     await push(config, forcePull);
     s.lastSync = Date.now();
     s.error = null;
     // Alongside, not in the queue: a big download mustn't hold up the next sync.
     void fetchClips(config);
+    void fetchPhotos(config);
   } catch (error) {
     s.error = error instanceof Error ? error.message : String(error);
   }
@@ -547,6 +748,53 @@ async function fetchClips(config: CloudConfig): Promise<void> {
   }
 }
 
+const photoState = globalThis as unknown as { __topsetPhotos?: { busy: boolean; last: number } };
+
+/**
+ * Downloads the check-in photos athletes sent that this computer doesn't have yet, the way
+ * `fetchClips` does videos. Storage lets them go after a few weeks; the copy here stays.
+ */
+async function fetchPhotos(config: CloudConfig): Promise<void> {
+  const st = (photoState.__topsetPhotos ??= { busy: false, last: 0 });
+  if (st.busy || Date.now() - st.last < CLIPS_EVERY_MS) return;
+  st.busy = true;
+  st.last = Date.now();
+  try {
+    const since = new Date(Date.now() - CLIP_MAX_AGE_DAYS * 86_400_000).toISOString();
+    const waiting = (
+      local()
+        .prepare(`SELECT "id", "uploadedAt" FROM "CheckinPhoto" WHERE "uploadedAt" IS NOT NULL AND "deletedAt" IS NULL ORDER BY "uploadedAt"`)
+        .all() as Row[]
+    )
+      .filter((p) => new Date(stampOf(p.uploadedAt)).toISOString() >= since && !photoSettled(p.id))
+      .slice(0, 50);
+    if (waiting.length === 0) return;
+
+    const { urls } = await api<{ urls: Record<string, string> }>(config.server, "videos", {
+      method: "POST",
+      token: config.token,
+      body: { ids: waiting.map((p) => p.id) },
+    });
+    fs.mkdirSync(photosRoot(), { recursive: true });
+    for (const { id } of waiting) {
+      if (!urls[id]) continue;
+      const res = await fetch(urls[id], { cache: "no-store" });
+      if (res.status === 404) {
+        markPhotoGone(id);
+        continue;
+      }
+      if (!res.ok) break;
+      const file = photoFile(id);
+      fs.writeFileSync(`${file}.part`, new Uint8Array(await res.arrayBuffer()));
+      fs.renameSync(`${file}.part`, file);
+    }
+  } catch (error) {
+    console.warn("[topset] couldn't download check-in photos:", error instanceof Error ? error.message : error);
+  } finally {
+    st.busy = false;
+  }
+}
+
 /** One sync at a time; a Refresh during a background sync waits for it, then goes. */
 function run(forcePull: boolean): Promise<void> {
   return state().queue.run(() => cycle(forcePull));
@@ -570,6 +818,8 @@ export function stopSync(): void {
   if (s.timer) clearInterval(s.timer);
   s.timer = null;
   s.sent = null;
+  s.takeOver = false;
+  s.takeOverRev = null;
   s.base = new Map();
   s.athleteVersion = null;
   s.lastSync = null;
@@ -584,10 +834,11 @@ export async function syncNow(): Promise<{ lastSync: number | null; error: strin
   return syncStatus();
 }
 
-/** Forget what was sent, so the next push compares against the server afresh. */
+/** Sync everything: the next push makes the server match this computer, deletes and all. */
 export function resetSync(): void {
   const s = state();
   s.sent = null;
+  s.takeOver = true;
   s.base = new Map();
   s.athleteVersion = null;
   s.merged = null;

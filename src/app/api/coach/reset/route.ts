@@ -1,6 +1,6 @@
 import { createSession, hashPassword, MIN_PASSWORD, normalizeUsername, sameSecret, sha256 } from "@/lib/auth";
 import { cloudPrimary } from "@/lib/cloud";
-import { body, fail, json, notFound, slowDown } from "@/lib/coach-api";
+import { allowTry, body, clearTries, fail, json, locked, notFound, setupKey, slowDown } from "@/lib/coach-api";
 import { prisma } from "@/lib/prisma";
 import { serverEnv } from "@/lib/role";
 
@@ -22,8 +22,12 @@ export async function POST(request: Request) {
   const password = String(input?.password ?? "");
   if (password.length < MIN_PASSWORD) return fail(`Use at least ${MIN_PASSWORD} characters for the password.`);
 
+  // Any code sent here might be a guess at the setup code, whatever username comes with it.
+  // While that is locked the setup code is refused; reset codes keep working.
   const setup = serverEnv("ADMIN_SETUP_CODE").trim().toUpperCase();
-  if (setup && code && sameSecret(code, setup)) {
+  const setupOpen = Boolean(setup && code) && (await allowTry(setupKey(setup)));
+  if (setupOpen && sameSecret(code, setup)) {
+    await clearTries(setupKey(setup));
     const admins = await prisma.coach.findMany({
       where: { isAdmin: true, passwordHash: { not: null }, ...(username ? { username } : {}) },
       take: 2,
@@ -36,6 +40,8 @@ export async function POST(request: Request) {
     return renew(admins[0], password);
   }
 
+  const key = `reset:${username}`;
+  if (!(await allowTry(key))) return locked();
   const coach = username ? await prisma.coach.findUnique({ where: { username } }) : null;
   const valid =
     coach &&
@@ -48,6 +54,7 @@ export async function POST(request: Request) {
     await slowDown();
     return fail("That reset code isn't valid for this username. Ask your admin for a new one.", 403);
   }
+  await clearTries(key);
   return renew(coach, password);
 }
 

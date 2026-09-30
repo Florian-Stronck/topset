@@ -7,7 +7,7 @@ import { Trophy } from "@/components/CheckinIcon";
 import { RowVideos } from "@/components/RowVideos";
 import { formatAnswer, LOW_READINESS, readinessOf, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
 import { dayStatus, daySets, offPlan, rowSets, rpeDelta, type DayStatus, type OffPlan } from "@/lib/compliance";
-import { formatDate, weekdayOfDay } from "@/lib/dates";
+import { formatDate, weekdayOf, weekdayOfDay } from "@/lib/dates";
 import { useCommands, type Command } from "@/lib/commands";
 import { t, weekdayShort } from "@/lib/i18n";
 import { estimate1RM, formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
@@ -85,6 +85,8 @@ type Line = {
 type Session = {
   day: DayData;
   ymd: string;
+  /** Where the plan put it, when the athlete moved it to `ymd`. */
+  movedFrom: string | null;
   weekday: number;
   status: DayStatus;
   lines: Line[];
@@ -95,6 +97,8 @@ type Session = {
   messages: MessageData[];
   facts: SessionFacts;
 };
+
+const NO_MOVES: Record<string, string> = {};
 
 /**
  * Review: the open week's sessions, one card each, every exercise on one line — the plan,
@@ -110,6 +114,7 @@ export function ReviewView({
   videos,
   checkins,
   messages: initialMessages,
+  moves = NO_MOVES,
   previous,
   show,
   hasLink,
@@ -124,6 +129,8 @@ export function ReviewView({
   checkins: AthleteCheckins;
   /** The coach's notes to this athlete, oldest first. */
   messages: MessageData[];
+  /** Session → the day the athlete moved it to. */
+  moves?: Record<string, string>;
   /** Per row, the last earlier time its exercise was logged. */
   previous: Record<string, PreviousLog>;
   /** A filter asked for in the link (from Overview, say). */
@@ -190,7 +197,8 @@ export function ReviewView({
       w.days
         .filter((day) => !day.rest && day.rows.some((r) => r.exercise.trim() !== ""))
         .map((day): Session => {
-          const ymd = dateOfDay(block.startDate, w.order, day.index);
+          const planned = dateOfDay(block.startDate, w.order, day.index);
+          const ymd = moves[day.id] ?? planned;
           const resolved = resolveDay(day.rows, maxes);
           const past = ymd < today;
           const lines = day.rows
@@ -220,7 +228,8 @@ export function ReviewView({
           return {
             day,
             ymd,
-            weekday: weekdayOfDay(block.startDate, day.index),
+            movedFrom: ymd === planned ? null : planned,
+            weekday: ymd === planned ? weekdayOfDay(block.startDate, day.index) : weekdayOf(ymd),
             status,
             lines,
             kept,
@@ -232,7 +241,7 @@ export function ReviewView({
           };
         }),
     );
-  }, [answersByDay, athlete.unit, block, maxes, messages, prefs.filter, prefs.lifts, previous, questions, today, weekly]);
+  }, [answersByDay, athlete.unit, block, maxes, messages, moves, prefs.filter, prefs.lifts, previous, questions, today, weekly]);
 
   const sessions = sessionsByWeek[activeWeek - 1] ?? [];
   const shown = sessions.filter((s) => keepSession(s.facts, prefs.filter, prefs.showUpcoming));
@@ -719,6 +728,14 @@ function SessionCard({
             {weekdayShort(s.weekday)} {formatDate(s.ymd)} · {t("{done}/{of} exercises", { done, of: s.lines.length })}
           </span>
         </button>
+        {s.movedFrom && (
+          <span
+            title={t("The athlete moved this session from {date}", { date: formatDate(s.movedFrom) })}
+            className="rounded-full bg-surface-3 px-2 py-0.5 text-[10px] font-semibold text-muted"
+          >
+            {t("moved from {date}", { date: formatDate(s.movedFrom) })}
+          </span>
+        )}
         {s.unreviewed && !readOnly && <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent">{t("to review")}</span>}
         {s.readiness.score !== null && (
           <span title={answerText} className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ${low ? "bg-warn/15 text-warn" : "bg-surface-3 text-muted"}`}>

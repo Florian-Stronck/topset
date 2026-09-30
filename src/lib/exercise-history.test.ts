@@ -24,7 +24,7 @@ const block = (name: string, start: string, rows: ReturnType<typeof row>[]) => (
   squat1RM: 200,
   bench1RM: null,
   dead1RM: null,
-  weeks: [{ order: 1, days: [{ index: 2, rest: false, rows }] }],
+  weeks: [{ order: 1, days: [{ id: `d-${name}`, index: 2, rest: false, rows }] }],
 });
 
 test("every logged set of an exercise, oldest first, across phases", () => {
@@ -42,4 +42,13 @@ test("every logged set of an exercise, oldest first, across phases", () => {
     ["2026-09-16", 160, "Prep · Peak"],
   ]);
   assert.ok(history[0].logs[0].e1rm! > 150);
+});
+
+test("a moved session is logged on the day it was done", () => {
+  const history = exerciseHistory(
+    [block("Base", "2026-09-07", [row("a", "Squat", 150)])],
+    { id: "x", name: "A", unit: "KG", sport: "LIFTER", squat1RM: 200, bench1RM: null, dead1RM: null },
+    new Map([["d-Base", "2026-09-10"]]),
+  );
+  assert.equal(history[0].logs[0].ymd, "2026-09-10");
 });

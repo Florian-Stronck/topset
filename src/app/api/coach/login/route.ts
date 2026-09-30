@@ -1,6 +1,6 @@
 import { createSession, normalizeUsername, verifyPassword } from "@/lib/auth";
 import { cloudPrimary } from "@/lib/cloud";
-import { body, fail, json, notFound, slowDown } from "@/lib/coach-api";
+import { allowTry, body, clearTries, fail, json, locked, notFound, slowDown } from "@/lib/coach-api";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -13,11 +13,15 @@ export async function POST(request: Request) {
   const username = normalizeUsername(String(input?.username ?? input?.email ?? ""));
   const password = String(input?.password ?? "");
 
+  const key = `login:${username}`;
+  if (!(await allowTry(key))) return locked();
+
   const coach = await prisma.coach.findUnique({ where: { username } });
   if (!coach || !(await verifyPassword(password, coach.passwordHash))) {
     await slowDown();
     return fail("Wrong username or password.", 401);
   }
+  await clearTries(key);
   if (coach.disabledAt) return fail("This account has been turned off. Ask your admin.", 403);
   const token = await createSession(coach.id);
   return json({ ok: true, token, coach: { id: coach.id, name: coach.name, username: coach.username, isAdmin: coach.isAdmin } });

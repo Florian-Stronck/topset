@@ -1,6 +1,6 @@
 import { estimate1RM, formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
 import type { ProgressBlock } from "@/lib/progress";
-import { dateOfDay } from "@/lib/schedule";
+import { NO_MOVES, sessionDate } from "@/lib/schedule";
 import type { AthleteData } from "@/lib/types";
 
 /**
@@ -24,11 +24,11 @@ export type ExerciseLog = {
 export type ExerciseHistory = { name: string; logs: ExerciseLog[] };
 
 type ProgressDay = ProgressBlock["weeks"][number]["days"][number];
-export type HistoryBlock = Omit<ProgressBlock, "weeks"> & { weeks: { order: number; days: (ProgressDay & { index: number })[] }[] };
+export type HistoryBlock = Omit<ProgressBlock, "weeks"> & { weeks: { order: number; days: (ProgressDay & { id: string; index: number })[] }[] };
 
 export const keyOf = (name: string) => name.trim().replace(/\s+/g, " ").toLowerCase();
 
-export function exerciseHistory(blocks: HistoryBlock[], athlete: AthleteData): ExerciseHistory[] {
+export function exerciseHistory(blocks: HistoryBlock[], athlete: AthleteData, moves: ReadonlyMap<string, string> = NO_MOVES): ExerciseHistory[] {
   const out = new Map<string, ExerciseHistory>();
 
   for (const block of blocks) {
@@ -42,7 +42,7 @@ export function exerciseHistory(blocks: HistoryBlock[], athlete: AthleteData): E
           const key = keyOf(row.exercise);
           const entry = out.get(key) ?? { name: row.exercise.trim().replace(/\s+/g, " "), logs: [] };
           entry.logs.push({
-            ymd: dateOfDay(block.startDate, week.order, day.index),
+            ymd: sessionDate(block.startDate, week.order, day, moves),
             where: `${block.program.name} · ${block.phase}`,
             week: week.order,
             prescribed: `${row.sets ?? "—"} × ${row.reps ?? "—"} @ ${formatPrescription(row, athlete.unit)}`,

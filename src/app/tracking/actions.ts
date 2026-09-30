@@ -2,7 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { bodyweightEntry, type BodyweightEntry } from "@/lib/bodyweight";
+import { NUTRIENTS, type Nutrient } from "@/lib/checkins";
 import { cleanInjury, injuryData, type InjuryData, type InjuryInput } from "@/lib/injuries";
+import { cleanAmount, isEmpty, nutritionEntry, nutritionId, type NutritionEntry } from "@/lib/nutrition";
+import { today as calendarToday, ymdOf } from "@/lib/dates";
+import { cleanMeeting, meetingData, waitingOn, type MeetingData, type MeetingInput } from "@/lib/meetings";
 import { prisma } from "@/lib/prisma";
 import { messageData, type MessageData } from "@/lib/queries";
 import { assertCoach } from "@/lib/role";
@@ -32,6 +36,26 @@ export async function deleteBodyweight(id: string) {
   assertCoach();
   await prisma.bodyweightLog.updateMany({ where: { id, deletedAt: null }, data: { deletedAt: new Date() } });
   refresh();
+}
+
+/**
+ * The coach's side of nutrition: a day's totals typed in or corrected on the desktop. It
+ * writes the same row the athlete's check-in does, so the newer of the two wins on sync.
+ * Clearing every number deletes the day, as a tombstone.
+ */
+export async function saveNutrition(athleteId: string, day: string, values: Partial<Record<Nutrient, unknown>>): Promise<NutritionEntry | null> {
+  assertCoach();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(day))) throw new Error("That day isn't a date.");
+  const data = Object.fromEntries(NUTRIENTS.map((n) => [n, cleanAmount(n, values[n])])) as Record<Nutrient, number | null>;
+  const id = nutritionId(athleteId, day);
+  const deletedAt = isEmpty(data) ? new Date() : null;
+  const row = await prisma.nutritionLog.upsert({
+    where: { id },
+    create: { id, athleteId, day, ...data, source: "coach", deletedAt },
+    update: { ...data, source: "coach", deletedAt },
+  });
+  refresh();
+  return deletedAt ? null : nutritionEntry(row);
 }
 
 /*
@@ -112,4 +136,76 @@ export async function deleteCoachInjury(id: string) {
   await prisma.injury.updateMany({ where: { id, deletedAt: null }, data: { deletedAt: new Date() } });
   refresh();
   revalidatePath("/programming");
+}
+
+/*
+ * Scheduling from the coach's side: the sessions the athlete moved (seen, or put back where
+ * the plan has them) and meetings. Both sync row by row like weigh-ins; the athlete's phone
+ * hears about meetings once the change reaches the server.
+ */
+
+function refreshSchedule() {
+  refresh();
+  revalidatePath("/programming");
+}
+
+/** The coach has seen these moves; the Schedule tab stops counting them. */
+export async function markMovesSeen(athleteId: string, ids: string[]) {
+  assertCoach();
+  await prisma.sessionMove.updateMany({ where: { athleteId, id: { in: ids }, seenAt: null }, data: { seenAt: new Date() } });
+  refreshSchedule();
+}
+
+/** Puts a moved session back on the day the plan has it. */
+export async function undoMove(id: string) {
+  assertCoach();
+  await prisma.sessionMove.updateMany({ where: { id, deletedAt: null }, data: { deletedAt: new Date(), seenAt: new Date() } });
+  refreshSchedule();
+}
+
+const coachToday = () => ymdOf(calendarToday());
+
+/** A meeting the coach proposes. */
+export async function proposeMeeting(athleteId: string, input: MeetingInput): Promise<MeetingData> {
+  assertCoach();
+  const row = await prisma.meeting.create({
+    data: { ...cleanMeeting(input, coachToday()), athleteId, proposedBy: "coach", status: "PROPOSED" },
+  });
+  refreshSchedule();
+  return meetingData(row);
+}
+
+/** Another day, time or place: proposes it afresh, for the athlete to answer. */
+export async function rescheduleMeeting(id: string, input: MeetingInput): Promise<MeetingData> {
+  assertCoach();
+  const row = await prisma.meeting.update({
+    where: { id, deletedAt: null },
+    data: { ...cleanMeeting(input, coachToday()), proposedBy: "coach", status: "PROPOSED" },
+  });
+  refreshSchedule();
+  return meetingData(row);
+}
+
+/** Answers the athlete's request. */
+export async function answerAthleteMeeting(id: string, accept: boolean): Promise<MeetingData> {
+  assertCoach();
+  const held = await prisma.meeting.findFirst({ where: { id, deletedAt: null } });
+  if (!held || waitingOn(meetingData(held)) !== "coach") throw new Error("That meeting isn't waiting on you.");
+  const row = await prisma.meeting.update({ where: { id }, data: { status: accept ? "ACCEPTED" : "DECLINED" } });
+  refreshSchedule();
+  return meetingData(row);
+}
+
+/** Calls a meeting off; the athlete still sees it, marked as such. */
+export async function cancelCoachMeeting(id: string) {
+  assertCoach();
+  await prisma.meeting.updateMany({ where: { id, deletedAt: null, status: { not: "CANCELLED" } }, data: { status: "CANCELLED" } });
+  refreshSchedule();
+}
+
+/** Clears a meeting off the list altogether. */
+export async function deleteCoachMeeting(id: string) {
+  assertCoach();
+  await prisma.meeting.updateMany({ where: { id, deletedAt: null }, data: { deletedAt: new Date() } });
+  refreshSchedule();
 }

@@ -3,10 +3,11 @@ import { getAthleteSchedule, type TokenAthlete } from "@/lib/athlete-queries";
 import { ymdOf } from "@/lib/dates";
 import { tIn } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
-import type { PushKind } from "@/lib/push-kinds";
+import { pushServiceEndpoint, type PushKind } from "@/lib/push-kinds";
 import { sessionOn } from "@/lib/schedule";
 import { parseSettings, type Language } from "@/lib/settings";
-import type { NewNote } from "@/lib/sync-server";
+import { inZone, timeSpan } from "@/lib/meetings";
+import type { NewMeeting, NewNote } from "@/lib/sync-server";
 
 /**
  * Push notifications for the athlete app: the coach's notes and plan changes, the morning
@@ -55,9 +56,10 @@ async function phones(athleteId: string, token: string, kind: PushKind): Promise
 
 /** Sends one payload to these phones; one its push service says is gone is dropped. */
 async function send(subs: Sub[], payload: PushPayload): Promise<void> {
-  const gone: string[] = [];
+  // Sign-ups from before push services were checked may point anywhere; those are dropped.
+  const gone = subs.filter((s) => !pushServiceEndpoint(s.endpoint)).map((s) => s.id);
   await Promise.all(
-    subs.map(async (s) => {
+    subs.filter((s) => pushServiceEndpoint(s.endpoint)).map(async (s) => {
       try {
         await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(payload), {
           TTL: 60 * 60 * 24,
@@ -113,6 +115,52 @@ export async function notifyNotes(coachId: string, notes: NewNote[]): Promise<vo
         tag: `note-${n.id}`,
         badge: badge.get(a.id) ?? theirs.length,
       });
+    }
+  }
+}
+
+// --- meetings ---------------------------------------------------------------------------------
+
+const MEETING_TITLE: Record<NewMeeting["news"], string> = {
+  proposed: "{name} wants to meet",
+  accepted: "{name} accepted your meeting",
+  declined: "{name} can't make that meeting",
+  cancelled: "{name} called off a meeting",
+};
+
+/**
+ * Tells each athlete what the coach did with their meetings: one proposed, answered or
+ * called off. Rides on the notes switch — it is the coach talking to them either way.
+ */
+export async function notifyMeetings(coachId: string, meetings: NewMeeting[]): Promise<void> {
+  if (meetings.length === 0 || !configured()) return;
+  const voice = await coachVoice(coachId);
+  if (!voice) return;
+  const athletes = await prisma.athlete.findMany({
+    where: { id: { in: [...new Set(meetings.map((m) => m.athleteId))] }, coachId, accessToken: { not: null } },
+    select: { id: true, accessToken: true },
+  });
+  const rows = new Map(
+    (await prisma.meeting.findMany({ where: { id: { in: meetings.map((m) => m.id) } }, select: { id: true, minutes: true, timeZone: true } })).map(
+      (m) => [m.id, m],
+    ),
+  );
+  for (const a of athletes) {
+    const token = a.accessToken!;
+    const subs = await phones(a.id, token, "notes");
+    if (subs.length === 0) continue;
+    for (const m of meetings.filter((x) => x.athleteId === a.id)) {
+      const row = rows.get(m.id);
+      // Each phone reads the time on its own clock.
+      for (const sub of subs) {
+        const at = inZone({ day: m.day, time: m.time, timeZone: row?.timeZone ?? null }, sub.timeZone) ?? m;
+        await send([sub], {
+          title: tIn(voice.lang, MEETING_TITLE[m.news], { name: voice.name }),
+          body: `${at.day} · ${timeSpan(at.time, row?.minutes ?? 30)}`,
+          url: `/a/${token}/inbox`,
+          tag: `meeting-${m.id}`,
+        });
+      }
     }
   }
 }

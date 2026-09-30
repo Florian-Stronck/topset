@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Check } from "@/components/athlete/icons";
 import { CheckinCard } from "@/components/athlete/CheckinCard";
+import { MoveSession } from "@/components/athlete/MoveSession";
 import { SessionLogger } from "@/components/athlete/SessionLogger";
 import type { AthleteSession, DayCheckin } from "@/lib/athlete-queries";
 import type { BodyweightEntry } from "@/lib/bodyweight";
@@ -135,6 +136,17 @@ export function CheckinDay({
           )
         )}
       </div>
+
+      {session && (
+        <MoveSession
+          token={token}
+          dayId={session.dayId}
+          ymd={session.ymd}
+          movedFrom={session.movedFrom}
+          today={today}
+          canMove={session.done === 0 && (live === null || live === "none")}
+        />
+      )}
 
       <CheckinCard token={token} unit={unit} day={day} today={today} initial={checkin} bodyweight={bodyweight} />
 

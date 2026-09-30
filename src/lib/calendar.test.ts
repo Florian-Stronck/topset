@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dayKind, monthGrid, parseMonth, shiftMonth } from "@/lib/calendar";
+import { dayKind, dayMarks, monthGrid, parseMonth, shiftMonth } from "@/lib/calendar";
 
 test("steps months across the year's end", () => {
   assert.equal(shiftMonth("2026-12", 1), "2027-01");
@@ -43,4 +43,18 @@ test("colours a day by the most telling thing that happened", () => {
   assert.equal(dayKind("2026-09-30", today, { session: session(0), meet: false }), "plan");
   assert.equal(dayKind("2026-09-30", today, { session: null, meet: false }), "none");
   assert.equal(dayKind("2026-10-03", today, { session: null, meet: true }), "meet");
+});
+
+test("a move marks the day it left and the day it landed; live meetings count", () => {
+  const marks = dayMarks(
+    [{ fromDay: "2026-09-30", day: "2026-10-01" }],
+    [
+      { day: "2026-10-01", status: "ACCEPTED" },
+      { day: "2026-10-01", status: "PROPOSED" },
+      { day: "2026-10-02", status: "CANCELLED" },
+    ],
+  );
+  assert.deepEqual(marks.get("2026-09-30"), { movedFrom: null, movedTo: "2026-10-01", meetings: 0 });
+  assert.deepEqual(marks.get("2026-10-01"), { movedFrom: "2026-09-30", movedTo: null, meetings: 2 });
+  assert.equal(marks.has("2026-10-02"), false);
 });

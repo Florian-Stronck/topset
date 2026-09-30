@@ -5,8 +5,9 @@ import { AppBadge } from "@/components/athlete/Notifications";
 import { RememberAthlete } from "@/components/athlete/RememberAthlete";
 import { SettingsProvider } from "@/components/SettingsProvider";
 import { getAthleteByToken, unreadCount } from "@/lib/athlete-queries";
+import { athleteToday } from "@/lib/athlete-today";
 import { loadSettings } from "@/lib/coach-settings";
-import { forClient } from "@/lib/settings";
+import { forAthlete } from "@/lib/settings";
 
 export const metadata: Metadata = {
   title: "Topset Check-in",
@@ -37,10 +38,10 @@ export default async function AthleteLayout({
   const athlete = await getAthleteByToken(token);
   if (!athlete) notFound();
   // The athlete sees their own coach's units, rounding, RPE chart and language.
-  const [settings, unread] = await Promise.all([loadSettings(athlete.coachId), unreadCount(athlete.id)]);
+  const [settings, unread] = await Promise.all([loadSettings(athlete.coachId), unreadCount(athlete.id, await athleteToday())]);
 
   return (
-    <SettingsProvider settings={forClient(settings)}>
+    <SettingsProvider settings={forAthlete(settings)}>
       <div className="mx-auto flex min-h-dvh w-full max-w-[560px] flex-col">
         <RememberAthlete token={token} />
         <AppBadge unread={unread} />

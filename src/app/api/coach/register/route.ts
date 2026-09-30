@@ -1,6 +1,6 @@
 import { createSession, hashPassword, MIN_PASSWORD, normalizeUsername, sameSecret, validUsername } from "@/lib/auth";
 import { cloudPrimary } from "@/lib/cloud";
-import { body, fail, json, notFound, slowDown } from "@/lib/coach-api";
+import { allowTry, body, clearTries, fail, json, notFound, setupKey, slowDown } from "@/lib/coach-api";
 import { prisma } from "@/lib/prisma";
 import { serverEnv } from "@/lib/role";
 
@@ -31,7 +31,10 @@ export async function POST(request: Request) {
   const hasAdmin = (await prisma.coach.count({ where: { isAdmin: true } })) > 0;
   const passwordHash = await hashPassword(password);
 
-  if (!hasAdmin && setup && sameSecret(code, setup.toUpperCase())) {
+  // Until there is an admin, a code here might be a guess at the setup code.
+  const setupOpen = !hasAdmin && Boolean(setup) && (await allowTry(setupKey(setup)));
+  if (setupOpen && sameSecret(code, setup.toUpperCase())) {
+    await clearTries(setupKey(setup));
     // The coach who used Topset before accounts: their data becomes the admin's.
     const legacy = await prisma.coach.findFirst({ where: { passwordHash: null }, orderBy: { id: "asc" } });
     const clash = await prisma.coach.findUnique({ where: { username } });

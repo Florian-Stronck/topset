@@ -2,13 +2,15 @@ import { notFound } from "next/navigation";
 import { CheckinDay, type StripDay } from "@/components/athlete/CheckinDay";
 import { CheckinCard } from "@/components/athlete/CheckinCard";
 import { CoachNotes } from "@/components/athlete/CoachNotes";
-import { checkinOn, getAthleteByToken, getAthleteCalendar, inboxFor, recentBodyweight, sessionsInFull, type ScheduledSession, type SchedulePhase } from "@/lib/athlete-queries";
+import { Meetings } from "@/components/athlete/Meetings";
+import { SwipeDays } from "@/components/athlete/SwipeDays";
+import { checkinOn, getAthleteByToken, getAthleteCalendar, inboxFor, meetingsFor, recentBodyweight, sessionsInFull, type ScheduledSession, type SchedulePhase } from "@/lib/athlete-queries";
 import { longDate, shortDate, weekdayLetter, weekdayShort } from "@/lib/athlete-format";
 import { athleteToday } from "@/lib/athlete-today";
 import { loadSettings } from "@/lib/coach-settings";
 import { ymdOf } from "@/lib/dates";
 import { t } from "@/lib/i18n";
-import { dateOfDay, daysBetween } from "@/lib/schedule";
+import { addDays, dateOfDay, daysBetween } from "@/lib/schedule";
 import { completion } from "@/lib/setlog";
 
 export const dynamic = "force-dynamic";
@@ -39,14 +41,17 @@ export default async function AthleteToday({
   const today = await athleteToday();
   const day = d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : today;
   // A day still to come shows what it will ask, to be answered on the day.
-  const [{ phases, sessions }, bodyweight, checkin, notes] = await Promise.all([
+  const [{ phases, sessions }, bodyweight, checkin, notes, meetings] = await Promise.all([
     getAthleteCalendar(athlete),
     recentBodyweight(athlete.id),
     checkinOn(athlete.id, day),
     inboxFor(athlete.id, [day]),
+    meetingsFor(athlete.id),
   ]);
+  const meetingsToday = meetings.filter((m) => m.day === day);
   const base = `/a/${token}`;
   const link = (ymd: string) => (ymd === today ? base : `${base}?d=${ymd}`);
+  const swipe = { prev: link(addDays(day, -1)), next: link(addDays(day, 1)) };
 
   const scheduled = sessions.find((s) => s.ymd === day) ?? null;
   // The phase the day belongs to: the one it is a session of, else the latest one running
@@ -58,17 +63,19 @@ export default async function AthleteToday({
 
   if (!phase) {
     return (
-      <>
+      <SwipeDays {...swipe}>
+        <Meetings token={token} meetings={meetingsToday} today={today} compact />
         <CheckinCard key={day} token={token} unit={athlete.unit} day={day} today={today} initial={checkin} bodyweight={bodyweight} />
         <div className="mt-12 rounded-2xl border border-border bg-surface px-5 py-8 text-center">
           <div className="text-[16px] font-medium">{t("No program yet")}</div>
           <p className="mt-1 text-[13px] text-muted">{t("Your coach hasn't written a program for you yet.")}</p>
         </div>
-      </>
+      </SwipeDays>
     );
   }
 
-  const week = scheduled?.week ?? weekOf(phase, day) ?? (nearest?.block.id === phase.id ? nearest.week : 1);
+  // By the date, so a session moved into another week shows in the week it now sits in.
+  const week = weekOf(phase, day) ?? scheduled?.week ?? (nearest?.block.id === phase.id ? nearest.week : 1);
   const inPhase = (s: ScheduledSession) => s.block.id === phase.id;
   const firstOf = (w: number) =>
     sessions.find((s) => inPhase(s) && s.week === w)?.ymd ?? dateOfDay(phase.startDate, w, 0);
@@ -78,15 +85,16 @@ export default async function AthleteToday({
   const phaseHref = (p: SchedulePhase | undefined) =>
     p ? link(sessions.find((s) => s.block.id === p.id)?.ymd ?? ymdOf(p.startDate)) : null;
 
-  const weekSessions = sessions.filter((s) => inPhase(s) && s.week === week);
+  const weekDates = Array.from({ length: 7 }, (_, i) => dateOfDay(phase.startDate, week, i));
+  // Whatever sits on the week's dates, moved sessions included.
+  const weekSessions = sessions.filter((s) => weekDates.includes(s.ymd));
   const shown = [...weekSessions];
   if (scheduled && !shown.includes(scheduled)) shown.push(scheduled);
   const full = await sessionsInFull(athlete, shown);
   const session = scheduled ? (full.find((s) => s.ymd === scheduled.ymd) ?? null) : null;
   const status = new Map(full.map((s) => [s.ymd, completion(s.done, s.prescribed)]));
 
-  const strip: StripDay[] = Array.from({ length: 7 }, (_, i) => {
-    const ymd = dateOfDay(phase.startDate, week, i);
+  const strip: StripDay[] = weekDates.map((ymd) => {
     const on = weekSessions.find((s) => s.ymd === ymd);
     return {
       ymd,
@@ -101,7 +109,8 @@ export default async function AthleteToday({
   const next = sessions.find((s) => s.ymd > day) ?? null;
 
   return (
-    <>
+    <SwipeDays {...swipe}>
+      <Meetings token={token} meetings={meetingsToday} today={today} compact />
       {notes.length > 0 && (
         <section className="mb-4">
           <h2 className="mb-2 text-[11px] tracking-[0.16em] text-muted-2">{t("FROM YOUR COACH")}</h2>
@@ -137,6 +146,6 @@ export default async function AthleteToday({
         bodyweight={bodyweight}
         checkin={checkin}
       />
-    </>
+    </SwipeDays>
   );
 }

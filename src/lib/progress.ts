@@ -1,7 +1,7 @@
 import type { IntensityType, Tier } from "@prisma/client";
 import { dayStatus, daySets, prescribedRpe, rpeDrift } from "@/lib/compliance";
 import { estimate1RM, liftOf, maxesOf, oneRepMaxFor, resolveDay } from "@/lib/intensity";
-import { dateOfDay } from "@/lib/schedule";
+import { NO_MOVES, sessionDate } from "@/lib/schedule";
 import { topSetOf } from "@/lib/tracking";
 import type { AthleteData, BlockData, RowData } from "@/lib/types";
 
@@ -199,7 +199,7 @@ export function rpeByWeek(block: Pick<BlockData, "weeks">, lift: LiftKey | "all"
 export type ComplianceWeek = { week: number; done: number; due: number; pct: number | null; missed: number };
 
 /** Sets done of the sets due so far, per week — a session still to come isn't due yet. */
-export function complianceByWeek(block: PhaseBlock, today: string): ComplianceWeek[] {
+export function complianceByWeek(block: PhaseBlock, today: string, moves: ReadonlyMap<string, string> = NO_MOVES): ComplianceWeek[] {
   return block.weeks.map((week) => {
     let done = 0;
     let due = 0;
@@ -208,7 +208,7 @@ export function complianceByWeek(block: PhaseBlock, today: string): ComplianceWe
       if (day.rest) continue;
       const sets = daySets(day.rows);
       if (sets.prescribed === 0) continue;
-      const ymd = dateOfDay(block.startDate, week.order, day.index);
+      const ymd = sessionDate(block.startDate, week.order, day, moves);
       if (ymd > today && sets.done === 0) continue;
       done += sets.done;
       due += sets.prescribed;

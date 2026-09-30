@@ -4,10 +4,12 @@ import { useMemo } from "react";
 import { BodyweightPanel } from "@/components/BodyweightPanel";
 import { ChartCard, Legend, LineChart, Segmented } from "@/components/charts/charts";
 import { CheckinPanel } from "@/components/CheckinPanel";
+import { NutritionPanel } from "@/components/NutritionPanel";
 import type { BodyweightEntry } from "@/lib/bodyweight";
 import { colorOf, LOW_READINESS } from "@/lib/checkins";
 import { useCommands, type Command } from "@/lib/commands";
 import { formatDate } from "@/lib/dates";
+import type { NutritionEntry, TargetSpan } from "@/lib/nutrition";
 import { t } from "@/lib/i18n";
 import { setTrackingPref, usePref, type TrackingPrefs } from "@/lib/prefs";
 import type { AthleteCheckins } from "@/lib/queries";
@@ -30,6 +32,8 @@ export function WellnessView({
   checkins,
   drift,
   bodyweight,
+  nutrition,
+  targets,
   meet,
   readOnly = false,
 }: {
@@ -40,6 +44,10 @@ export function WellnessView({
   /** RPE against plan per session, over the longest range. */
   drift: { ymd: string; drift: number }[];
   bodyweight: BodyweightEntry[];
+  /** Oldest first. */
+  nutrition: NutritionEntry[];
+  /** The phases' nutrition targets. */
+  targets: TargetSpan[];
   meet: { name: string; day: string; weightClass: string | null; limit: number | null } | null;
   /** The viewer link: weigh-ins can't be added or deleted. */
   readOnly?: boolean;
@@ -76,6 +84,17 @@ export function WellnessView({
         group: "Chart",
         title: prefs.perQuestion ? t("Readiness as one score") : t("Readiness per question"),
         run: () => setTrackingPref({ perQuestion: !prefs.perQuestion }),
+      },
+      {
+        id: "nutrition-add",
+        group: "Chart",
+        title: t("Log a day's nutrition"),
+        keywords: "nutrition calories kcal macros protein carbs fat food",
+        run: () => {
+          const input = document.getElementById("nutrition-kcal") as HTMLInputElement | null;
+          input?.scrollIntoView({ block: "center", behavior: "smooth" });
+          input?.focus();
+        },
       },
       {
         id: "bodyweight-add",
@@ -155,6 +174,8 @@ export function WellnessView({
 
       <BodyweightPanel athleteId={athleteId} unit={unit} today={today} entries={bodyweight} meet={meet} readOnly={readOnly} />
 
+      <NutritionPanel athleteId={athleteId} today={today} range={range} entries={nutrition} targets={targets} readOnly={readOnly} />
+
       <div>
         <div className="mb-2 flex justify-end">
           <button
@@ -170,6 +191,7 @@ export function WellnessView({
         <CheckinPanel
           questions={questions}
           answers={answers}
+          photos={checkins.photos}
           today={today}
           range={range}
           onRange={(n) => setTrackingPref({ checkinRange: (RANGES.includes(n as TrackingPrefs["checkinRange"]) ? n : 14) as TrackingPrefs["checkinRange"] })}

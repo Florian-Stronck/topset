@@ -2,12 +2,24 @@
 
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { Unit } from "@prisma/client";
-import { deleteBodyweight, logBodyweight, saveCheckinAnswer } from "@/app/a/actions";
+import { deleteBodyweight, deletePhoto, finishPhoto, logBodyweight, saveCheckinAnswer, startPhoto } from "@/app/a/actions";
 import { CheckinIcon } from "@/components/CheckinIcon";
 import type { DayCheckin } from "@/lib/athlete-queries";
-import { colorOf, formatAnswer, isBodyweight, picked, readinessOf, type CheckinQuestionData } from "@/lib/checkins";
+import {
+  colorOf,
+  formatAnswer,
+  isBodyweight,
+  MAX_PHOTOS_PER_ANSWER,
+  nutrientOf,
+  PHOTO_EDGE,
+  picked,
+  readinessOf,
+  type CheckinQuestionData,
+  type PhotoView,
+} from "@/lib/checkins";
 import { shortDate, weekdayShort } from "@/lib/athlete-format";
 import type { BodyweightEntry } from "@/lib/bodyweight";
+import { KCAL_TOLERANCE } from "@/lib/nutrition";
 import { t } from "@/lib/i18n";
 
 /**
@@ -15,7 +27,7 @@ import { t } from "@/lib/i18n";
  * written — a number, a scale, options, yes or no, or a few words. Each answer saves on its
  * own; once every one is in, the card folds to a line of answers that opens again. The
  * bodyweight question is one of them, but its answer goes to the bodyweight log, so the
- * trend and the weight cut read it.
+ * trend and the weight cut read it. A question the coach asked a photo on takes pictures too.
  */
 export function CheckinCard(props: Parameters<typeof CheckinForm>[0]) {
   // A coach who asks nothing gets no card.
@@ -49,9 +61,10 @@ function CheckinForm({
   const [values, setValues] = useState<Record<string, string | null>>(() =>
     Object.fromEntries(initial.answers.map((a) => [a.questionId, a.value])),
   );
+  const [photos, setPhotos] = useState(initial.photos);
   const onDay = weights.find((e) => e.day === weighDay) ?? null;
   const has = (q: CheckinQuestionData, v: Record<string, string | null> = values) =>
-    isBodyweight(q) ? onDay !== null : (v[q.id] ?? null) !== null;
+    isBodyweight(q) ? onDay !== null : (v[q.id] ?? null) !== null || photos.some((p) => p.questionId === q.id);
   const answered = questions.filter((q) => has(q)).length;
   const total = questions.length;
   const complete = answered === total;
@@ -142,7 +155,28 @@ function CheckinForm({
                 </div>
               </div>
             ) : (
-              <Question key={q.id} q={q} value={values[q.id] ?? null} onSave={(value, raw) => save(q, value, raw)} />
+              <Question
+                key={q.id}
+                q={q}
+                value={values[q.id] ?? null}
+                onSave={(value, raw) => save(q, value, raw)}
+                target={nutrientOf(q) ? (initial.target?.[nutrientOf(q)!] ?? null) : null}
+              >
+                {q.config.photo && initial.photosOn && (
+                  <Photos
+                    token={token}
+                    q={q}
+                    day={day}
+                    photos={photos.filter((p) => p.questionId === q.id)}
+                    onAdd={(p) => setPhotos((was) => [...was, p])}
+                    onRemove={(id) => {
+                      setPhotos((was) => was.filter((p) => p.id !== id));
+                      enqueue(() => deletePhoto(token, id));
+                    }}
+                    onError={setError}
+                  />
+                )}
+              </Question>
             ),
           )}
         </div>
@@ -157,19 +191,135 @@ function Question({
   q,
   value,
   onSave,
+  target = null,
+  children,
 }: {
   q: CheckinQuestionData;
   value: string | null;
   onSave: (value: string | null, raw?: unknown) => void;
+  /** A nutrition question's target for the day, from the phase. */
+  target?: number | null;
+  /** Anything under the answer: its photos. */
+  children?: React.ReactNode;
 }) {
+  const n = nutrientOf(q);
+  // Calories count within 10% either way, protein at least the target; carbs and fat are a guide.
+  const hit =
+    target === null || value === null || (n !== "kcal" && n !== "protein")
+      ? null
+      : n === "kcal"
+        ? Math.abs(Number(value) - target) <= target * KCAL_TOLERANCE
+        : Number(value) >= target;
   return (
     <div>
       <QuestionHead q={q}>
         {q.cadence === "WEEKLY" && <span className="shrink-0 text-[11px] text-muted-2">{t("this week")}</span>}
+        {target !== null && (
+          <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-2">
+            {hit !== null && <span className={`size-1.5 rounded-full ${hit ? "bg-ok" : "bg-warn"}`} />}
+            {t("target {n} {u}", { n: target, u: q.config.unit ?? "" })}
+          </span>
+        )}
       </QuestionHead>
       <div className="mt-2">
         <Answer q={q} value={value} onSave={onSave} />
       </div>
+      {children}
+    </div>
+  );
+}
+
+/** A photo from the camera or the library, shrunk to a JPEG no wider or taller than PHOTO_EDGE. */
+async function shrinkPhoto(file: File): Promise<Blob> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, PHOTO_EDGE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error(t("That photo couldn't be read.")))), "image/jpeg", 0.85),
+  );
+}
+
+/** The photos on one answer, and a button to take or pick another. */
+function Photos({
+  token,
+  q,
+  day,
+  photos,
+  onAdd,
+  onRemove,
+  onError,
+}: {
+  token: string;
+  q: CheckinQuestionData;
+  day: string;
+  photos: PhotoView[];
+  onAdd: (photo: PhotoView) => void;
+  onRemove: (id: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function add(file: File) {
+    setBusy(true);
+    try {
+      const blob = await shrinkPhoto(file);
+      const start = await startPhoto(token, q.id, day, blob.size);
+      if (!start.ok) throw new Error(start.error);
+      const res = await fetch(start.value.url, { method: "PUT", headers: { "Content-Type": start.value.contentType }, body: blob });
+      if (!res.ok) throw new Error(t("The photo didn't upload. Try again."));
+      const done = await finishPhoto(token, start.value.id);
+      if (!done.ok) throw new Error(done.error);
+      onAdd(done.value);
+    } catch (e) {
+      onError(e instanceof Error ? t(e.message) : t("The photo didn't upload. Try again."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {photos.map((p) => (
+        <div key={p.id} className="relative">
+          <a href={p.url} target="_blank" rel="noreferrer">
+            {/* eslint-disable-next-line @next/next/no-img-element -- a signed storage link, not a static asset */}
+            <img src={p.url} alt={q.label} className="size-20 rounded-xl border border-border object-cover" />
+          </a>
+          <button
+            type="button"
+            aria-label={t("Delete this photo")}
+            onClick={() => onRemove(p.id)}
+            className="absolute -right-1.5 -top-1.5 grid size-6 place-items-center rounded-full border border-border bg-surface text-[13px] text-muted"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      {photos.length < MAX_PHOTOS_PER_ANSWER && (
+        <label
+          className={`grid size-20 cursor-pointer place-items-center rounded-xl border border-dashed border-border text-muted active:bg-surface-3 ${busy ? "opacity-50" : ""}`}
+        >
+          <span className="flex flex-col items-center gap-1 text-[11px]">
+            <CheckinIcon name="camera" size={20} />
+            {busy ? t("Sending…") : t("Add photo")}
+          </span>
+          <input
+            type="file"
+            accept="image/*"
+            disabled={busy}
+            className="sr-only"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void add(file);
+            }}
+          />
+        </label>
+      )}
     </div>
   );
 }

@@ -1,8 +1,12 @@
 import { bodyweightEntry } from "@/lib/bodyweight";
 import { currentBlock, type AthleteSummary, type WindowSession } from "@/lib/overview";
-import { isBodyweight, questionData, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
+import { isBodyweight, nutrientOf, questionData, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
+import { nutritionEntry, targetSpan, type NutritionEntry, type TargetSpan } from "@/lib/nutrition";
+import { photosHere } from "@/lib/photos";
 import { injuryData, type InjuryData } from "@/lib/injuries";
 import type { TimedRow } from "@/lib/load";
+import { byWhen, meetingData, type MeetingData } from "@/lib/meetings";
+import { moveData, movesMap, type MoveData } from "@/lib/moves";
 import { dateOfDay, sessionsOf } from "@/lib/schedule";
 import { prisma } from "@/lib/prisma";
 import type { BlockData } from "@/lib/types";
@@ -25,6 +29,10 @@ const PHASE_SUMMARY = {
   squat1RM: true,
   bench1RM: true,
   dead1RM: true,
+  kcalTarget: true,
+  proteinTarget: true,
+  carbsTarget: true,
+  fatTarget: true,
 } as const;
 
 /** Every program the athlete has, each with its phases in order. */
@@ -350,6 +358,7 @@ export async function getRecentCheckins(coachId: string, limit = 8) {
  * of just the days that fall in the window.
  */
 export async function getTrainingWindow(athleteIds: string[], from: string, to: string) {
+  const moves = await getMoveMap(athleteIds);
   const blocks = await prisma.block.findMany({
     where: { athleteId: { in: athleteIds } },
     orderBy: { startDate: "asc" },
@@ -368,7 +377,7 @@ export async function getTrainingWindow(athleteIds: string[], from: string, to: 
   for (const [athleteId, list] of byAthlete) {
     scheduled.set(
       athleteId,
-      sessionsOf<(typeof list)[number]["weeks"][number]["days"][number], (typeof list)[number]>(list)
+      sessionsOf<(typeof list)[number]["weeks"][number]["days"][number], (typeof list)[number]>(list, moves)
         .filter((s) => s.ymd >= from && s.ymd <= to)
         .map((s) => ({ ymd: s.ymd, dayId: s.day.id, label: s.day.label })),
     );
@@ -416,6 +425,26 @@ export async function getBodyweights(athleteIds: string[], from?: string) {
   return out;
 }
 
+/** Each athlete's nutrition log on or after a day, oldest first; deleted days left out. */
+export async function getNutrition(athleteIds: string[], from?: string): Promise<Map<string, NutritionEntry[]>> {
+  const rows = await prisma.nutritionLog.findMany({
+    where: { athleteId: { in: athleteIds }, deletedAt: null, ...(from ? { day: { gte: from } } : {}) },
+    orderBy: { day: "asc" },
+  });
+  const out = new Map<string, NutritionEntry[]>();
+  for (const r of rows) out.set(r.athleteId, [...(out.get(r.athleteId) ?? []), nutritionEntry(r)]);
+  return out;
+}
+
+/** The athlete's phases that set nutrition targets, as spans of days. */
+export async function getTargetSpans(athleteId: string): Promise<TargetSpan[]> {
+  const phases = await prisma.block.findMany({
+    where: { athleteId },
+    select: { startDate: true, kcalTarget: true, proteinTarget: true, carbsTarget: true, fatTarget: true, _count: { select: { weeks: true } } },
+  });
+  return phases.map((p) => targetSpan({ ...p, weeks: p._count.weeks })).filter((s): s is TargetSpan => s !== null);
+}
+
 /** Each athlete's next meet from a day on, if they have one. */
 export async function getNextMeets(athleteIds: string[], from: Date) {
   const meets = await prisma.meet.findMany({
@@ -428,32 +457,46 @@ export async function getNextMeets(athleteIds: string[], from: Date) {
   return out;
 }
 
-export type AthleteCheckins = { questions: CheckinQuestionData[]; answers: CheckinAnswerData[] };
+export type CheckinPhotoRef = { id: string; questionId: string; day: string };
+
+export type AthleteCheckins = {
+  questions: CheckinQuestionData[];
+  answers: CheckinAnswerData[];
+  /** Photos on the answers that this computer has a copy of. */
+  photos: CheckinPhotoRef[];
+};
 
 /**
  * Each athlete's check-in questions — archived ones too, so old answers keep their label —
  * and their answers on or after a day, oldest first.
  */
 export async function getCheckins(athleteIds: string[], from?: string): Promise<Map<string, AthleteCheckins>> {
-  const [questions, answers] = await Promise.all([
+  const [questions, answers, photos] = await Promise.all([
     prisma.checkinQuestion.findMany({ where: { athleteId: { in: athleteIds } }, orderBy: [{ order: "asc" }, { createdAt: "asc" }] }),
     prisma.checkinAnswer.findMany({
       where: { athleteId: { in: athleteIds }, deletedAt: null, ...(from ? { day: { gte: from } } : {}) },
       orderBy: { day: "asc" },
       select: { id: true, athleteId: true, questionId: true, day: true, value: true, updatedAt: true },
     }),
+    prisma.checkinPhoto.findMany({
+      where: { athleteId: { in: athleteIds }, deletedAt: null, uploadedAt: { not: null }, ...(from ? { day: { gte: from } } : {}) },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, athleteId: true, questionId: true, day: true },
+    }),
   ]);
   const out = new Map<string, AthleteCheckins>();
   const entry = (id: string) => {
     let e = out.get(id);
-    if (!e) out.set(id, (e = { questions: [], answers: [] }));
+    if (!e) out.set(id, (e = { questions: [], answers: [], photos: [] }));
     return e;
   };
-  // The weigh-in question answers into the bodyweight log, which has its own panel.
+  // The weigh-in and nutrition questions answer into their logs, which have their own panels.
   for (const row of questions) {
     const q = questionData(row);
-    if (!isBodyweight(q)) entry(row.athleteId).questions.push(q);
+    if (!isBodyweight(q) && !nutrientOf(q)) entry(row.athleteId).questions.push(q);
   }
+  const here = photosHere(photos.map((p) => p.id));
+  for (const { athleteId, ...photo } of photos) if (here.has(photo.id)) entry(athleteId).photos.push(photo);
   for (const { athleteId, updatedAt, ...answer } of answers) entry(athleteId).answers.push({ ...answer, updatedAt: updatedAt.toISOString() });
   return out;
 }
@@ -634,4 +677,47 @@ export async function getActiveInjuries(athleteIds: string[], today: string): Pr
   const out = new Map<string, InjuryData[]>();
   for (const r of rows) out.set(r.athleteId, [...(out.get(r.athleteId) ?? []), injuryData(r)]);
   return out;
+}
+
+/** A session the athlete moved, as Tracking lists it: with its name and where it sits in the plan. */
+export type MoveView = MoveData & { label: string | null; phase: string | null; week: number | null };
+
+/** The athlete's moved sessions still standing, newest move first. */
+export async function getMoves(athleteId: string): Promise<MoveView[]> {
+  const rows = await prisma.sessionMove.findMany({ where: { athleteId, deletedAt: null }, orderBy: { updatedAt: "desc" } });
+  const days = rows.length
+    ? await prisma.day.findMany({
+        where: { id: { in: rows.map((r) => r.dayId) } },
+        select: { id: true, label: true, week: { select: { order: true, block: { select: { phase: true } } } } },
+      })
+    : [];
+  const byId = new Map(days.map((d) => [d.id, d]));
+  return rows.map((r) => {
+    const d = byId.get(r.dayId);
+    return { ...moveData(r), label: d?.label ?? null, phase: d?.week.block.phase ?? null, week: d?.week.order ?? null };
+  });
+}
+
+/** Session → the date the athlete moved it to, for laying out the coach's calendar. */
+export async function getMoveMap(athleteIds: string[]): Promise<Map<string, string>> {
+  const rows = await prisma.sessionMove.findMany({
+    where: { athleteId: { in: athleteIds }, deletedAt: null },
+    select: { dayId: true, day: true },
+  });
+  return movesMap(rows);
+}
+
+/** Every meeting with the athlete that is still standing, soonest first. */
+export async function getMeetings(athleteId: string): Promise<MeetingData[]> {
+  const rows = await prisma.meeting.findMany({ where: { athleteId, deletedAt: null } });
+  return rows.map(meetingData).sort(byWhen);
+}
+
+/** What the Schedule tab has for the coach: moves not yet seen, and meetings still to answer. */
+export async function scheduleNews(athleteId: string, today: string): Promise<number> {
+  const [moves, meetings] = await Promise.all([
+    prisma.sessionMove.count({ where: { athleteId, deletedAt: null, seenAt: null } }),
+    prisma.meeting.count({ where: { athleteId, deletedAt: null, status: "PROPOSED", proposedBy: "athlete", day: { gte: today } } }),
+  ]);
+  return moves + meetings;
 }

@@ -214,3 +214,43 @@ test("videos come down with the athlete data but can never be pushed up", async 
   const kept = await client.execute(`SELECT "storageKey" FROM "AthleteVideo" WHERE "id" = 'v1'`);
   assert.equal(kept.rows[0].storageKey, "v/a1/r1/x.mp4");
 });
+
+test("moved sessions merge like weigh-ins, and only for the coach's own sessions", async () => {
+  const move = {
+    id: "mv-d1", athleteId: "a1", dayId: "d1", fromDay: "2026-09-21", day: "2026-09-22", reason: "Work trip", seenAt: null,
+    createdAt: "2026-09-20T08:00:00.000+00:00", updatedAt: "2026-09-20T08:00:00.000+00:00", deletedAt: null,
+  };
+  assert.equal(await applyPush(client, "me", { tables: {}, athlete: [], merged: { SessionMove: [move] } }), null);
+  const pulled = await athleteData(client, "me");
+  assert.ok(!pulled.unchanged);
+  assert.equal(pulled.merged.SessionMove[0].day, "2026-09-22");
+  // Named after another session than the one it says.
+  assert.equal(
+    await applyPush(client, "me", { tables: {}, athlete: [], merged: { SessionMove: [{ ...move, id: "mv-d2" }] } }),
+    "A SessionMove row is missing something.",
+  );
+  assert.equal(
+    await applyPush(client, "me", { tables: {}, athlete: [], merged: { SessionMove: [{ ...move, id: "mv-d9", dayId: "d9" }] } }),
+    "That session isn't yours.",
+  );
+});
+
+test("a push says which meetings the athlete should hear about", async () => {
+  const meeting = {
+    id: "mt1", athleteId: "a1", day: "2026-10-02", time: "18:00", minutes: 30, place: null, note: null, proposedBy: "coach",
+    status: "PROPOSED", createdAt: "2026-09-25T08:00:00.000+00:00", updatedAt: "2026-09-25T08:00:00.000+00:00", deletedAt: null,
+  };
+  const push = async (row: { id: string } & Record<string, unknown>) => {
+    const news = pushNews();
+    assert.equal(await applyPush(client, "me", { tables: {}, athlete: [], merged: { Meeting: [row] } }, news), null);
+    return news.meetings.map((m) => m.news);
+  };
+  assert.deepEqual(await push(meeting), ["proposed"]);
+  assert.deepEqual(await push({ ...meeting, updatedAt: "2026-09-25T08:05:00.000+00:00" }), []);
+  assert.deepEqual(await push({ ...meeting, time: "19:00", updatedAt: "2026-09-25T08:10:00.000+00:00" }), ["proposed"]);
+  assert.deepEqual(await push({ ...meeting, time: "19:00", status: "CANCELLED", updatedAt: "2026-09-25T08:20:00.000+00:00" }), ["cancelled"]);
+  assert.equal(
+    await applyPush(client, "me", { tables: {}, athlete: [], merged: { Meeting: [{ ...meeting, id: "mt2", status: "SOON" }] } }),
+    "A Meeting row is missing something.",
+  );
+});

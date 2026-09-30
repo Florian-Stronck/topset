@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cleanSetIndex, clipFileName, clipType, retentionDays } from "@/lib/athlete-videos";
+import { cleanSetIndex, clipFileName, clipType, looksLikeVideo, retentionDays } from "@/lib/athlete-videos";
 
 test("takes the video types phones send, and guesses from the name when they send none", () => {
   assert.equal(clipType("video/mp4", "a.mp4"), "video/mp4");
@@ -31,4 +31,16 @@ test("files a video under a real set number or none", () => {
   assert.equal(cleanSetIndex(1.5), null);
   assert.equal(cleanSetIndex(30), null);
   assert.equal(cleanSetIndex("2"), null);
+});
+
+test("takes files that start like MP4, MOV or WebM, whatever they're labelled", () => {
+  const bytes = (...b: (number | string)[]) =>
+    new Uint8Array(b.flatMap((x) => (typeof x === "string" ? [...x].map((c) => c.charCodeAt(0)) : [x])));
+  assert.equal(looksLikeVideo(bytes(0, 0, 0, 0x20, "ftypisom")), true);
+  assert.equal(looksLikeVideo(bytes(0, 0, 0, 0x14, "ftypqt  ")), true);
+  assert.equal(looksLikeVideo(bytes(0, 0, 0, 8, "wide")), true);
+  assert.equal(looksLikeVideo(bytes(0x1a, 0x45, 0xdf, 0xa3)), true);
+  assert.equal(looksLikeVideo(bytes("<html><body>")), false);
+  assert.equal(looksLikeVideo(bytes("%PDF-1.7")), false);
+  assert.equal(looksLikeVideo(bytes()), false);
 });

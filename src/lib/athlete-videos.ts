@@ -17,7 +17,7 @@ export const CLIP_TYPES: Record<string, string> = {
  * The largest file accepted. A 20 s top set shrunk on the phone is about 4 MB; this leaves
  * room for a phone that can't shrink it and sends the original.
  */
-export const MAX_CLIP_BYTES = 200 * 1024 * 1024;
+export const MAX_CLIP_BYTES = 50 * 1024 * 1024;
 
 /** A clip already this small is sent as it is: shrinking it would gain little. */
 export const SHRINK_ABOVE_BYTES = 8 * 1024 * 1024;
@@ -31,7 +31,18 @@ export function cleanSetIndex(value: unknown): number | null {
 
 /** Videos per exercise, and per athlete per day, so a stuck button can't fill the bucket. */
 export const MAX_CLIPS_PER_ROW = 10;
-export const MAX_CLIPS_PER_DAY = 60;
+export const MAX_CLIPS_PER_DAY = 10;
+
+/**
+ * Whether a file starts like a video: an MP4/MOV/3GP box (`ftyp`, or an old QuickTime
+ * file's `moov`, `mdat`, `wide`, `free`, `skip`) or WebM's EBML header. The type a phone
+ * reports is only a label; this is what the bytes say.
+ */
+export function looksLikeVideo(head: Uint8Array): boolean {
+  if (head.length >= 4 && head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) return true;
+  const box = String.fromCharCode(...head.subarray(4, 8));
+  return ["ftyp", "moov", "mdat", "wide", "free", "skip"].includes(box);
+}
 
 /** How long a clip is kept in storage, unless the server says otherwise. Match the bucket's lifecycle rule. */
 export const DEFAULT_RETENTION_DAYS = 30;

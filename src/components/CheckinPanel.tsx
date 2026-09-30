@@ -5,6 +5,7 @@ import { CheckinIcon } from "@/components/CheckinIcon";
 import { colorOf, formatAnswer, LOW_READINESS, readinessOf, scaleScore, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
 import { formatDate, weekdayOf } from "@/lib/dates";
 import { t, weekdayShort } from "@/lib/i18n";
+import type { CheckinPhotoRef } from "@/lib/queries";
 import { addDays } from "@/lib/schedule";
 
 const RANGES = [14, 28, 56];
@@ -13,11 +14,13 @@ const RANGES = [14, 28, 56];
  * Everything the athlete answered in the check-in, as a table: one row per day, newest
  * first, with the readiness score and a column per question. Weigh-ins have their own
  * panel further down. Low scale
- * answers are picked out, so a rough stretch reads at a glance.
+ * answers are picked out, so a rough stretch reads at a glance. Photos sent with an answer
+ * show as thumbnails in its cell, each opening full size.
  */
 export function CheckinPanel({
   questions,
   answers,
+  photos = [],
   today,
   range: rangeFromProps,
   onRange,
@@ -25,6 +28,8 @@ export function CheckinPanel({
 }: {
   questions: CheckinQuestionData[];
   answers: CheckinAnswerData[];
+  /** Photos on the answers, kept on this computer. */
+  photos?: CheckinPhotoRef[];
   today: string;
   /** How many days back, when the caller keeps track of it. */
   range?: number;
@@ -37,11 +42,12 @@ export function CheckinPanel({
   const setRange = onRange ?? setOwnRange;
   const from = addDays(today, -(range - 1));
   const inRange = answers.filter((a) => a.day >= from && a.day <= today);
+  const photosIn = photos.filter((p) => p.day >= from && p.day <= today);
 
   // Questions still asked, then retired ones that were answered in this stretch.
-  const answeredIds = new Set(inRange.map((a) => a.questionId));
+  const answeredIds = new Set([...inRange, ...photosIn].map((a) => a.questionId));
   const columns = questions.filter((q) => !q.archived || answeredIds.has(q.id));
-  const days = [...new Set(inRange.map((a) => a.day))]
+  const days = [...new Set([...inRange, ...photosIn].map((a) => a.day))]
     .sort()
     .reverse()
     .filter((day) => {
@@ -121,6 +127,22 @@ export function CheckinPanel({
                     )}
                     {columns.map((q) => {
                       const a = row.find((x) => x.questionId === q.id);
+                      const pics = photosIn.filter((p) => p.day === day && p.questionId === q.id);
+                      if (pics.length > 0) {
+                        return (
+                          <td key={q.id} className="px-3 py-1">
+                            <span className="flex items-center gap-1.5">
+                              {pics.map((p) => (
+                                <a key={p.id} href={`/api/photos/${p.id}`} target="_blank" rel="noreferrer" title={t("Open the photo")}>
+                                  {/* eslint-disable-next-line @next/next/no-img-element -- a local file served by the app */}
+                                  <img src={`/api/photos/${p.id}`} alt={q.label} className="size-8 rounded object-cover hover:ring-2 hover:ring-accent" />
+                                </a>
+                              ))}
+                              {a && <span className="max-w-[160px] truncate">{formatAnswer(q, a.value, yesNo)}</span>}
+                            </span>
+                          </td>
+                        );
+                      }
                       if (!a) {
                         return (
                           <td key={q.id} className="px-3 py-1.5 text-muted-2">

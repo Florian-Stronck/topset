@@ -14,10 +14,10 @@ import { t } from "@/lib/i18n";
 import { SHELL_MAX_WIDTH } from "@/lib/layout";
 import { blockWindow, startOfDay } from "@/lib/overview";
 import { liftProgress } from "@/lib/progress";
-import { getAllPhasesForAthlete, getBodyweights, getCheckins, getNextMeets, getWorkspace, injuriesFor, toBlockData } from "@/lib/queries";
+import { getAllPhasesForAthlete, getBodyweights, getCheckins, getMoveMap, getNextMeets, getNutrition, getTargetSpans, getWorkspace, injuriesFor, toBlockData } from "@/lib/queries";
 import { InjuryPanel } from "@/components/InjuryPanel";
 import { addDays } from "@/lib/schedule";
-import { forClient } from "@/lib/settings";
+import { forAthlete } from "@/lib/settings";
 import { previousLogs, sessionDrift } from "@/lib/tracking";
 
 export const dynamic = "force-dynamic";
@@ -56,12 +56,14 @@ export default async function ViewerPage({
   const view = query.view === "progress" || query.view === "wellness" ? query.view : "review";
   const now = new Date();
   const today = ymdOf(calendarToday());
-  const [{ programs, program, phase }, phases, checkinMap] = await Promise.all([
+  const [{ programs, program, phase }, phases, checkinMap, moveMap] = await Promise.all([
     getWorkspace(athlete.id, undefined, query.block),
     getAllPhasesForAthlete(athlete.id),
     getCheckins([athlete.id]),
+    getMoveMap([athlete.id]),
   ]);
-  const checkins = checkinMap.get(athlete.id) ?? { questions: [], answers: [] };
+  const moved = Object.fromEntries(moveMap);
+  const checkins = checkinMap.get(athlete.id) ?? { questions: [], answers: [], photos: [] };
   const unit = athlete.unit === "LB" ? "lb" : "kg";
   const blockData = phase && toBlockData(phase);
 
@@ -77,8 +79,10 @@ export default async function ViewerPage({
 
   let body: React.ReactNode;
   if (view === "wellness") {
-    const [weights, meets, injuries] = await Promise.all([
+    const [weights, nutrition, targets, meets, injuries] = await Promise.all([
       getBodyweights([athlete.id]),
+      getNutrition([athlete.id], addDays(today, -(WELLNESS_DAYS - 1))),
+      getTargetSpans(athlete.id),
       getNextMeets([athlete.id], startOfDay(now)),
       injuriesFor(athlete.id),
     ]);
@@ -93,8 +97,10 @@ export default async function ViewerPage({
         unit={unit}
         today={today}
         checkins={checkins}
-        drift={sessionDrift(phases, addDays(today, -(WELLNESS_DAYS - 1)), today)}
+        drift={sessionDrift(phases, addDays(today, -(WELLNESS_DAYS - 1)), today, moveMap)}
         bodyweight={weights.get(athlete.id) ?? []}
+        nutrition={nutrition.get(athlete.id) ?? []}
+        targets={targets}
         meet={meet ? { name: meet.name, weightClass: meet.weightClass, ...weightToMake(meet) } : null}
         readOnly
       />
@@ -109,7 +115,8 @@ export default async function ViewerPage({
         athlete={athlete}
         today={today}
         series={{ prescribed: liftProgress(phases, athlete, "prescribed"), estimated: liftProgress(phases, athlete, "estimated") }}
-        history={exerciseHistory(phases, athlete)}
+        history={exerciseHistory(phases, athlete, moveMap)}
+        moves={moved}
         readOnly
       />
     );
@@ -126,7 +133,8 @@ export default async function ViewerPage({
         videos={{}}
         checkins={checkins}
         messages={[]}
-        previous={previousLogs(blockData, exerciseHistory(phases, athlete))}
+        moves={moved}
+        previous={previousLogs(blockData, exerciseHistory(phases, athlete, moveMap), moveMap)}
         show={null}
         hasLink
         readOnly
@@ -135,7 +143,7 @@ export default async function ViewerPage({
   }
 
   return (
-    <SettingsProvider settings={forClient(settings)}>
+    <SettingsProvider settings={forAthlete(settings)}>
       <main style={{ maxWidth: SHELL_MAX_WIDTH }} className="mx-auto w-full px-4 py-7 sm:px-6">
         <h1 className="text-[22px] font-semibold tracking-tight">{athlete.name}</h1>
         <div className="mt-1 text-[12px] text-muted">{t("Read-only Tracking, shared by their coach.")}</div>

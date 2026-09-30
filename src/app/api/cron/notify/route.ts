@@ -1,3 +1,4 @@
+import { sameSecret } from "@/lib/auth";
 import { dailyNotices, flushPlanNotices } from "@/lib/push";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +11,7 @@ export const maxDuration = 60;
  */
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
-  if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
+  if (!secret || !sameSecret(request.headers.get("authorization") ?? "", `Bearer ${secret}`)) {
     return new Response(null, { status: 401 });
   }
   await flushPlanNotices();

@@ -6,17 +6,20 @@ import {
   getAthleteByToken,
   getAthleteSchedule,
   inboxFor,
+  meetingsFor,
   meetsFor,
+  movesFor,
   sessionsInFull,
   type AthleteMeet,
   type AthleteSession,
   type InboxMessage,
 } from "@/lib/athlete-queries";
-import { longDate } from "@/lib/athlete-format";
+import { longDate, shortDate } from "@/lib/athlete-format";
 import { athleteToday } from "@/lib/athlete-today";
-import { dayKind, monthGrid, parseMonth, shiftMonth } from "@/lib/calendar";
+import { dayKind, dayMarks, monthGrid, parseMonth, shiftMonth } from "@/lib/calendar";
 import { loadSettings } from "@/lib/coach-settings";
 import { LOCALE, plural, t, weekdayShort } from "@/lib/i18n";
+import { placeLink, timeSpan, type MeetingData } from "@/lib/meetings";
 import { completion, formatSet } from "@/lib/setlog";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +48,18 @@ export default async function AthleteHistory({
   const first = weeks[0][0].ymd;
   const last = weeks[weeks.length - 1][6].ymd;
 
-  const [schedule, meets] = await Promise.all([getAthleteSchedule(athlete), meetsFor(athlete.id)]);
+  const [schedule, meets, moves, meetings] = await Promise.all([
+    getAthleteSchedule(athlete),
+    meetsFor(athlete.id),
+    movesFor(athlete.id),
+    meetingsFor(athlete.id),
+  ]);
+  const marks = dayMarks(moves, meetings);
+  const meetingsOn = new Map<string, MeetingData[]>();
+  for (const m of meetings) {
+    if (m.day < first || m.day > last || (m.status !== "PROPOSED" && m.status !== "ACCEPTED")) continue;
+    meetingsOn.set(m.day, [...(meetingsOn.get(m.day) ?? []), m]);
+  }
   // The whole grid, so the days showing from either side of the month are coloured too.
   const shown = await sessionsInFull(
     athlete,
@@ -65,6 +79,7 @@ export default async function AthleteHistory({
         ymd,
         inMonth,
         day: Number(ymd.slice(8)),
+        marks: marks.get(ymd),
         kind: dayKind(ymd, today, {
           meet: meetsOn.has(ymd),
           session: s ? { done: s.done, prescribed: s.prescribed, pr: s.rows.some((r) => r.logs.some((l) => l.pr)) } : null,
@@ -74,14 +89,28 @@ export default async function AthleteHistory({
   );
 
   const details: Record<string, React.ReactNode> = {};
-  for (const ymd of new Set([...sessionOn.keys(), ...meetsOn.keys()])) {
+  const markedDays = [...marks.keys()].filter((d) => d >= first && d <= last);
+  for (const ymd of new Set([...sessionOn.keys(), ...meetsOn.keys(), ...markedDays])) {
     const s = sessionOn.get(ymd);
+    const movedTo = marks.get(ymd)?.movedTo;
     details[ymd] = (
       <div className="space-y-2">
         <h3 className="text-[11px] tracking-[0.16em] text-muted-2">{longDate(ymd).toUpperCase()}</h3>
         {(meetsOn.get(ymd) ?? []).map((m) => (
           <MeetItem key={m.id} meet={m} unit={u} />
         ))}
+        {(meetingsOn.get(ymd) ?? []).map((m) => (
+          <MeetingItem key={m.id} meeting={m} href={`${base}/inbox`} />
+        ))}
+        {movedTo && !s && (
+          <Link
+            href={movedTo === today ? base : `${base}?d=${movedTo}`}
+            className="block rounded-2xl border border-dashed border-cal-moved px-4 py-3 text-[13px] active:bg-surface-2"
+          >
+            <span className="font-medium text-cal-moved">{t("Moved away")}</span>
+            <span className="text-muted"> · {t("You moved this session to {date}.", { date: shortDate(movedTo) })}</span>
+          </Link>
+        )}
         {s && (
           <SessionItem
             session={s}
@@ -141,6 +170,32 @@ export default async function AthleteHistory({
 const LIFT_ORDER = { SQUAT: 0, BENCH: 1, DEADLIFT: 2 } as const;
 const LIFT_NAME = { SQUAT: "Squat", BENCH: "Bench", DEADLIFT: "Deadlift" } as const;
 
+/** A meeting with the coach on the calendar. */
+function MeetingItem({ meeting, href }: { meeting: MeetingData; href: string }) {
+  const link = placeLink(meeting.place);
+  return (
+    <div className="rounded-2xl border border-cal-meeting/50 bg-cal-meeting/10 px-4 py-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <Link href={href} className="text-[14px] font-semibold tabular-nums">
+          {t("Meeting")} · {timeSpan(meeting.time, meeting.minutes)}
+        </Link>
+        <span className="shrink-0 rounded-full bg-cal-meeting px-2 py-0.5 text-[11px] font-medium text-white">
+          {meeting.status === "ACCEPTED" ? t("Confirmed") : t("Proposed")}
+        </span>
+      </div>
+      {meeting.place &&
+        (link ? (
+          <a href={link} target="_blank" rel="noopener noreferrer" className="mt-1 block truncate text-[12px] text-accent underline">
+            {meeting.place}
+          </a>
+        ) : (
+          <div className="mt-1 text-[12px] text-muted">{meeting.place}</div>
+        ))}
+      {meeting.note && <p className="mt-1 text-[12px]">{meeting.note}</p>}
+    </div>
+  );
+}
+
 /** A competition on the calendar: where, and the attempts as they stand. */
 function MeetItem({ meet, unit }: { meet: AthleteMeet; unit: string }) {
   const lifts = (["SQUAT", "BENCH", "DEADLIFT"] as const)
@@ -169,7 +224,7 @@ function MeetItem({ meet, unit }: { meet: AthleteMeet; unit: string }) {
                   <span
                     key={a.number}
                     className={`rounded px-1.5 py-0.5 text-[11px] tabular-nums ${
-                      a.result === "GOOD" ? "bg-ok/20 text-ok" : a.result === "MISS" ? "bg-miss/15 text-miss line-through" : "bg-surface-3 text-muted"
+                      a.result === "GOOD" ? "bg-ok/20 text-ok-text" : a.result === "MISS" ? "bg-miss/15 text-miss line-through" : "bg-surface-3 text-muted"
                     }`}
                   >
                     {a.weight ?? "—"}
@@ -210,7 +265,7 @@ function SessionItem({
       : state === "done"
         ? { text: t("Done"), cls: "bg-cal-done text-white" }
         : state === "partial"
-          ? { text: t("{done}/{of} sets", { done: session.done, of: session.prescribed }), cls: "bg-cal-done/20 text-cal-done" }
+          ? { text: t("{done}/{of} sets", { done: session.done, of: session.prescribed }), cls: "bg-cal-done/20 text-cal-done-text" }
           : { text: today ? t("To do") : t("Missed"), cls: "bg-surface-3 text-muted" };
 
   return (
@@ -223,6 +278,11 @@ function SessionItem({
       </div>
       <div className="mt-0.5 text-[12px] text-muted-2">
         {session.phase} · {t("week {n}", { n: session.week })}
+        {session.movedFrom && (
+          <span className="ml-1.5 rounded-full bg-cal-moved/15 px-1.5 py-px text-[11px] font-medium text-cal-moved">
+            {t("Moved from {date}", { date: shortDate(session.movedFrom) })}
+          </span>
+        )}
       </div>
 
       <ul className="mt-2 space-y-1">

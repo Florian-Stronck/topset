@@ -2,14 +2,20 @@
  * The pure half of cloud sync: working out what to send and what to take, with no
  * database in sight. `sync.ts` does the reading and writing.
  *
- * Ownership keeps it conflict-free. The coach owns every table except SetLog and three
- * columns on ExerciseRow; the athlete owns those. Coach data only ever goes up, athlete
- * data only ever comes down — except when the coach edits an athlete column themselves
- * (Tracking), which goes up unless the athlete changed it too, in which case theirs wins.
+ * Ownership keeps it mostly conflict-free. The coach owns every table except SetLog and
+ * three columns on ExerciseRow; the athlete owns those. Athlete data only ever comes down —
+ * except when the coach edits an athlete column themselves (Tracking), which goes up unless
+ * the athlete changed it too, in which case theirs wins. Coach data goes up, and comes down
+ * only to the coach's other computers; there the last push of a row wins.
  *
- * Weigh-ins, check-in answers and the coach's messages are written outright on either side. They merge row by row,
+ * Weigh-ins, nutrition, check-in answers, the coach's messages, moved sessions and meetings are written outright on either side. They merge row by row,
  * the newer edit winning, with deletes kept as tombstones so they travel like edits.
  */
+
+import { createHash } from "node:crypto";
+import { validMeeting } from "@/lib/meetings";
+import { nutritionId } from "@/lib/nutrition";
+import { moveId } from "@/lib/moves";
 
 export type Row = Record<string, unknown> & { id: string };
 
@@ -28,8 +34,15 @@ export const ATHLETE_TABLES = new Set(["SetLog"]);
 export const MERGED_COLUMNS: Record<string, readonly string[]> = {
   BodyweightLog: ["id", "athleteId", "day", "weight", "note", "source", "createdAt", "updatedAt", "deletedAt"],
   CheckinAnswer: ["id", "athleteId", "questionId", "day", "value", "createdAt", "updatedAt", "deletedAt"],
+  NutritionLog: ["id", "athleteId", "day", "kcal", "protein", "carbs", "fat", "source", "createdAt", "updatedAt", "deletedAt"],
+  // Photos on check-in answers: like videos, only the athlete app writes them.
+  CheckinPhoto: ["id", "athleteId", "questionId", "day", "contentType", "size", "storageKey", "uploadedAt", "createdAt", "updatedAt", "deletedAt"],
   // The coach writes the text, the athlete app when it was read.
   CoachMessage: ["id", "athleteId", "day", "dayId", "rowId", "body", "readAt", "createdAt", "updatedAt", "deletedAt"],
+  // The athlete moves a session; the coach marks it seen or puts it back.
+  SessionMove: ["id", "athleteId", "dayId", "fromDay", "day", "reason", "seenAt", "createdAt", "updatedAt", "deletedAt"],
+  // Either side proposes a meeting, the other answers it.
+  Meeting: ["id", "athleteId", "day", "time", "minutes", "timeZone", "place", "note", "proposedBy", "status", "createdAt", "updatedAt", "deletedAt"],
   // Either side reports or clears an injury.
   Injury: ["id", "athleteId", "area", "side", "day", "endDay", "severity", "note", "source", "createdAt", "updatedAt", "deletedAt"],
   // Videos the athlete sent: only the athlete app writes them, so they only ever come down.
@@ -56,7 +69,7 @@ export const MERGED_TABLES = new Set(Object.keys(MERGED_COLUMNS));
  * Merged tables a desktop app may never send up. A video row names where its file is in
  * storage; one written by a desktop app could point at anyone's file.
  */
-export const PULL_ONLY_TABLES = new Set(["AthleteVideo"]);
+export const PULL_ONLY_TABLES = new Set(["AthleteVideo", "CheckinPhoto"]);
 
 const plainValue = (v: unknown) => v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 
@@ -73,10 +86,23 @@ export function validMergedRow(table: string, row: Row): boolean {
     cols.every((c) => plainValue(row[c] ?? null));
   if (!base) return false;
   if (table === "BodyweightLog") return typeof row.weight === "number" && Number.isFinite(row.weight);
+  // The id names the athlete and day, so it must be theirs: otherwise a row sent up could sit
+  // under another athlete's id and catch their check-in answers.
+  if (table === "NutritionLog") return row.id === nutritionId(String(row.athleteId), String(row.day));
   if (table === "CheckinAnswer") {
     return typeof row.questionId === "string" && row.questionId !== "" && (row.value === null || row.value === undefined || typeof row.value === "string");
   }
   if (table === "CoachMessage") return typeof row.body === "string";
+  // Named by its session, so it must be the athlete's own move of it.
+  if (table === "SessionMove") {
+    return (
+      typeof row.dayId === "string" &&
+      row.id === moveId(row.dayId) &&
+      typeof row.fromDay === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(row.fromDay)
+    );
+  }
+  if (table === "Meeting") return validMeeting(row);
   if (table === "Injury") {
     return (
       typeof row.area === "string" &&
@@ -88,8 +114,11 @@ export function validMergedRow(table: string, row: Row): boolean {
   return true;
 }
 
-/** Accounts live on the server alone: sign-ins, invites, push sign-ups, and a coach's login details. */
-export const SERVER_TABLES = new Set(["CoachSession", "Invite", "PushSubscription", "PlanNotice"]);
+/** Accounts live on the server alone: sign-ins, invites, push sign-ups, sign-in tries, and a coach's login details. */
+export const SERVER_TABLES = new Set(["CoachSession", "Invite", "PushSubscription", "PlanNotice", "LoginAttempt", "PlanChange"]);
+
+/** A desktop app's own sync bookkeeping (see `sync.ts`). */
+export const LOCAL_TABLES = new Set(["SyncSent", "SyncMeta"]);
 export const SERVER_COLUMNS: Record<string, readonly string[]> = {
   Coach: ["username", "passwordHash", "isAdmin", "athleteVersion", "disabledAt", "resetCodeHash", "resetExpiresAt"],
 };
@@ -101,7 +130,8 @@ export function syncedTable(name: string): boolean {
     !name.startsWith("sqlite_") &&
     !ATHLETE_TABLES.has(name) &&
     !MERGED_TABLES.has(name) &&
-    !SERVER_TABLES.has(name)
+    !SERVER_TABLES.has(name) &&
+    !LOCAL_TABLES.has(name)
   );
 }
 
@@ -111,10 +141,14 @@ export function syncedColumns(table: string, columns: string[]): string[] {
   return columns.filter((c) => !server.includes(c));
 }
 
-/** A row's coach-owned values as one comparable string. */
+/**
+ * A row's coach-owned values as one short comparable string: a digest, since a desktop app
+ * keeps one for every row it has sent (SyncSent).
+ */
 export function coachSignature(table: string, row: Row, columns: string[]): string {
   const athlete = ATHLETE_COLUMNS[table] ?? [];
-  return JSON.stringify(syncedColumns(table, columns).filter((c) => !athlete.includes(c)).map((c) => row[c] ?? null));
+  const values = JSON.stringify(syncedColumns(table, columns).filter((c) => !athlete.includes(c)).map((c) => row[c] ?? null));
+  return createHash("sha1").update(values).digest("base64");
 }
 
 /** A row's athlete-owned values as one comparable string. */

@@ -77,7 +77,11 @@ model Athlete {
   answers     CheckinAnswer[]
   messages    CoachMessage[]
   videos      AthleteVideo[]
+  nutrition   NutritionLog[]
+  photos      CheckinPhoto[]
   injuries    Injury[]
+  moves       SessionMove[]
+  meetings    Meeting[]
 
   @@index([coachId])
 }
@@ -174,6 +178,12 @@ model Block {
   squat1RM  Float?
   bench1RM  Float?
   dead1RM   Float?
+  // What the athlete eats to during this phase, per day; null where the coach sets none.
+  // Grams for the macros.
+  kcalTarget    Float?
+  proteinTarget Float?
+  carbsTarget   Float?
+  fatTarget     Float?
   createdAt DateTime @default(now())
   weeks     Week[]
 
@@ -305,6 +315,53 @@ model BodyweightLog {
   @@index([athleteId, day])
 }
 
+/// A day's eating, from the athlete app's check-in or typed in by the coach: totals, not
+/// meals. One row per athlete and day, under the id `nutritionId` gives it, so both sides
+/// write the same row and sync merges it like weigh-ins: the newer edit wins, deletes are
+/// tombstones.
+model NutritionLog {
+  id        String    @id
+  athleteId String
+  athlete   Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  /// `YYYY-MM-DD` on the athlete's calendar.
+  day       String
+  kcal      Float?
+  /// Grams.
+  protein   Float?
+  carbs     Float?
+  fat       Float?
+  /// "athlete" or "coach": who wrote it last.
+  source    String    @default("athlete")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([athleteId, day])
+}
+
+/// A photo sent with a check-in answer, for a question the coach asked for one on. The file
+/// lives in object storage beside the videos, and the coach's desktop app keeps a copy.
+/// Only the athlete app writes these, so they only ever come down.
+model CheckinPhoto {
+  id          String    @id @default(cuid())
+  athleteId   String
+  athlete     Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  /// A plain id, so an archived or removed question leaves the photo.
+  questionId  String
+  /// The day the answer is filed under.
+  day         String
+  contentType String
+  size        Int
+  storageKey  String    @unique
+  /// Set once the upload is in; until then the row is only a reservation.
+  uploadedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([athleteId, day])
+}
+
 /// A question the athlete app asks, written by the coach for one athlete: what it asks,
 /// how often, how it is answered, and the icon and colour it shows with. Coach-owned and
 /// synced like the plan. A question with answers on file is archived rather than deleted,
@@ -367,6 +424,57 @@ model CoachMessage {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
+
+  @@index([athleteId, day])
+}
+
+/// A session the athlete moved to another date from the athlete app. One per session, under
+/// the id `moveId` gives it, so both sides write the same row: the athlete moves it (or back),
+/// the coach marks it seen or puts it back. Synced like weigh-ins: the newer edit wins,
+/// deletes are tombstones. The plan itself never changes; the calendar reads this on top.
+model SessionMove {
+  id        String    @id
+  athleteId String
+  athlete   Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  /// The session's Day.
+  dayId     String
+  /// `YYYY-MM-DD` the plan puts it on.
+  fromDay   String
+  /// `YYYY-MM-DD` it is done on instead.
+  day       String
+  reason    String?
+  /// When the coach saw the move in Tracking; null while it's news.
+  seenAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([athleteId, day])
+}
+
+/// A meeting between coach and athlete: a call, or a sit-down at the gym. Either side
+/// proposes one; the other accepts or declines. Changing the time proposes it afresh, from
+/// whoever changed it. Synced like weigh-ins: the newer edit wins, deletes are tombstones.
+model Meeting {
+  id         String    @id @default(cuid())
+  athleteId  String
+  athlete    Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  /// `YYYY-MM-DD`, with `time` as `HH:MM`: the wall clock both sides meet by.
+  day        String
+  time       String
+  minutes    Int       @default(30)
+  /// The IANA zone `day` and `time` are written in: the proposer's. Null when not known.
+  timeZone   String?
+  /// Where: an address, or a link to a video call.
+  place      String?
+  note       String?
+  /// "athlete" or "coach": who proposed the time on file, and so who waits for an answer.
+  proposedBy String
+  /// PROPOSED, ACCEPTED, DECLINED or CANCELLED — see src/lib/meetings.ts.
+  status     String    @default("PROPOSED")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
 
   @@index([athleteId, day])
 }
@@ -525,4 +633,43 @@ model PlanNotice {
   sentAt    DateTime?
 
   @@index([coachId])
+}
+
+/// Sign-in tries against one username (or the setup code) since the last success. Ten
+/// wrong ones lock it until 15 minutes have passed without a try. Server-side only.
+model LoginAttempt {
+  key    String   @id
+  tries  Int      @default(0)
+  lastAt DateTime
+}
+
+/// A plan row a desktop app pushed, in order, so the coach's other computers can pull what
+/// changed since they last looked. `sessionId` is the computer that pushed it, which never
+/// needs its own changes back. Server-side only.
+model PlanChange {
+  rev       Int      @id @default(autoincrement())
+  coachId   String
+  table     String
+  rowId     String
+  sessionId String?
+  at        DateTime @default(now())
+
+  @@index([coachId, rev])
+}
+
+/// What this desktop app last sent up, per row, as a digest of the coach's columns: so a
+/// restart knows what changed or was deleted here without asking the server. Desktop only.
+model SyncSent {
+  table String
+  id    String
+  sig   String
+
+  @@id([table, id])
+}
+
+/// Desktop-side sync bookmarks, such as how far into the server's PlanChange log this copy
+/// has read. Desktop only.
+model SyncMeta {
+  key   String @id
+  value String
 }

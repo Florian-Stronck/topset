@@ -32,7 +32,7 @@ export async function shrinkVideo(file: File, onProgress?: (share: number) => vo
     const track = await input.getPrimaryVideoTrack();
     if (!track) return { file, shrunk: false };
     const size = fit(track.displayWidth, track.displayHeight);
-    if (!(await mb.canEncodeVideo("avc", { ...size, quality: new mb.Quality(VIDEO_BITS) }))) return { file, shrunk: false };
+    if (!(await mb.canEncodeVideo("avc", { ...size, quality: new mb.Quality({ bitrate: VIDEO_BITS }) }))) return { file, shrunk: false };
 
     // Only a faster clip is slowed to 30 fps; a 24 or 25 fps one keeps its own rate.
     const fps = (await track.computePacketStats(60)).averagePacketRate;
@@ -43,8 +43,8 @@ export async function shrinkVideo(file: File, onProgress?: (share: number) => vo
       input,
       output,
       tracks: "primary",
-      video: { ...size, fit: "contain", codec: "avc", quality: new mb.Quality(VIDEO_BITS), frameRate },
-      audio: { codec: "aac", quality: new mb.Quality(AUDIO_BITS) },
+      video: { ...size, fit: "contain", codec: "avc", quality: new mb.Quality({ bitrate: VIDEO_BITS }), frameRate },
+      audio: { codec: "aac", quality: new mb.Quality({ bitrate: AUDIO_BITS }) },
     });
     if (!conversion.isValid) return { file, shrunk: false };
     if (onProgress) conversion.onProgress = (share) => onProgress(Math.min(1, share));

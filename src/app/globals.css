@@ -24,6 +24,13 @@
   --cal-meet: #3ecf8e;
   /* A training day that went by with nothing logged: only a ring. */
   --cal-missed: #c4c4cc;
+  --cal-missed-ring: 1.5px;
+  /* A session the athlete moved to another day, and a meeting with the coach. */
+  --cal-moved: #5b9dff;
+  --cal-meeting: #b18cff;
+  /* Small text on a tint of green or red: the fill colours, or darker where they'd be faint. */
+  --ok-text: #3ecf8e;
+  --cal-done-text: #e5484d;
 }
 
 /* Light theme, picked per computer in Settings. */
@@ -39,11 +46,18 @@
   --miss: #d32f2f;
   --warn: #b7791f;
   --pr: #b8860b;
-  --cal-plan: #ffffff;
+  /* Grey, not white: a white chip on a white card barely shows. */
+  --cal-plan: #d9d9e1;
   --cal-done: #dc2f3c;
   --cal-pr: #f2b705;
   --cal-meet: #1fa463;
-  --cal-missed: #8e8e99;
+  /* A darker, heavier ring, so a missed day stands out from one with nothing planned. */
+  --cal-missed: #5c5c68;
+  --cal-missed-ring: 2px;
+  --cal-moved: #1757c2;
+  --cal-meeting: #6a3bc9;
+  --ok-text: #0f6b50;
+  --cal-done-text: #b8232f;
   color-scheme: light;
 }
 
@@ -66,6 +80,10 @@
   --color-cal-done: var(--cal-done);
   --color-cal-pr: var(--cal-pr);
   --color-cal-meet: var(--cal-meet);
+  --color-cal-moved: var(--cal-moved);
+  --color-cal-meeting: var(--cal-meeting);
+  --color-ok-text: var(--ok-text);
+  --color-cal-done-text: var(--cal-done-text);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }

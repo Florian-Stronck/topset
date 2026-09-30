@@ -10,6 +10,39 @@ import { completion } from "@/lib/setlog";
 
 export type DayKind = "meet" | "pr" | "done" | "missed" | "plan" | "none";
 
+/** What a day has on top of its kind: a session moved onto it or off it, and meetings. */
+export type DayMarks = {
+  /** The planned day of a session the athlete moved onto this one. */
+  movedFrom: string | null;
+  /** Where the session planned for this day went. */
+  movedTo: string | null;
+  /** Meetings still standing on the day. */
+  meetings: number;
+};
+
+/**
+ * Each day's marks, for the days that have any: moves read both ways (the day a session
+ * left and the day it landed), meetings that weren't called off or declined.
+ */
+export function dayMarks(
+  moves: { fromDay: string; day: string }[],
+  meetings: { day: string; status: string }[],
+): Map<string, DayMarks> {
+  const out = new Map<string, DayMarks>();
+  const at = (ymd: string) => {
+    let m = out.get(ymd);
+    if (!m) out.set(ymd, (m = { movedFrom: null, movedTo: null, meetings: 0 }));
+    return m;
+  };
+  for (const m of moves) {
+    if (m.fromDay === m.day) continue;
+    at(m.day).movedFrom = m.fromDay;
+    at(m.fromDay).movedTo = m.day;
+  }
+  for (const m of meetings) if (m.status === "PROPOSED" || m.status === "ACCEPTED") at(m.day).meetings++;
+  return out;
+}
+
 /** `YYYY-MM` for a month parameter; anything else is null. */
 export function parseMonth(text: string | undefined): string | null {
   if (!text || !/^\d{4}-(0[1-9]|1[0-2])$/.test(text)) return null;

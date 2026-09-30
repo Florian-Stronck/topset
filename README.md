@@ -12,7 +12,7 @@ Available in English, Deutsch, Français and Lëtzebuergesch (**Settings → App
 
 ## Getting started
 
-1. Download **Topset.zip** from [Releases](https://github.com/Florian-Stronck/topset/releases), unzip it to a folder of its own (for example `Documents\Topset`) and open **Topset.exe** inside it. Your data (`topset.db`) and backups (`topset-backups`) are kept in that folder. Windows may warn that the app is from an unknown publisher, since the build isn't code-signed: click **More info → Run anyway**.
+1. Download **Topset-Setup.exe** from [Releases](https://github.com/Florian-Stronck/topset/releases) and run it. Windows may warn that the app is from an unknown publisher, since the build isn't code-signed: click **More info → Run anyway**. After that Topset updates itself: new versions download in the background and install when you restart it. Coming from the older zip folder? The first start offers to copy your data over from it; the old folder is left as it was.
 2. The first start offers a two-minute tutorial with an example athlete. You can run it again any time from **Tutorial** in the sidebar.
 3. Add your athletes on **Athletes**, with their squat, bench and deadlift 1RMs.
 4. Open **Programming**, click **+ New program**, and start writing.
@@ -153,7 +153,7 @@ What they log shows up in **Tracking** and **Overview** within seconds. You can 
 
 ## Your data
 
-- Everything lives in `topset.db` next to Topset.exe.
+- Everything lives in `topset.db` in `%APPDATA%\Topset`, which updates and uninstalling leave alone. (A copy from the older zip build that has `topset.db` beside Topset.exe keeps using that one.)
 - **Automatic backups** are taken when Topset opens (every day by default, the last 14 kept) into `topset-backups`, or a folder you choose in **Settings → Backup and data**. **Download** and **Restore…** are there too.
 - Signed in to a server, your programs are also kept there, so a second computer gets them by signing in with the same username.
 - Videos from the athlete app are downloaded into `topset-videos` next to `topset.db`, one folder per exercise, like the ones you drop in yourself. Like those, they aren't part of backups.
@@ -187,7 +187,8 @@ npm run dev        # http://localhost:3000
 | `npm run db:seed` | Load the demo data |
 | `npm run db:reset` | Wipe `dev.db` and reseed |
 | `npm run desktop` | Open the Electron app on the last `next build` |
-| `npm run desktop:build` | Build `dist-desktop/Topset.zip` (unpacked in `dist-desktop/win-unpacked`) |
+| `npm run desktop:build` | Build the installer `dist-desktop/Topset-Setup-<version>.exe` (unpacked in `dist-desktop/win-unpacked`) |
+| `npm run desktop:release` | The same, then upload it to a GitHub Release on `topset` for installed copies to update from. Needs `GH_TOKEN`, and a new `version` in package.json each time |
 
 **Schema changes** need a migration in `prisma/migrations/` (plain SQL). The desktop app applies them on start ([`electron/migrate.js`](electron/migrate.js)) and the server applies them during its build ([`scripts/migrate-cloud.ts`](scripts/migrate-cloud.ts)).
 

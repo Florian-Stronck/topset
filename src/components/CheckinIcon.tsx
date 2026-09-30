@@ -56,6 +56,10 @@ export const CHECKIN_ICONS: Record<string, Shape> = {
     circles: [[12, 12, 4]],
   },
   weight: { paths: ["M8 9a4 4 0 0 1 8 0", "m12 9 1.5-2.5"], rects: [[3, 3, 18, 18, 3]] },
+  camera: {
+    paths: ["M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"],
+    circles: [[12, 13, 3]],
+  },
   star: { paths: ["M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"] },
 };
 

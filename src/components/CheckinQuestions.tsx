@@ -10,7 +10,19 @@ import {
   type CheckinQuestionInput,
 } from "@/app/athletes/actions";
 import { CheckinIcon, ICON_NAMES } from "@/components/CheckinIcon";
-import { COLORS, colorOf, countsForReadiness, isBodyweight, parseConfig, PRESETS, type CheckinKind, type CheckinQuestionData } from "@/lib/checkins";
+import {
+  COLORS,
+  colorOf,
+  countsForReadiness,
+  isBodyweight,
+  NUTRIENT_UNIT,
+  NUTRIENTS,
+  parseConfig,
+  PRESETS,
+  type CheckinKind,
+  type CheckinQuestionData,
+  type Nutrient,
+} from "@/lib/checkins";
 import { t, weekdayShort } from "@/lib/i18n";
 
 const BLANK: CheckinQuestionInput = { label: "", cadence: "DAILY", days: [], kind: "SCALE", config: { min: 1, max: 5 }, icon: "check", color: "blue" };
@@ -80,6 +92,11 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
             {countsForReadiness(q) && (
               <span title={t("Counts toward readiness")} className="text-[10px] font-semibold text-muted-2">
                 R
+              </span>
+            )}
+            {q.config.photo && (
+              <span title={t("Asks for a photo")} className="text-muted-2">
+                <CheckinIcon name="camera" size={11} />
               </span>
             )}
           </button>
@@ -340,7 +357,21 @@ function QuestionEditor({
               </button>
             ))}
           </div>
-          <KindSettings q={q} onConfig={(config) => patch({ config })} />
+          <KindSettings q={q} onConfig={(config) => patch({ config: q.config.photo ? { ...config, photo: true } : config })} />
+          <label className="mt-3 flex items-center gap-2 text-[12px]">
+            <input
+              type="checkbox"
+              checked={q.config.photo === true}
+              onChange={(e) => {
+                const next = { ...q.config };
+                delete next.photo;
+                patch({ config: e.target.checked ? { ...next, photo: true } : next });
+              }}
+              className="size-4 accent-[var(--accent)]"
+            />
+            {t("Ask for a photo too")}
+            <span className="text-[11px] text-muted-2">{t("the athlete can add pictures to the answer")}</span>
+          </label>
           </>
           )}
         </Section>
@@ -416,11 +447,34 @@ function KindSettings({ q, onConfig }: { q: CheckinQuestionInput; onConfig: (con
   const field = "h-9 min-w-0 rounded-lg border border-border bg-background px-2.5 text-[13px] outline-none placeholder:text-muted-2 focus:border-accent";
 
   if (q.kind === "NUMBER") {
+    const nutrientName: Record<Nutrient, string> = { kcal: t("Calories"), protein: t("Protein"), carbs: t("Carbs"), fat: t("Fat") };
     return (
-      <label className="mt-3 flex items-center gap-2 text-[12px] text-muted">
-        {t("Unit")}
-        <input value={q.config.unit ?? ""} maxLength={12} onChange={(e) => onConfig({ unit: e.target.value })} placeholder="kcal, h, L…" className={`${field} w-32`} />
-      </label>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-muted">
+        {t("Goes to")}
+        <select
+          value={q.config.nutrient ?? ""}
+          onChange={(e) => {
+            const n = e.target.value as Nutrient | "";
+            onConfig(n ? { nutrient: n, unit: NUTRIENT_UNIT[n] } : {});
+          }}
+          className={`${field} w-48`}
+        >
+          <option value="">{t("Its own answers")}</option>
+          {NUTRIENTS.map((n) => (
+            <option key={n} value={n}>
+              {t("Nutrition log: {what}", { what: nutrientName[n] })}
+            </option>
+          ))}
+        </select>
+        {q.config.nutrient ? (
+          <span className="text-[11px] text-muted-2">{t("In {unit}. Shows in the nutrition panel on Tracking.", { unit: NUTRIENT_UNIT[q.config.nutrient] })}</span>
+        ) : (
+          <>
+            {t("Unit")}
+            <input value={q.config.unit ?? ""} maxLength={12} onChange={(e) => onConfig({ unit: e.target.value })} placeholder="kcal, h, L…" className={`${field} w-32`} />
+          </>
+        )}
+      </div>
     );
   }
   if (q.kind === "SCALE") {

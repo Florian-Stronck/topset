@@ -18,7 +18,11 @@ export const SCOPE: { table: string; parents: Parent[] }[] = [
   { table: "CheckinAnswer", parents: [{ column: "athleteId", table: "Athlete" }] },
   { table: "CoachMessage", parents: [{ column: "athleteId", table: "Athlete" }] },
   { table: "AthleteVideo", parents: [{ column: "athleteId", table: "Athlete" }] },
+  { table: "NutritionLog", parents: [{ column: "athleteId", table: "Athlete" }] },
+  { table: "CheckinPhoto", parents: [{ column: "athleteId", table: "Athlete" }] },
   { table: "Injury", parents: [{ column: "athleteId", table: "Athlete" }] },
+  { table: "SessionMove", parents: [{ column: "athleteId", table: "Athlete" }] },
+  { table: "Meeting", parents: [{ column: "athleteId", table: "Athlete" }] },
   { table: "Meet", parents: [{ column: "athleteId", table: "Athlete" }] },
   {
     table: "Block",

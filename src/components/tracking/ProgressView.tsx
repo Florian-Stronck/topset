@@ -42,12 +42,15 @@ const PALETTE = ["#3b8fd4", "#e5365a", "#b87a2e", "#3ecf8e", "#a78bfa", "#f472b6
  * Progress: is the athlete getting stronger, and is the work landing where it was meant
  * to? The best 1RMs this phase up top, then strength over time and the phase week by week.
  */
+const NO_MOVE_LIST: Record<string, string> = {};
+
 export function ProgressView({
   block,
   athlete,
   today,
   series,
   history,
+  moves = NO_MOVE_LIST,
   readOnly = false,
 }: {
   block: BlockData;
@@ -55,6 +58,8 @@ export function ProgressView({
   today: string;
   series: Record<"prescribed" | "estimated", LiftSeries[]>;
   history: ExerciseHistory[];
+  /** Session → the day the athlete moved it to. */
+  moves?: Record<string, string>;
   /** The viewer link: no updating the athlete's 1RMs. */
   readOnly?: boolean;
 }) {
@@ -109,7 +114,7 @@ export function ProgressView({
   });
 
   const rpe = rpeByWeek(block, prefs.chartLift);
-  const compliance = complianceByWeek(block, today);
+  const compliance = complianceByWeek(block, today, new Map(Object.entries(moves)));
   const zones = intensityZones(block, athlete, prefs.chartLift);
   const table = liftWeekTable(block, athlete, chartLift);
 

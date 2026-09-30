@@ -52,6 +52,27 @@ describe("sessionsOf", () => {
     assert.equal(previousSession(s, "2026-09-22")?.day.id, "a");
     assert.equal(nextSession(s, "2026-09-30"), null);
   });
+
+  test("a moved session sits on its new date, and says where it came from", () => {
+    const s = sessionsOf([base], new Map([["b", "2026-09-22"]]));
+    assert.equal(sessionOn(s, "2026-09-23"), null);
+    const moved = sessionOn(s, "2026-09-22");
+    assert.equal(moved?.day.id, "b");
+    assert.equal(moved?.movedFrom, "2026-09-23");
+    assert.equal(moved?.week, 1);
+    assert.equal(sessionOn(s, "2026-09-21")?.movedFrom, undefined);
+  });
+
+  test("a move to the planned date is no move", () => {
+    const s = sessionsOf([base], new Map([["b", "2026-09-23"]]));
+    assert.equal(sessionOn(s, "2026-09-23")?.movedFrom, undefined);
+  });
+
+  test("a moved session wins its new date over the plan", () => {
+    const s = sessionsOf([base], new Map([["a", "2026-09-23"]]));
+    assert.equal(sessionOn(s, "2026-09-23")?.day.id, "a");
+    assert.equal(sessionOn(s, "2026-09-21"), null);
+  });
 });
 
 test("addDays crosses months", () => {

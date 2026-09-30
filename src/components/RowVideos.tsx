@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { plural, t } from "@/lib/i18n";
+import { shrinkVideo } from "@/lib/shrink-video";
 import type { VideoFile } from "@/lib/videos";
 
 const base = (rowId: string) => `/api/videos/${encodeURIComponent(rowId)}`;
@@ -198,9 +199,11 @@ function VideoDialog({
     async (files: File[]) => {
       setError(null);
       let last: string | null = null;
-      for (const file of files) {
-        setProgress({ name: file.name, share: 0 });
-        const problem = await upload(rowId, file, (share) => setProgress({ name: file.name, share }));
+      for (const original of files) {
+        setProgress({ name: original.name, share: 0 });
+        // First half of the bar is shrinking, second half the upload.
+        const { file } = await shrinkVideo(original, (share) => setProgress({ name: original.name, share: share / 2 }));
+        const problem = await upload(rowId, file, (share) => setProgress({ name: original.name, share: 0.5 + share / 2 }));
         if (problem) setError(`${file.name}: ${t(problem)}`);
         else {
           changed.current = true;

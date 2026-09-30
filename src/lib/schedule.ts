@@ -18,6 +18,8 @@ export type Session<B, D> = {
   block: B;
   week: number;
   day: D;
+  /** Where the plan put it, when the athlete moved it to `ymd`. */
+  movedFrom?: string;
 };
 
 /** `YYYY-MM-DD` plus `n` days. */
@@ -32,33 +34,61 @@ export function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 }
 
+/** No session moved. */
+export const NO_MOVES: ReadonlyMap<string, string> = new Map();
+
+/** The date a session is done on: where the athlete moved it, else where the plan has it. */
+export function sessionDate(
+  startDate: Date | string,
+  week: number,
+  day: { id: string; index: number },
+  moves: ReadonlyMap<string, string> = NO_MOVES,
+): string {
+  return moves.get(day.id) ?? dateOfDay(startDate, week, day.index);
+}
+
 export function dateOfDay(startDate: Date | string, week: number, dayIndex: number): string {
   return addDays(ymdOf(startDate), (week - 1) * 7 + dayIndex);
 }
 
 /**
  * Every training day of every phase, in date order. Where two phases overlap on a date,
- * the one that started later wins — it is the plan the coach wrote most recently.
+ * the one that started later wins — it is the plan the coach wrote most recently. `moves`
+ * maps a session to the date the athlete moved it to; a moved session wins its new date
+ * over anything the plan puts there, since the athlete chose it knowing what was there.
  */
 export function sessionsOf<D extends ScheduledDay, B extends ScheduledBlock<D>>(
   blocks: B[],
+  moves: ReadonlyMap<string, string> = new Map(),
 ): Session<B, D>[] {
-  const byDate = new Map<string, Session<B, D> & { start: string }>();
+  type Held = Session<B, D> & { start: string };
+  const byDate = new Map<string, Held>();
+  const moved: Held[] = [];
   for (const block of blocks) {
     const start = ymdOf(block.startDate);
     for (const week of block.weeks) {
       for (const day of week.days) {
         if (day.rest) continue;
-        const ymd = dateOfDay(block.startDate, week.order, day.index);
-        const held = byDate.get(ymd);
+        const planned = dateOfDay(block.startDate, week.order, day.index);
+        const to = moves.get(day.id);
+        if (to !== undefined && to !== planned) {
+          moved.push({ ymd: to, block, week: week.order, day, start, movedFrom: planned });
+          continue;
+        }
+        const held = byDate.get(planned);
         if (held && held.start > start) continue;
-        byDate.set(ymd, { ymd, block, week: week.order, day, start });
+        byDate.set(planned, { ymd: planned, block, week: week.order, day, start });
       }
     }
   }
+  for (const m of moved) {
+    const held = byDate.get(m.ymd);
+    if (held?.movedFrom !== undefined && held.start > m.start) continue;
+    byDate.set(m.ymd, m);
+  }
   return [...byDate.values()]
     .sort((a, b) => a.ymd.localeCompare(b.ymd))
-    .map(({ ymd, block, week, day }) => ({ ymd, block, week, day }));
+    .map(({ ymd, block, week, day, movedFrom }) => (movedFrom === undefined ? { ymd, block, week, day } : { ymd, block, week, day, movedFrom }));
 }
 
 /** The session on a date, if there is one. */

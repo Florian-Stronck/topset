@@ -219,6 +219,21 @@ export function forClient(settings: CoachSettings): CoachSettings {
   return { ...settings, branding: { ...settings.branding, logo: LOGO_STORED } };
 }
 
+/**
+ * What an athlete's phone gets: what its screens show numbers, dates and names by. The rest
+ * (the backup folder on the coach's computer, export and programming defaults, their own
+ * exercises) stays with the coach and reads as the defaults there.
+ */
+const ATHLETE_KEYS = [
+  "defaultUnit", "roundKg", "roundLb", "e1rmFormula", "rpeTable", "decimals",
+  "weekStart", "snapStart", "trainingDays", "dateFormat", "language",
+  "restName", "dayNaming", "tiers", "phaseNames", "pr", "totalLifts", "attemptShare",
+] as const satisfies readonly (keyof CoachSettings)[];
+
+export function forAthlete(settings: CoachSettings): CoachSettings {
+  return { ...DEFAULTS, ...Object.fromEntries(ATHLETE_KEYS.map((k) => [k, settings[k]])) };
+}
+
 export function parseSettings(json: string | null | undefined): CoachSettings {
   try {
     return mergeSettings(DEFAULTS, json ? JSON.parse(json) : {});
