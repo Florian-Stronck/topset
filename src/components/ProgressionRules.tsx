@@ -9,6 +9,7 @@ import { Popover } from "@/components/Popover";
 import { describeRule, type Rule } from "@/lib/progression";
 import { useSettings } from "@/components/SettingsProvider";
 import { t } from "@/lib/i18n";
+import { tutorialDid } from "@/components/Tutorial";
 
 const FIELDS: { value: ProgField; label: string }[] = [
   { value: "REPS", label: "Reps" },
@@ -20,6 +21,7 @@ const FIELDS: { value: ProgField; label: string }[] = [
 /** Adds a rule as an undoable edit. */
 async function addTracked(history: History, rowId: string, rule: Parameters<typeof addRule>[1]) {
   let id = await addRule(rowId, rule);
+  tutorialDid("rule");
   history.push({
     label: "add rule",
     undo: () => deleteRule(id),

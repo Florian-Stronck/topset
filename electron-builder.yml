@@ -63,10 +63,24 @@ win:
   artifactName: Topset-Setup-${version}.${ext}
   icon: electron/icon.ico
 
+# A short wizard (welcome, install, finish) rather than one click, for its branded pages
+# and the finish page's tutorial choice — see electron/installer.nsh. Updates still
+# install silently. Per user, so installing and updating never ask for admin.
 nsis:
-  oneClick: true
+  oneClick: false
   perMachine: false
+  allowToChangeInstallationDirectory: false
   deleteAppDataOnUninstall: false
+  include: electron/installer.nsh
+  installerSidebar: electron/installer-sidebar.bmp
+  uninstallerSidebar: electron/installer-sidebar.bmp
+  installerIcon: electron/icon.ico
+  uninstallerIcon: electron/icon.ico
+  # The wizard's own strings exist in these; Luxembourgish falls back to English.
+  installerLanguages:
+    - en_US
+    - de_DE
+    - fr_FR
 
 # Where installed copies look for new versions: the public repo's Releases. Uploading needs
 # GH_TOKEN, and only happens with `npm run desktop:release`.

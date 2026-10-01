@@ -306,6 +306,30 @@ async function offerImport(Database, file) {
   }
 }
 
+/**
+ * The installer's finish page asks whether the tutorial should open on first start, and
+ * leaves the answer ("0" or "1") in topset-tutorial beside the database (see
+ * electron/installer.nsh). It becomes the coach's showTutorial setting, read once.
+ */
+function applyInstallerChoices(db, file) {
+  const choice = path.join(path.dirname(file), "topset-tutorial");
+  let value;
+  try {
+    value = fs.readFileSync(choice, "utf8").trim();
+  } catch {
+    return;
+  }
+  try {
+    const row = db.prepare(`SELECT id, settings FROM "Coach" LIMIT 1`).get();
+    if (row) {
+      const settings = { ...JSON.parse(row.settings || "{}"), showTutorial: value !== "0" };
+      db.prepare(`UPDATE "Coach" SET settings = ? WHERE id = ?`).run(JSON.stringify(settings), row.id);
+    }
+  } finally {
+    fs.rmSync(choice, { force: true });
+  }
+}
+
 /** Brings the database up to the schema this build expects before anything reads it. */
 async function prepareDatabase(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -331,6 +355,7 @@ async function prepareDatabase(file) {
     db.pragma("foreign_keys = ON");
     migrate(db, migrationsDir);
     ensureCoach(db);
+    applyInstallerChoices(db, file);
   } finally {
     db.close();
   }

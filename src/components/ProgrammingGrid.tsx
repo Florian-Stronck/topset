@@ -61,6 +61,7 @@ import {
   type RowData,
 } from "@/lib/types";
 import { t, weekdayShort } from "@/lib/i18n";
+import { tutorialDid } from "@/components/Tutorial";
 
 /** The week's columns in the order they sit, left to right. */
 type WeekCol = "sets" | "reps" | "time" | "intensity" | "tempo" | "rest" | "video" | "notes";
@@ -325,8 +326,13 @@ export function ProgrammingGrid({
   // The grid shows one week, and that week owns its days outright.
   const activeWeekData = block.weeks.find((w) => w.order === activeWeek);
   const days = useMemo(() => activeWeekData?.days ?? [], [activeWeekData]);
-  // The tutorial points at the first real session on screen.
-  const tourDayId = days.find((d) => !d.rest && d.rows.some((r) => r.exercise.trim()))?.id;
+  // The tutorial points at the first real session on screen — in a program still empty, the
+  // first training day, or failing that the first day.
+  const tourDayId = (
+    days.find((d) => !d.rest && d.rows.some((r) => r.exercise.trim())) ??
+    days.find((d) => !d.rest) ??
+    days[0]
+  )?.id;
 
   /** Which of this week's days a meet lands on. */
   const meetByDay = useMemo(() => {
@@ -1156,6 +1162,7 @@ export function ProgrammingGrid({
     const before = { exercise: row.exercise, target: row.target, tier: row.tier };
 
     setBlock((b) => mapRows(b, (r) => (r.id === row.id ? { ...r, ...patch } : r)));
+    if (patch.exercise.trim()) tutorialDid("exercise");
 
     edit(
       "exercise",
@@ -1654,7 +1661,10 @@ export function ProgrammingGrid({
                                         kinds={intensitiesFor(athlete.sport)}
                                         value={cell}
                                         resolved={shown}
-                                        onCommit={(v) => patchCell(row.id, v)}
+                                        onCommit={(v) => {
+                                          patchCell(row.id, v);
+                                          tutorialDid("intensity");
+                                        }}
                                       />
                                     </GridCell>
                                   );

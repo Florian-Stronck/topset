@@ -309,7 +309,7 @@ export function Sidebar({
         <button
           type="button"
           onClick={startTutorial}
-          title={collapsed ? t("Tutorial") : t("A two-minute tour of Topset")}
+          title={collapsed ? t("Tutorial") : t("Write your first program, step by step")}
           className={`flex w-full items-center rounded-lg text-[13px] text-muted hover:bg-surface-2 ${
             collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3 py-2"
           }`}

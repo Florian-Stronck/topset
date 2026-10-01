@@ -278,7 +278,7 @@ export function TrackingShell({
           </div>
         </div>
 
-        <nav role="tablist" aria-label={t("Tracking view")} className="mt-5 flex gap-1 border-b border-border">
+        <nav data-tour="tracking-views" role="tablist" aria-label={t("Tracking view")} className="mt-5 flex gap-1 border-b border-border">
           {views.map((v) => {
             const on = v.id === view;
             return (

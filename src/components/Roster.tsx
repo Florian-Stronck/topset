@@ -11,6 +11,7 @@ import { useSettings } from "@/components/SettingsProvider";
 import { fresh, useCommands, type Command } from "@/lib/commands";
 import type { AthleteData } from "@/lib/types";
 import { plural, t } from "@/lib/i18n";
+import { tutorialDid } from "@/components/Tutorial";
 import { CheckinQuestions } from "@/components/CheckinQuestions";
 import type { CheckinQuestionData } from "@/lib/checkins";
 
@@ -222,8 +223,10 @@ function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams
             {t("Export latest")}
           </a>
         )}
-        <AthleteLinkButton athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasLink} initiallyOpen={linkOpen} />
-        <AthleteLinkButton kind="viewer" athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasViewLink} />
+        <div data-tour="athlete-link" className="flex items-center gap-2">
+          <AthleteLinkButton athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasLink} initiallyOpen={linkOpen} />
+          <AthleteLinkButton kind="viewer" athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasViewLink} />
+        </div>
         {!athlete.theirs && teams.length > 0 && <TeamPicker athlete={athlete} teams={teams} />}
         {!athlete.theirs && <DeleteAthleteButton athlete={athlete} />}
       </div>
@@ -389,6 +392,7 @@ export function NewAthleteButton({
     setPending(false);
     setOpen(false);
     setForm(blank());
+    tutorialDid("athlete");
     router.push(`/programming?athlete=${id}`);
   }
 

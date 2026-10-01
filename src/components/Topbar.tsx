@@ -30,6 +30,7 @@ import { SHELL_MAX_WIDTH } from "@/lib/layout";
 import type { PhaseSummary, ProgramSummary } from "@/lib/queries";
 import type { AthleteData } from "@/lib/types";
 import { t } from "@/lib/i18n";
+import { tutorialDid } from "@/components/Tutorial";
 
 /** Panels the palette can open from a keystroke as well as a click. */
 /** "delete-phase" asks about the open phase, the same question its chip's × asks. */
@@ -690,6 +691,7 @@ export function NewProgramButton({
     setPending(false);
     setOpen(false);
     setForm((f) => ({ ...f, name: "", phase: "" }));
+    tutorialDid("program");
     router.push(phaseHref(athleteId, phaseId));
   }
 
@@ -698,6 +700,7 @@ export function NewProgramButton({
       {!anchorRef && (
         <button
           ref={buttonRef}
+          data-tour="new-program"
           type="button"
           onClick={() => setOpen(!open)}
           className="rounded-full border border-border px-3 py-1.5 text-[12px] text-muted hover:border-accent hover:text-accent"

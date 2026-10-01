@@ -143,6 +143,7 @@ export function MeetPlanner({
             </p>
           </div>
           <button
+            data-tour="new-meet"
             type="button"
             onClick={() => setCreating((c) => !c)}
             className="rounded-full border border-border px-3 py-1.5 text-[12px] text-muted hover:border-accent hover:text-accent"
