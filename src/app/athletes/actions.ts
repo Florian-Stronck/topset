@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma";
 import { t } from "@/lib/i18n";
 import { COLORS, formatDays, KINDS, parseConfig, type CheckinCadence, type CheckinConfig, type CheckinKind, bodyweightQuestionId } from "@/lib/checkins";
 import { CHECKIN_ICONS } from "@/components/CheckinIcon";
+import { myCoach } from "@/lib/me";
 
 function revalidateAll() {
   revalidatePath("/athletes");
@@ -25,7 +26,7 @@ export async function createAthlete(input: {
   dead1RM?: number | null;
 }) {
   assertCoach();
-  const coach = await prisma.coach.findFirst({ select: { id: true } });
+  const coach = await prisma.coach.findFirst({ where: await myCoach(), select: { id: true } });
   if (!coach) throw new Error("No coach found — run `npm run db:seed`.");
   // The weigh-in question is written in the coach's language.
   await loadSettings();
@@ -104,7 +105,7 @@ const EXAMPLE_DAYS: { index: number; label: string; rows: ExampleRow[] }[] = [
 export async function createExampleAthlete(): Promise<string> {
   assertCoach();
   await loadSettings();
-  const coach = await prisma.coach.findFirst({ select: { id: true } });
+  const coach = await prisma.coach.findFirst({ where: await myCoach(), select: { id: true } });
   if (!coach) throw new Error("No coach found.");
 
   const athlete = await prisma.athlete.create({
@@ -292,6 +293,11 @@ export async function reorderCheckinQuestions(athleteId: string, ids: string[]) 
 
 export async function deleteAthlete(athleteId: string) {
   assertCoach();
+  // A teammate's athlete is theirs to delete; the server would refuse it, and hold up sync.
+  const me = await myCoach();
+  if (me.id && !(await prisma.athlete.count({ where: { id: athleteId, coachId: me.id } }))) {
+    throw new Error("Only the coach who added this athlete can delete them.");
+  }
   await prisma.athlete.delete({ where: { id: athleteId } });
   revalidateAll();
 }

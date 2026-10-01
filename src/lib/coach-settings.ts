@@ -2,6 +2,7 @@ import { cache } from "react";
 import { prisma } from "@/lib/prisma";
 import { isAthleteHost } from "@/lib/role";
 import { DEFAULTS, parseSettings, setActiveSettings, setRequestSettings, type CoachSettings } from "@/lib/settings";
+import { myCoach } from "@/lib/me";
 
 /** Once per request: an athlete page's layout and the page itself both load them. */
 const coachSettings = cache((coachId: string) =>
@@ -22,7 +23,7 @@ export async function loadSettings(coachId?: string): Promise<CoachSettings> {
     const coach = await coachSettings(coachId);
     if (coach) settings = parseSettings(coach.settings);
   } else if (!isAthleteHost()) {
-    const coach = await prisma.coach.findFirst({ select: { settings: true } });
+    const coach = await prisma.coach.findFirst({ where: await myCoach(), select: { settings: true } });
     if (coach) settings = parseSettings(coach.settings);
   }
   // On the server, only a page that names its coach sets them; the root layout, which

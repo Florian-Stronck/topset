@@ -7,11 +7,13 @@ import {
   addRow,
   addWeek,
   fillMeetDay,
-  applyAllProgressions,
+  unfillMeetDay,
+  swapDays,
   deleteRow,
   deleteWeek,
   pasteWeek,
   restoreRow,
+  restoreWeek,
   duplicateRow,
   setRowSessions,
   insertRow,
@@ -24,13 +26,14 @@ import {
   updateDay,
   updateProgram,
   updateRow,
+  type LoggedRow,
   type RowTemplate,
 } from "@/app/programming/actions";
 import { inputBase, NumberInput, TextInput } from "@/components/cells";
 import { Popover } from "@/components/Popover";
 import { Confirm } from "@/components/Confirm";
 import { ExerciseInput } from "@/components/ExerciseInput";
-import { useHistory } from "@/components/history";
+import { useHistory, type History } from "@/components/history";
 import { useSettings } from "@/components/SettingsProvider";
 import { IntensityEditor } from "@/components/IntensityEditor";
 import { ProgressionRules } from "@/components/ProgressionRules";
@@ -48,7 +51,7 @@ import { activeSettings, TIERS, tierLabel } from "@/lib/settings";
 import { claimsKey } from "@/components/CommandCenter";
 import { useCommands, type Command } from "@/lib/commands";
 import { COMMAND_SPECS, label as keyLabel, primaryKey } from "@/lib/shortcuts";
-import { useContextMenu } from "@/components/ContextMenu";
+import { useContextMenu, type MenuItem } from "@/components/ContextMenu";
 import {
   WEEKDAYS,
   type AthleteData,
@@ -142,6 +145,9 @@ function gridLayout(columns: Record<Column, boolean>, tight: boolean, timed: boo
   };
 }
 
+
+/** One cell to write: its slot, column and text — and, for a fill, the row it is filled from. */
+type CellWrite = { r: number; c: number; text: string; from?: number };
 
 /** A cell's nav coordinates: its row slot and its column. */
 type Coord = [number, number];
@@ -264,13 +270,46 @@ export function ProgrammingGrid({
   };
   const rowMenu = useContextMenu();
   const history = useHistory();
+  /** A day picked up from its menu, waiting to be copied or moved onto another. */
+  const [dayClip, setDayClip] = useState<{ id: string; label: string; move: boolean } | null>(null);
 
   /** Runs an edit and records how to take it back. */
-  function edit(label: string, run: () => Promise<unknown>, undo: () => Promise<unknown>) {
-    history.push({ label, undo, redo: run });
+  function edit(label: string, run: () => Promise<unknown>, undo: () => Promise<unknown>, key?: string) {
+    history.push({ label, undo, redo: run, key });
     startTransition(() => {
       void run();
     });
+  }
+
+  /** The row whose × has had one click: the second deletes it. */
+  const [armed, setArmed] = useState<string | null>(null);
+
+  /** Counts focus moves in the grid: a cell's saves while it keeps the focus are one undo step. */
+  const focusSession = useRef(0);
+
+  /** Copies or moves the picked-up day onto `target`. A copy adds its rows after any there. */
+  function dropDay(target: DayData) {
+    const source = block.weeks.flatMap((w) => w.days).find((d) => d.id === dayClip?.id);
+    if (!dayClip || !source) return;
+    setDayClip(null);
+    if (dayClip.move) {
+      edit("move day", () => swapDays(source.id, target.id), () => swapDays(source.id, target.id));
+      return;
+    }
+    const create = source.rows.filter((r) => !isBlank(r)).map((r) => ({ id: crypto.randomUUID(), template: { ...rowTemplate(r), session: r.session } }));
+    // An empty or rest day takes the copied day's name too.
+    const takeName = target.rest || target.rows.every(isBlank);
+    edit(
+      "copy day",
+      async () => {
+        if (takeName) await updateDay(target.id, { label: source.label, rest: false });
+        await pasteRows(target.id, { create });
+      },
+      async () => {
+        await pasteRows(target.id, { remove: create.map((c) => c.id) });
+        if (takeName) await updateDay(target.id, { label: target.label, rest: target.rest });
+      },
+    );
   }
 
   // Local edits are optimistic; adopt the server copy whenever a revalidation lands.
@@ -420,11 +459,11 @@ export function ProgrammingGrid({
    * Writes a block of cells as one undoable edit. Columns 0 and 1 belong to the row
    * itself; 2 to 5 are this week's prescription.
    */
-  function writeCells(label: string, writes: { r: number; c: number; text: string }[]) {
+  function writeCells(label: string, writes: CellWrite[]) {
     const rowPatches = new Map<string, { next: Partial<RowData>; prev: Partial<RowData> }>();
     const cellPatches = new Map<string, { next: Partial<Prescription>; prev: Partial<Prescription> }>();
 
-    for (const { r, c, text } of writes) {
+    for (const { r, c, text, from } of writes) {
       const row = nav.slots.get(r)?.row;
       if (!row) continue;
 
@@ -432,7 +471,8 @@ export function ProgrammingGrid({
       if (col === "target" || col === "exercise") {
         const key = col;
         const entry = rowPatches.get(row.id) ?? { next: {}, prev: {} };
-        entry.next[key] = text;
+        // A cleared TARGET falls back as it does when typed away in the cell.
+        entry.next[key] = key === "target" ? text || "General" : text;
         entry.prev[key] = row[key];
         rowPatches.set(row.id, entry);
         continue;
@@ -463,6 +503,14 @@ export function ProgrammingGrid({
         if (n !== null && !Number.isFinite(n)) continue;
         entry.next[key] = n;
         entry.prev[key] = row[key] ?? null;
+        // Filled from another row, intensity brings its kind, range and ramp — not the number alone.
+        const source = from === undefined ? undefined : nav.slots.get(from)?.row;
+        if (col === "intensity" && source) {
+          for (const f of ["intensityType", "intensity", "intensityMax", "rampStep"] as const) {
+            (entry.next as Record<string, unknown>)[f] = source[f];
+            (entry.prev as Record<string, unknown>)[f] = row[f];
+          }
+        }
       }
       cellPatches.set(row.id, entry);
     }
@@ -540,7 +588,7 @@ export function ProgrammingGrid({
       if (navKeys[start[1]] === clip.cols[0]) return pasteClip(clip, start[0]);
     }
 
-    const writes: { r: number; c: number; text: string }[] = [];
+    const writes: CellWrite[] = [];
     text.replace(/\r/g, "").replace(/\n$/, "").split("\n").forEach((line, dr) => {
       line.split("\t").forEach((value, dc) => {
         const c = start[1] + dc;
@@ -792,19 +840,9 @@ export function ProgrammingGrid({
 
       case "row-delete": {
         if (!row) return false;
-        const snapshot = {
-          ...rowTemplate(row),
-          id: row.id,
-          dayId: day.id,
-          order: row.order,
-          fromId: row.fromId,
-          session: row.session,
-        };
-        return tracked(
-          "delete row",
-          () => deleteRow(row.id),
-          () => restoreRow(snapshot),
-        );
+        handled();
+        deleteRows([{ row, dayId: day.id }]);
+        return true;
       }
 
       case "row-up":
@@ -823,7 +861,7 @@ export function ProgrammingGrid({
         // A fight has no attempts to write.
         if (!meet || meet.kind === "FIGHT") return false;
         return act(() => {
-          void fillMeetDay(day.id, meet.id);
+          void fillMeet(day.id, meet.id);
         });
       }
 
@@ -898,10 +936,10 @@ export function ProgrammingGrid({
       // fills into it.
       const box = spans && rect ? rect : { r1: at[0] - 1, r2: at[0], c1: at[1], c2: at[1] };
       if (box.r1 < 0) return true;
-      const writes: { r: number; c: number; text: string }[] = [];
+      const writes: CellWrite[] = [];
       for (let c = box.c1; c <= box.c2; c++) {
         const source = readCell(box.r1, c);
-        for (let r = box.r1 + 1; r <= box.r2; r++) writes.push({ r, c, text: source });
+        for (let r = box.r1 + 1; r <= box.r2; r++) writes.push({ r, c, text: source, from: box.r1 });
       }
       writeCells("fill down", writes);
       return true;
@@ -926,7 +964,18 @@ export function ProgrammingGrid({
 
     if ((e.key === "Delete" || e.key === "Backspace") && spans && rect) {
       e.preventDefault();
-      const writes: { r: number; c: number; text: string }[] = [];
+      // Rows picked by their numbers go; a block of cells is only emptied.
+      if (wholeRows) {
+        const picked = [];
+        for (let r = rect.r1; r <= rect.r2; r++) {
+          const slot = nav.slots.get(r);
+          if (slot?.row && !isBlank(slot.row)) picked.push({ row: slot.row, dayId: slot.day.id });
+        }
+        setSel(null);
+        deleteRows(picked);
+        return true;
+      }
+      const writes: CellWrite[] = [];
       for (let r = rect.r1; r <= rect.r2; r++)
         for (let c = rect.c1; c <= rect.c2; c++) writes.push({ r, c, text: "" });
       writeCells("clear cells", writes);
@@ -994,6 +1043,46 @@ export function ProgrammingGrid({
     focusNav(`${nr}-${nc}`);
   }
 
+  /** Writes a meet's attempts onto its day; undo puts the day back as it was. */
+  async function fillMeet(dayId: string, meetId: string) {
+    const result = await fillMeetDay(dayId, meetId);
+    if (!result.ok) return;
+    let undo = result.undo;
+    history.push({
+      label: "fill attempts",
+      undo: () => unfillMeetDay(undo),
+      redo: async () => {
+        const again = await fillMeetDay(dayId, meetId);
+        if (again.ok) undo = again.undo;
+      },
+    });
+  }
+
+  /** Deletes rows as one undoable edit; undo puts each back where it was, id and all. */
+  function deleteRows(rows: { row: RowData; dayId: string }[]) {
+    if (rows.length === 0) return;
+    const snapshots = rows.map(({ row, dayId }) => ({
+      ...rowTemplate(row),
+      id: row.id,
+      dayId,
+      order: row.order,
+      fromId: row.fromId,
+      session: row.session,
+    }));
+    // What the athlete had logged on each, in this week or the others the sync reaches.
+    const lost = new Map<string, LoggedRow[]>();
+    // One at a time: each delete re-syncs the week, and two at once would race.
+    edit(
+      rows.length === 1 ? "delete row" : "delete rows",
+      async () => {
+        for (const s of snapshots) lost.set(s.id, await deleteRow(s.id));
+      },
+      async () => {
+        for (const s of snapshots) await restoreRow(s, lost.get(s.id));
+      },
+    );
+  }
+
   function patchCell(rowId: string, patch: Partial<Prescription>) {
     // The same keys, as they were, is the inverse of any cell edit.
     const previous = days.flatMap((d) => d.rows).find((r) => r.id === rowId);
@@ -1008,6 +1097,7 @@ export function ProgrammingGrid({
       "cell",
       () => updateCell(rowId, patch),
       () => updateCell(rowId, before),
+      `${focusSession.current}:${rowId}:${Object.keys(patch).join()}`,
     );
   }
 
@@ -1093,8 +1183,9 @@ export function ProgrammingGrid({
         <div
           ref={gridRef}
           style={{ minWidth: GRID_MIN_WIDTH, maxWidth: SHELL_MAX_WIDTH }}
-          className={`mx-auto w-full pb-24 ${dragging ? "select-none" : ""}`}
+          className={`quiet-placeholders mx-auto w-full pb-24 ${dragging ? "select-none" : ""}`}
           onKeyDown={onNavKey}
+          onFocus={() => focusSession.current++}
           onMouseDown={onGridMouseDown}
           onMouseOver={onGridMouseOver}
         >
@@ -1126,66 +1217,85 @@ export function ProgrammingGrid({
 
         {days.map((day) => {
           if (hideRestDays && day.rest) return null;
-          const weekday = t(WEEKDAYS[weekdayOfDay(block.startDate, day.index)]);
           const resolvedDay = resolveDay(day.rows, maxes);
           const tourDay = day.id === tourDayId;
+          const meet = meetByDay.get(day.id);
+          const weekday = t(WEEKDAYS[weekdayOfDay(block.startDate, day.index)]);
+          /** Copy, move and paste the whole day — in its own menu and every row's. */
+          const dayItems: MenuItem[] = [
+            "divider",
+            {
+              label: t("Copy day"),
+              disabled: day.rows.every(isBlank),
+              onSelect: () => setDayClip({ id: day.id, label: `${t("Week {n}", { n: activeWeek })} · ${weekday}`, move: false }),
+            },
+            {
+              label: t("Move day"),
+              onSelect: () => setDayClip({ id: day.id, label: `${t("Week {n}", { n: activeWeek })} · ${weekday}`, move: true }),
+            },
+            {
+              label: !dayClip
+                ? t("Paste day here")
+                : dayClip.move
+                  ? t("Move “{name}” here", { name: dayClip.label })
+                  : t("Paste “{name}” here", { name: dayClip.label }),
+              disabled: !dayClip || dayClip.id === day.id,
+              onSelect: () => dropDay(day),
+            },
+          ];
+          /** The day's actions — its ⋯ and a right-click both open them. */
+          const dayMenu = (e: React.MouseEvent) =>
+            rowMenu.open(e, [
+              {
+                label: day.rest ? t("Make it a training day") : t("Make it a rest day"),
+                onSelect: () =>
+                  edit(
+                    day.rest ? "training day" : "rest day",
+                    () => updateDay(day.id, { rest: !day.rest }),
+                    () => updateDay(day.id, { rest: day.rest }),
+                  ),
+              },
+              {
+                label: t("Rename the day"),
+                disabled: day.rest,
+                onSelect: () => {
+                  const input = document.querySelector<HTMLInputElement>(`#day-${day.id} [data-day-name] input`);
+                  input?.focus();
+                  input?.select();
+                },
+              },
+              {
+                label: t("Add an exercise"),
+                disabled: day.rest,
+                onSelect: () => materialize(day, 1),
+              },
+              ...dayItems,
+              ...(meet?.kind === "MEET"
+                ? [
+                    {
+                      label: t("Fill a meet day with its attempts"),
+                      onSelect: () =>
+                        startTransition(() => {
+                          void fillMeet(day.id, meet.id);
+                        }),
+                    },
+                  ]
+                : []),
+            ]);
           return (
             <section
               key={day.id}
               data-tour={tourDay ? "day" : undefined}
               id={`day-${day.id}`}
-              className={day.rest ? "mt-1" : compact ? "mt-2" : "mt-4"}
+              onContextMenu={dayMenu}
+              className={compact ? "mt-1" : "mt-2"}
             >
-              <div
-                onContextMenu={(e) =>
-                  rowMenu.open(e, [
-                    {
-                      label: day.rest ? t("Make it a training day") : t("Make it a rest day"),
-                      onSelect: () =>
-                        edit(
-                          day.rest ? "training day" : "rest day",
-                          () => updateDay(day.id, { rest: !day.rest }),
-                          () => updateDay(day.id, { rest: day.rest }),
-                        ),
-                    },
-                    {
-                      label: t("Rename the day"),
-                      disabled: day.rest,
-                      onSelect: () => {
-                        const input = document.querySelector<HTMLInputElement>(`#day-${day.id} [data-day-name] input`);
-                        input?.focus();
-                        input?.select();
-                      },
-                    },
-                    {
-                      label: t("Add an exercise"),
-                      disabled: day.rest,
-                      onSelect: () => materialize(day, 1),
-                    },
-                    ...(meetByDay.get(day.id)?.kind === "MEET"
-                      ? [
-                          {
-                            label: t("Fill a meet day with its attempts"),
-                            onSelect: () =>
-                              startTransition(() => {
-                                void fillMeetDay(day.id, meetByDay.get(day.id)!.id);
-                              }),
-                          },
-                        ]
-                      : []),
-                  ])
-                }
-                className={`group/day sticky left-0 z-10 flex w-fit items-center gap-2 ${
-                  day.rest
-                    ? "mx-4 min-w-[260px] rounded-md border border-border bg-surface/60 px-3 py-1.5"
-                    : "px-4 py-2"
-                }`}
-              >
+              {/* One slim line per day, rest days included, so the dates line up down the week. */}
+              <div className="group/day sticky left-0 z-10 flex w-fit items-center gap-2 px-4 py-1">
                 {day.rest ? (
                   // The day's own name waits underneath for it to be trained on again.
-                  <span title={fullDate(block.startDate, activeWeek, day.index)} className="flex items-baseline gap-2 text-[12px]">
-                    <span className="text-foreground">{weekday}</span>
-                    <span className="text-muted">{dayName(day)}</span>
+                  <span title={dayName(day)} className="w-[150px] px-2 py-1.5 text-[13px] font-semibold text-muted-2">
+                    {t("Rest")}
                   </span>
                 ) : (
                   <span data-day-name className="contents">
@@ -1204,50 +1314,42 @@ export function ProgrammingGrid({
                   />
                   </span>
                 )}
-                {!day.rest && (
-                  <span title={fullDate(block.startDate, activeWeek, day.index)} className="cursor-help text-[11px] text-muted-2">
-                    {weekday}
+                <span title={fullDate(block.startDate, activeWeek, day.index)} className="cursor-help text-[11px] text-muted-2">
+                  · {weekdayShort(weekdayOfDay(block.startDate, day.index))} {formatDate(dayOf(block.startDate, activeWeek, day.index))}
+                </span>
+                {meet && (
+                  <span
+                    title={t("{name} — competition day", { name: meet.name })}
+                    className="rounded border border-accent/60 bg-accent-soft px-1.5 py-0.5 text-[11px] tracking-wider text-accent"
+                  >
+                    {meet.kind === "FIGHT" ? t("FIGHT") : "MEET"} · {meet.name}
                   </span>
+                )}
+                {day.rest && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      edit(
+                        "training day",
+                        () => updateDay(day.id, { rest: false }),
+                        () => updateDay(day.id, { rest: true }),
+                      )
+                    }
+                    title={t("Make it a training day")}
+                    className="rounded px-1.5 py-0.5 text-[10px] tracking-wider text-muted-2 opacity-0 hover:bg-surface-2 hover:text-foreground focus:opacity-100 group-hover/day:opacity-100"
+                  >
+                    + {t("TRAIN")}
+                  </button>
                 )}
                 <button
                   type="button"
-                  onClick={() =>
-                    edit(
-                      day.rest ? "training day" : "rest day",
-                      () => updateDay(day.id, { rest: !day.rest }),
-                      () => updateDay(day.id, { rest: day.rest }),
-                    )
-                  }
-                  title={day.rest ? t("Make it a training day (Alt+R)") : t("Make it a rest day (Alt+R)")}
-                  className={`ml-auto rounded px-1.5 py-0.5 text-[10px] tracking-wider text-muted-2 opacity-0 hover:text-foreground focus:opacity-100 group-hover/day:opacity-100 ${
-                    day.rest ? "hover:bg-surface-2" : "border border-border"
-                  }`}
+                  onClick={dayMenu}
+                  title={t("Day actions")}
+                  aria-label={t("Day actions")}
+                  className="rounded px-1.5 text-[13px] leading-5 text-muted-2 opacity-0 hover:bg-surface-3 hover:text-foreground focus:opacity-100 group-hover/day:opacity-100"
                 >
-                  {day.rest ? `+ ${t("TRAIN")}` : t("MAKE REST DAY")}
+                  ⋯
                 </button>
-
-                {meetByDay.get(day.id) && (
-                  <>
-                    <span
-                      title={t("{name} — competition day", { name: meetByDay.get(day.id)!.name })}
-                      className="rounded border border-accent/60 bg-accent-soft px-1.5 py-0.5 text-[11px] tracking-wider text-accent"
-                    >
-                      {meetByDay.get(day.id)!.kind === "FIGHT" ? t("FIGHT") : "MEET"} · {meetByDay.get(day.id)!.name}
-                    </span>
-                    {meetByDay.get(day.id)!.kind === "MEET" && <button
-                      type="button"
-                      title={t("Write the nine attempts onto this day (Alt+M)")}
-                      onClick={() =>
-                        startTransition(() => {
-                          void fillMeetDay(day.id, meetByDay.get(day.id)!.id);
-                        })
-                      }
-                      className="rounded border border-border px-1.5 py-0.5 text-[11px] tracking-wider text-muted-2 hover:border-accent hover:text-accent"
-                    >
-                      {t("FILL ATTEMPTS")}
-                    </button>}
-                  </>
-                )}
               </div>
 
               {!day.rest && (
@@ -1365,6 +1467,7 @@ export function ProgrammingGrid({
                             ...(meetByDay.get(day.id)?.kind === "MEET"
                               ? [{ label: t("Fill a meet day with its attempts"), hint: k("meet-fill"), onSelect: run("meet-fill") }]
                               : []),
+                            ...dayItems,
                             "divider",
                             { label: t("Delete the row"), hint: k("row-delete"), onSelect: run("row-delete"), danger: true, disabled: ghost },
                           ]);
@@ -1390,23 +1493,18 @@ export function ProgrammingGrid({
                           </button>
                           <button
                             type="button"
-                            title={t("Delete row")}
+                            title={armed === row.id ? t("Click again to delete the row") : t("Delete row")}
+                            aria-label={t("Delete row")}
+                            // It sits beside the row number, so one stray click only arms it.
                             onClick={() => {
-                              const snapshot = {
-                                ...rowTemplate(row),
-                                id: row.id,
-                                dayId: day.id,
-                                order: row.order,
-                                fromId: row.fromId,
-                                session: row.session,
-                              };
-                              edit(
-                                "delete row",
-                                () => deleteRow(row.id),
-                                () => restoreRow(snapshot),
-                              );
+                              if (armed !== row.id) return setArmed(row.id);
+                              setArmed(null);
+                              deleteRows([{ row, dayId: day.id }]);
                             }}
-                            className={`hidden text-accent ${ghost ? "" : "group-hover:block"}`}
+                            onMouseLeave={() => setArmed(null)}
+                            className={`hidden rounded px-0.5 ${ghost ? "" : "group-hover:block"} ${
+                              armed === row.id ? "bg-miss text-white" : "text-muted-2 hover:text-miss"
+                            }`}
                           >
                             ×
                           </button>
@@ -1458,7 +1556,7 @@ export function ProgrammingGrid({
                             value={row.exercise}
                             history={exerciseHistory}
                             fighter={fighter}
-                            className="font-medium"
+                            className={`font-medium ${ghost ? "keep-placeholder" : ""}`}
                             onCommit={(v, picked) => commitExercise(row, v, picked)}
                           />
                         </StickyCell>
@@ -1517,6 +1615,7 @@ export function ProgrammingGrid({
                                         value={cell.reps === null ? null : repsText(cell)}
                                         placeholder="—"
                                         className="text-center !text-[12px] tabular-nums"
+                                        valid={(v) => parseReps(v) !== null}
                                         onCommit={(v) => {
                                           // "8" or a range, "8-10".
                                           const reps = parseReps(v ?? "");
@@ -1533,6 +1632,7 @@ export function ProgrammingGrid({
                                         value={formatDuration(cell.duration) || null}
                                         placeholder="—"
                                         className="text-center !text-[12px] tabular-nums"
+                                        valid={(v) => v.trim() === "" || parseDuration(v) !== null}
                                         onCommit={(v) => {
                                           const duration = v === null ? null : parseDuration(v);
                                           if (v !== null && duration === null) return;
@@ -1792,14 +1892,14 @@ function GhostRow({
         value=""
         placeholder={placeholder}
         onFocus={() => onEnter(col)}
-        className={`${inputBase} ${align} cursor-text`}
+        className={`${inputBase} ${align} cursor-text ${col === 1 ? "keep-placeholder" : ""}`}
       />
     );
   }
 
   return (
     <div
-      className="grid items-stretch border-t border-dashed border-border opacity-60 focus-within:opacity-100 hover:opacity-100"
+      className="group grid items-stretch border-t border-dashed border-border opacity-60 focus-within:opacity-100 hover:opacity-100"
       style={{ gridTemplateColumns: template }}
     >
       <StickyCell left={0} width={40} className="grid place-items-center text-[13px] text-muted-2">
@@ -1882,7 +1982,6 @@ function WeekTabs({
 }) {
   const [, startTransition] = useTransition();
   const [ownConfirmWeek, setOwnConfirmWeek] = useState<number | null>(null);
-  const tightIntensity = usePref("tightIntensity");
   const confirmWeek = deleting !== undefined ? deleting : ownConfirmWeek;
   const setConfirmWeek = onDeleting ?? setOwnConfirmWeek;
   const confirmAnchor = useRef<HTMLButtonElement | null>(null);
@@ -2041,8 +2140,18 @@ function WeekTabs({
               const target = confirmWeek;
               setConfirmWeek(null);
               onSelect(Math.max(1, target - 1));
-              startTransition(() => {
-                void deleteWeek(blockId, target);
+              let snapshot = await deleteWeek(blockId, target);
+              if (!snapshot) return;
+              history.push({
+                label: "delete week",
+                undo: async () => {
+                  if (snapshot) await restoreWeek(blockId, snapshot);
+                  onSelect(target);
+                },
+                redo: async () => {
+                  snapshot = await deleteWeek(blockId, target);
+                  onSelect(Math.max(1, target - 1));
+                },
               });
             }}
           />
@@ -2061,9 +2170,7 @@ function WeekTabs({
         }
         onClick={() => {
           onAdded();
-          startTransition(() => {
-            void addWeek(blockId);
-          });
+          startTransition(() => addWeekUndoable(history, blockId, weeks.length + 1));
         }}
         className="ml-2 shrink-0 whitespace-nowrap px-2 py-2 text-[12px] text-muted hover:text-accent"
       >
@@ -2071,55 +2178,56 @@ function WeekTabs({
       </button>
       </div>
 
-      <div data-tour="undo" className="flex shrink-0 items-center gap-1">
-        <button
-          type="button"
-          onClick={() => togglePref("tightIntensity")}
-          title={
-            tightIntensity
-              ? t("Intensity sits beside reps — click to spread it across the week")
-              : t("Keep intensity beside reps, notes take the extra width")
-          }
-          className={`grid size-8 place-items-center rounded-md border hover:border-accent hover:text-accent ${
-            tightIntensity ? "border-accent/50 text-accent" : "border-border text-muted"
-          }`}
-        >
-          <ColumnsIcon tight={tightIntensity} />
-        </button>
-        <span className="mx-1 h-5 w-px bg-border" />
-        <button
-          type="button"
-          disabled={history.undoLabel === null}
-          onClick={history.undo}
-          title={history.undoLabel ? `${t("Undo")} ${t(history.undoLabel)} (${keyLabel(primaryKey("undo") ?? "mod+z")})` : t("Nothing to undo")}
-          className="grid size-8 place-items-center rounded-md border border-border text-muted hover:border-accent hover:text-accent disabled:opacity-40 disabled:hover:border-border disabled:hover:text-muted"
-        >
-          <UndoIcon />
-        </button>
-        <button
-          type="button"
-          disabled={history.redoLabel === null}
-          onClick={history.redo}
-          title={history.redoLabel ? `${t("Redo")} ${t(history.redoLabel)} (${keyLabel(primaryKey("redo") ?? "mod+y")})` : t("Nothing to redo")}
-          className="grid size-8 place-items-center rounded-md border border-border text-muted hover:border-accent hover:text-accent disabled:opacity-40 disabled:hover:border-border disabled:hover:text-muted"
-        >
-          <UndoIcon redo />
-        </button>
-
-        <button
-          type="button"
-          onClick={() =>
-            startTransition(() => {
-              void applyAllProgressions(blockId);
-            })
-          }
-          title={t("Rewrite every later week from week 1 using each exercise's rules")}
-          className="ml-1 h-8 rounded-md border border-border px-2.5 text-[11px] text-muted hover:border-accent hover:text-accent"
-        >
-          {t("Apply progressions")}
-        </button>
-      </div>
       {weekMenu.menu}
+    </div>
+  );
+}
+
+/** Adds a week to the end of a phase as one undoable edit; `order` is the number it gets. */
+export function addWeekUndoable(history: History, blockId: string, order: number) {
+  void addWeek(blockId);
+  history.push({ label: "add week", undo: () => deleteWeek(blockId, order), redo: () => addWeek(blockId) });
+}
+
+/** The column toggle and undo / redo, beside whichever tab strip is showing. */
+export function GridTools() {
+  const tightIntensity = usePref("tightIntensity");
+  const history = useHistory();
+  return (
+    <div data-tour="undo" className="flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        onClick={() => togglePref("tightIntensity")}
+        title={
+          tightIntensity
+            ? t("Intensity sits beside reps — click to spread it across the week")
+            : t("Keep intensity beside reps, notes take the extra width")
+        }
+        className={`grid size-8 place-items-center rounded-md border hover:border-accent hover:text-accent ${
+          tightIntensity ? "border-accent/50 text-accent" : "border-border text-muted"
+        }`}
+      >
+        <ColumnsIcon tight={tightIntensity} />
+      </button>
+      <span className="mx-1 h-5 w-px bg-border" />
+      <button
+        type="button"
+        disabled={history.undoLabel === null}
+        onClick={history.undo}
+        title={history.undoLabel ? `${t("Undo")} ${t(history.undoLabel)} (${keyLabel(primaryKey("undo") ?? "mod+z")})` : t("Nothing to undo")}
+        className="grid size-8 place-items-center rounded-md border border-border text-muted hover:border-accent hover:text-accent disabled:opacity-40 disabled:hover:border-border disabled:hover:text-muted"
+      >
+        <UndoIcon />
+      </button>
+      <button
+        type="button"
+        disabled={history.redoLabel === null}
+        onClick={history.redo}
+        title={history.redoLabel ? `${t("Redo")} ${t(history.redoLabel)} (${keyLabel(primaryKey("redo") ?? "mod+y")})` : t("Nothing to redo")}
+        className="grid size-8 place-items-center rounded-md border border-border text-muted hover:border-accent hover:text-accent disabled:opacity-40 disabled:hover:border-border disabled:hover:text-muted"
+      >
+        <UndoIcon redo />
+      </button>
     </div>
   );
 }
@@ -2179,6 +2287,7 @@ function Header({
           value={block.program.name}
           placeholder={t("Program")}
           className={`${nameInput} font-medium`}
+          valid={(v) => v.trim() !== ""}
           onCommit={(v) => {
             if (v === null) return;
             rename(
@@ -2196,6 +2305,7 @@ function Header({
           value={block.phase}
           placeholder={t("Phase")}
           className={`${nameInput} text-muted`}
+          valid={(v) => v.trim() !== ""}
           onCommit={(v) => {
             if (v === null) return;
             rename("rename phase", (phase) => updateBlock(block.id, { phase }), block.phase, v);

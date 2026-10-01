@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { createAthlete, deleteAthlete, updateAthleteProfile } from "@/app/athletes/actions";
+import { setAthleteTeam } from "@/app/settings/cloud-actions";
 import { AthleteLinkButton } from "@/components/AthleteLink";
 import { formKeys, NumberInput, TextInput } from "@/components/cells";
 import { useSettings } from "@/components/SettingsProvider";
@@ -18,6 +19,11 @@ export type RosterEntry = AthleteData & {
   hasLink: boolean;
   /** Whether a read-only Tracking link for a second coach is out. */
   hasViewLink: boolean;
+  /** The team the athlete is shared with, if any. */
+  teamId: string | null;
+  team: string | null;
+  /** A teammate's athlete: theirs to share or delete, everyone's to edit. */
+  theirs: boolean;
   /** What the athlete app asks in the check-in, in order. */
   questions: CheckinQuestionData[];
   programs: {
@@ -37,11 +43,14 @@ const MAXES = [
 
 export function Roster({
   athletes,
+  teams = [],
   openNew = false,
   openLink,
   nonce,
 }: {
   athletes: RosterEntry[];
+  /** The teams the coach is on, to share their own athletes with. */
+  teams?: { id: string; name: string }[];
   openNew?: boolean;
   /** An athlete whose check-in link opens straight away — the palette's "Athlete check-in link…". */
   openLink?: string;
@@ -122,6 +131,7 @@ export function Roster({
             <AthleteCard
               key={a.id === openLink ? `${a.id}-${nonce ?? ""}` : a.id}
               athlete={a}
+              teams={teams}
               linkOpen={a.id === openLink}
             />
           ))}
@@ -131,7 +141,7 @@ export function Roster({
   );
 }
 
-function AthleteCard({ athlete, linkOpen }: { athlete: RosterEntry; linkOpen: boolean }) {
+function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams: { id: string; name: string }[]; linkOpen: boolean }) {
   const [, startTransition] = useTransition();
   const unit = athlete.unit === "LB" ? "lb" : "kg";
   const total = MAXES.reduce((sum, m) => sum + (athlete[m.key] ?? 0), 0);
@@ -162,6 +172,7 @@ function AthleteCard({ athlete, linkOpen }: { athlete: RosterEntry; linkOpen: bo
           <div className="mt-0.5 pl-0.5 text-[11px] text-muted-2">
             {plural(athlete.programs.length, "{n} program", "{n} programs")}
             {latest ? ` · ${t("latest")}: ${latest.name}` : ""}
+            {athlete.team ? ` · ${t("Shared with {team}", { team: athlete.team })}` : ""}
           </div>
         </div>
 
@@ -213,9 +224,37 @@ function AthleteCard({ athlete, linkOpen }: { athlete: RosterEntry; linkOpen: bo
         )}
         <AthleteLinkButton athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasLink} initiallyOpen={linkOpen} />
         <AthleteLinkButton kind="viewer" athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasViewLink} />
-        <DeleteAthleteButton athlete={athlete} />
+        {!athlete.theirs && teams.length > 0 && <TeamPicker athlete={athlete} teams={teams} />}
+        {!athlete.theirs && <DeleteAthleteButton athlete={athlete} />}
       </div>
     </div>
+  );
+}
+
+/** Which of the coach's teams sees this athlete too. Needs the server, so it can say no. */
+function TeamPicker({ athlete, teams }: { athlete: RosterEntry; teams: { id: string; name: string }[] }) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <label className="flex items-center gap-1.5 text-[12px] text-muted" title={error ?? undefined}>
+      {t("Team")}
+      <select
+        value={athlete.teamId ?? ""}
+        disabled={pending}
+        onChange={(e) => {
+          const teamId = e.target.value || null;
+          startTransition(async () => setError((await setAthleteTeam(athlete.id, teamId)).error ?? null));
+        }}
+        className={`rounded-lg border bg-surface px-2 py-1 text-[12px] ${error ? "border-red-400 text-red-400" : "border-border"}`}
+      >
+        <option value="">{t("Not shared")}</option>
+        {teams.map((team) => (
+          <option key={team.id} value={team.id}>
+            {team.name}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

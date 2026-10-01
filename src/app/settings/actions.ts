@@ -6,6 +6,7 @@ import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { mergeSettings, parseSettings, setActiveSettings, type SettingsPatch } from "@/lib/settings";
+import { myCoach } from "@/lib/me";
 
 /**
  * Stores only what the coach changed — anything left at its default keeps following the
@@ -19,7 +20,7 @@ export async function updateSettings(patch: SettingsPatch) {
     delete branding.logo;
     patch = { ...patch, branding };
   }
-  const coach = await prisma.coach.findFirstOrThrow({ select: { id: true, settings: true } });
+  const coach = await prisma.coach.findFirstOrThrow({ where: await myCoach(), select: { id: true, settings: true } });
   let stored: Record<string, unknown> = {};
   try {
     stored = JSON.parse(coach.settings) as Record<string, unknown>;
@@ -34,7 +35,7 @@ export async function updateSettings(patch: SettingsPatch) {
 /** Puts one setting (or group) back to its default. */
 export async function resetSetting(key: string) {
   assertCoach();
-  const coach = await prisma.coach.findFirstOrThrow({ select: { id: true, settings: true } });
+  const coach = await prisma.coach.findFirstOrThrow({ where: await myCoach(), select: { id: true, settings: true } });
   let stored: Record<string, unknown> = {};
   try {
     stored = JSON.parse(coach.settings) as Record<string, unknown>;
@@ -50,7 +51,7 @@ export async function updateAccount(patch: { name?: string }) {
   assertCoach();
   const data: { name?: string } = {};
   if (patch.name !== undefined) data.name = patch.name.trim() || "Coach";
-  const coach = await prisma.coach.findFirstOrThrow({ select: { id: true } });
+  const coach = await prisma.coach.findFirstOrThrow({ where: await myCoach(), select: { id: true } });
   await prisma.coach.update({ where: { id: coach.id }, data });
   revalidatePath("/", "layout");
   return { ok: true as const };

@@ -73,6 +73,31 @@ export function useSelectOnFocus() {
 }
 
 /**
+ * Escape backs out of everything typed since the cell took the focus — saves made at the
+ * pauses included. `focus` notes what was there; `escape` hands it back, or undefined
+ * when nothing changed, and swallows the save the blur that follows would make.
+ */
+export function useEscape<T>(value: T) {
+  const original = useRef(value);
+  const escaping = useRef(false);
+  return {
+    focus: () => {
+      original.current = value;
+    },
+    /** Call from the blur: true when this blur is Escape's and must not save. */
+    blurred: () => {
+      const was = escaping.current;
+      escaping.current = false;
+      return was;
+    },
+    escape: () => {
+      escaping.current = true;
+      return original.current;
+    },
+  };
+}
+
+/**
  * Enter anywhere in a popover form runs it; Escape closes it. Buttons keep their own
  * behaviour, so Enter on Cancel still cancels.
  */
@@ -110,6 +135,7 @@ export function NumberInput({
   const dirty = useRef(false);
   const auto = useAutoCommit();
   const select = useSelectOnFocus();
+  const esc = useEscape(value);
 
   // `autoFocus` alone lands the caret but not the selection — the browser focuses the
   // input before React attaches onFocus — so the first mount does both by hand.
@@ -131,7 +157,7 @@ export function NumberInput({
   // A half-typed number ("-", "1.") is not an edit yet; it waits for the next keystroke.
   function save(text: string) {
     const trimmed = text.trim();
-    const next = trimmed === "" ? null : Number(trimmed);
+    const next = trimmed === "" ? null : Number(trimmed.replace(",", "."));
     if (next !== null && Number.isNaN(next)) return;
     if (next !== value) onCommit(next);
   }
@@ -140,12 +166,15 @@ export function NumberInput({
     // The blur path sends the same draft itself, so the pending one is dropped.
     auto.cancel();
     dirty.current = false;
+    if (esc.blurred()) return;
     const trimmed = draft.trim();
-    const next = trimmed === "" ? null : Number(trimmed);
+    const next = trimmed === "" ? null : Number(trimmed.replace(",", "."));
     if (next !== null && Number.isNaN(next)) {
       setDraft(value === null ? "" : String(value));
       return;
     }
+    // "7,5" reads back as the number it saved.
+    setDraft(next === null ? "" : String(next));
     if (next !== value) onCommit(next);
   }
 
@@ -156,6 +185,10 @@ export function NumberInput({
     <input
       {...select}
       ref={initialFocus}
+      onFocus={(e) => {
+        esc.focus();
+        select.onFocus(e);
+      }}
       inputMode="decimal"
       value={draft}
       placeholder={placeholder}
@@ -171,7 +204,9 @@ export function NumberInput({
         if (e.key === "Escape") {
           auto.cancel();
           dirty.current = false;
-          setDraft(value === null ? "" : String(value));
+          const was = esc.escape();
+          setDraft(was === null ? "" : String(was));
+          if (was !== value) onCommit(was);
           e.currentTarget.blur();
         }
       }}
@@ -187,9 +222,12 @@ export function TextInput({
   className = "",
   list,
   suggestions,
+  valid,
 }: {
   value: string | null;
   onCommit: (v: string | null) => void;
+  /** Text this cell can't take is never saved, and leaving the cell puts back what was there. */
+  valid?: (text: string) => boolean;
   placeholder?: string;
   className?: string;
   /** Id of a <datalist> to suggest from. */
@@ -206,6 +244,7 @@ export function TextInput({
   const select = useSelectOnFocus();
   const ref = useRef<HTMLInputElement>(null);
   const completion = useRef<[number, number] | null>(null);
+  const esc = useEscape(value);
 
   useEffect(() => {
     if (!dirty.current) setDraft(value ?? "");
@@ -221,6 +260,10 @@ export function TextInput({
     <input
       {...select}
       ref={ref}
+      onFocus={(e) => {
+        esc.focus();
+        select.onFocus(e);
+      }}
       value={draft}
       placeholder={placeholder}
       list={list}
@@ -239,6 +282,7 @@ export function TextInput({
         dirty.current = true;
         setDraft(typed);
         auto.schedule(() => {
+          if (valid && !valid(typed)) return;
           const next = typed.trim() === "" ? null : typed;
           if (next !== value) onCommit(next);
         });
@@ -246,6 +290,11 @@ export function TextInput({
       onBlur={() => {
         auto.cancel();
         dirty.current = false;
+        if (esc.blurred()) return;
+        if (valid && !valid(draft)) {
+          setDraft(value ?? "");
+          return;
+        }
         const next = draft.trim() === "" ? null : draft;
         if (next !== value) onCommit(next);
       }}
@@ -254,7 +303,9 @@ export function TextInput({
         if (e.key === "Escape") {
           auto.cancel();
           dirty.current = false;
-          setDraft(value ?? "");
+          const was = esc.escape();
+          setDraft(was ?? "");
+          if (was !== value) onCommit(was);
           e.currentTarget.blur();
         }
       }}

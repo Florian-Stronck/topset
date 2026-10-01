@@ -8,9 +8,14 @@ export type HistoryEntry = {
   label: string;
   undo: () => Promise<unknown> | unknown;
   redo: () => Promise<unknown> | unknown;
+  /**
+   * Edits to the same thing in a row — a cell saving itself at each pause in the typing —
+   * share a key and fold into one step: undo goes back to before the first of them.
+   */
+  key?: string;
 };
 
-type History = {
+export type History = {
   push: (entry: HistoryEntry) => void;
   undo: () => void;
   redo: () => void;
@@ -88,7 +93,12 @@ export function HistoryProvider({
       ensureKey();
       // How far back undo reaches is the coach's call (Settings → Data).
       const limit = Math.max(1, activeSettings().undoLimit);
-      past.current = [...past.current.slice(-(limit - 1)), entry];
+      const top = past.current.at(-1);
+      if (entry.key !== undefined && top?.key === entry.key) {
+        past.current = [...past.current.slice(0, -1), { ...entry, undo: top.undo }];
+      } else {
+        past.current = [...past.current.slice(-(limit - 1)), entry];
+      }
       future.current = [];
       publish();
     },

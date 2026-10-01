@@ -108,3 +108,14 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--border);
 }
+
+/* The grid's empty cells stay blank until their row is pointed at or typed in — an
+   "add note" on every row is noise. The day's "add exercise" row keeps its hint. */
+.quiet-placeholders .group input::placeholder {
+  color: transparent;
+}
+.quiet-placeholders .group:hover input::placeholder,
+.quiet-placeholders .group:focus-within input::placeholder,
+.quiet-placeholders .group input.keep-placeholder::placeholder {
+  color: var(--muted-2);
+}

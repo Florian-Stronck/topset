@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { plural, t } from "@/lib/i18n";
+import { formatMoment } from "@/lib/dates";
 import { shrinkVideo } from "@/lib/shrink-video";
 import type { VideoFile } from "@/lib/videos";
 
@@ -350,7 +351,7 @@ function VideoDialog({
                     {v.name}
                   </button>
                   <span className="shrink-0 text-[11px] text-muted-2">
-                    {new Date(v.addedAt).toLocaleDateString()} · {sizeText(v.size)}
+                    {formatMoment(v.addedAt)} · {sizeText(v.size)}
                   </span>
                   <button type="button" onClick={() => act(v.name, "show")} className="shrink-0 text-[11px] text-muted hover:text-foreground">
                     {t("Show in folder")}

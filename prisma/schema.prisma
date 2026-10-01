@@ -28,6 +28,27 @@ model Coach {
   resetExpiresAt DateTime?
   athletes Athlete[]
   sessions CoachSession[]
+  teams    TeamMember[]
+}
+
+/// A gym's coaches sharing a roster: every member sees and edits every athlete on the team.
+/// Only the admin makes teams and picks their members. Kept on the server; a desktop app
+/// holds a copy of the teams its coach is on, refreshed by sync and never sent back.
+model Team {
+  id       String       @id @default(cuid())
+  name     String
+  members  TeamMember[]
+  athletes Athlete[]
+}
+
+model TeamMember {
+  teamId  String
+  coachId String
+  team    Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  coach   Coach @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  @@id([teamId, coachId])
+  @@index([coachId])
 }
 
 /// A signed-in desktop app. Only a hash of its token is kept.
@@ -69,6 +90,10 @@ model Athlete {
   accessToken String? @unique
   /// Secret for a read-only view of the athlete's Tracking, for a second coach.
   viewToken   String? @unique
+  /// The team this athlete is shared with; null keeps them to `coachId`, who stays the
+  /// owner either way. Set on the server only (see `PULLED_COLUMNS`).
+  teamId   String?
+  team     Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
   blocks   Block[]
   programs Program[]
   meets    Meet[]
@@ -84,6 +109,7 @@ model Athlete {
   meetings    Meeting[]
 
   @@index([coachId])
+  @@index([teamId])
 }
 
 /// An injury, from the athlete app or the coach. Both sides write it, so it syncs like
@@ -652,9 +678,13 @@ model PlanChange {
   table     String
   rowId     String
   sessionId String?
+  /// The athlete the row belongs to, so teammates get each other's edits. Null for a
+  /// coach's own profile, and for entries from before teams.
+  athleteId String?
   at        DateTime @default(now())
 
   @@index([coachId, rev])
+  @@index([athleteId, rev])
 }
 
 /// What this desktop app last sent up, per row, as a digest of the coach's columns: so a

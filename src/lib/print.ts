@@ -34,7 +34,7 @@ function weekLabel(start: Date, week: number) {
   from.setDate(from.getDate() + (week - 1) * 7);
   const to = new Date(from);
   to.setDate(to.getDate() + 6);
-  return `${formatDate(from)} – ${formatDate(to)} ${to.getFullYear()}`;
+  return `${formatDate(from)} – ${formatDate(to, true)}`;
 }
 
 /** The columns the coach wants, sized to fill the page width in proportion. */

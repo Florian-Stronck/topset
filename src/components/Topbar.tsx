@@ -3,14 +3,25 @@
 import { useRouter } from "next/navigation";
 import { Fragment, useRef, useState, useTransition } from "react";
 import { copyProgram } from "@/app/athletes/actions";
-import { addPhase, closePhaseGap, createProgram, deleteBlock, pastePhase, unpastePhase } from "@/app/programming/actions";
+import {
+  addPhase,
+  closePhaseGap,
+  createProgram,
+  deleteBlock,
+  deleteProgram,
+  pastePhase,
+  restoreBlock,
+  setPhaseStarts,
+  unpastePhase,
+} from "@/app/programming/actions";
 import { useContextMenu, type MenuItem } from "@/components/ContextMenu";
-import { useHistory } from "@/components/history";
+import { useHistory, type History } from "@/components/history";
 import { setPref, usePref } from "@/lib/prefs";
 import { formKeys } from "@/components/cells";
 import { Confirm } from "@/components/Confirm";
 import { Popover } from "@/components/Popover";
-import { ProgramSettings } from "@/components/ProgramSettings";
+import { PhaseSettings, ProgramSettings } from "@/components/ProgramSettings";
+import { GridTools } from "@/components/ProgrammingGrid";
 import { describeGap, formatDate, phaseGaps, snapStart, weekdayOf } from "@/lib/dates";
 import { activeSettings, phaseName, type ExportKind } from "@/lib/settings";
 import { useSettings } from "@/components/SettingsProvider";
@@ -22,13 +33,96 @@ import { t } from "@/lib/i18n";
 
 /** Panels the palette can open from a keystroke as well as a click. */
 /** "delete-phase" asks about the open phase, the same question its chip's × asks. */
-export type Panel = "new" | "copy" | "settings" | "delete-phase" | null;
+export type Panel = "new" | "copy" | "settings" | "phase-settings" | "delete-phase" | null;
 
 const field =
   "w-full rounded border border-border bg-surface px-2 py-1.5 text-[12px] outline-none focus:ring-1 focus:ring-accent/60";
 
 function phaseHref(athleteId: string, phaseId: string) {
   return `/programming?athlete=${athleteId}&phase=${phaseId}`;
+}
+
+/*
+ * Phase edits as undoable steps — the topbar, the settings and the palette all make them.
+ * `open` shows a phase; each step lands back on the phase it is about.
+ */
+
+/** Adds a phase at the end of the program and opens it; undo goes back to `back`. */
+export async function addPhaseUndoable(history: History, programId: string, open: (id: string) => void, back: string) {
+  let id = await addPhase(programId);
+  open(id);
+  history.push({
+    label: "add phase",
+    undo: async () => {
+      await deleteBlock(id);
+      open(back);
+    },
+    redo: async () => {
+      id = await addPhase(programId);
+      open(id);
+    },
+  });
+}
+
+/** Deletes a phase, all of it kept for the undo; `after` moves off it once it is gone. */
+export async function deletePhaseUndoable(
+  history: History,
+  phaseId: string,
+  open: (id: string) => void,
+  after: () => void,
+) {
+  let snapshot = await deleteBlock(phaseId);
+  after();
+  if (!snapshot) return;
+  history.push({
+    label: "delete phase",
+    undo: async () => {
+      if (snapshot) await restoreBlock(snapshot);
+      open(phaseId);
+    },
+    redo: async () => {
+      snapshot = await deleteBlock(phaseId);
+      after();
+    },
+  });
+}
+
+/** Closes the break or overlap before a phase; undo puts every moved phase back. */
+export async function closeGapUndoable(history: History, phaseId: string) {
+  let before = await closePhaseGap(phaseId);
+  if (before.length === 0) return;
+  history.push({
+    label: "close gap",
+    undo: () => setPhaseStarts(before),
+    redo: async () => {
+      before = await closePhaseGap(phaseId);
+    },
+  });
+}
+
+/** Pastes a copy of `sourceId` after `afterId` (the end when undefined) and opens it. */
+export async function pastePhaseUndoable(
+  history: History,
+  programId: string,
+  open: (id: string) => void,
+  sourceId: string,
+  afterId: string | undefined,
+  back: string,
+  label: string,
+) {
+  let id = await pastePhase(sourceId, programId, afterId);
+  open(id);
+  history.push({
+    label,
+    undo: async () => {
+      await unpastePhase(id);
+      open(back);
+    },
+    redo: async () => {
+      id = await pastePhase(sourceId, programId, afterId);
+      open(id);
+    },
+  });
 }
 
 export function Topbar({
@@ -59,10 +153,19 @@ export function Topbar({
   const settingsRef = useRef<HTMLButtonElement>(null);
   const phaseButtonRef = useRef<HTMLButtonElement>(null);
   const [phasesOpen, setPhasesOpen] = useState(false);
+  const [programsOpen, setProgramsOpen] = useState(false);
+  /** The program whose delete question is up. */
+  const [deletingProgramId, setDeletingProgramId] = useState<string | null>(null);
+  const programButtonRef = useRef<HTMLButtonElement>(null);
+  /** Program panels open under whichever opened them: the program list or the ⋯. */
+  const [panelFrom, setPanelFrom] = useState<"menu" | "programs">("menu");
+  const panelAnchor = panelFrom === "programs" ? programButtonRef : settingsRef;
+  const panelAlign = panelFrom === "programs" ? "left" : "right";
   const [addingPhase, setAddingPhase] = useState(false);
   const [deletingPhaseId, setDeletingPhaseId] = useState<string | null>(null);
   const gaps = phaseGaps(program.phases);
   const phaseMenu = useContextMenu();
+  const programMenu = useContextMenu();
   const history = useHistory();
   const copied = usePref("clipboard");
   const copiedPhase = copied?.kind === "phase" ? copied : null;
@@ -73,27 +176,49 @@ export function Topbar({
   };
 
   /** Pastes a copy of `sourceId` after `afterId` (the end when undefined) and opens it. */
-  async function paste(sourceId: string, afterId: string | undefined, label: string) {
-    let id = await pastePhase(sourceId, program.id, afterId);
-    openPhase(id);
-    const back = afterId ?? phase.id;
-    history.push({
-      label,
-      undo: async () => {
-        await unpastePhase(id);
-        openPhase(back);
+  function paste(sourceId: string, afterId: string | undefined, label: string) {
+    return pastePhaseUndoable(history, program.id, openPhase, sourceId, afterId, afterId ?? phase.id, label);
+  }
+
+  /** Opens a program at its first phase. */
+  function openProgram(p: ProgramSummary) {
+    setProgramsOpen(false);
+    if (p.id === program.id) return;
+    onView("phase");
+    const first = p.phases[0];
+    router.push(first ? phaseHref(athlete.id, first.id) : `/programming?athlete=${athlete.id}&program=${p.id}`);
+  }
+
+  /** A program's right-click menu, in the list or on the picker. The open one can be edited. */
+  function programMenuFor(e: React.MouseEvent, p: ProgramSummary) {
+    const current = p.id === program.id;
+    const panelAt = (next: Panel) => () => {
+      setProgramsOpen(false);
+      setPanelFrom("programs");
+      onPanel(next);
+    };
+    programMenu.open(e, [
+      { label: t("Open {name}", { name: p.name }), onSelect: () => openProgram(p), disabled: current },
+      { label: t("Program settings…"), disabled: !current, onSelect: panelAt("settings") },
+      { label: t("Copy program…"), disabled: !current, onSelect: panelAt("copy") },
+      { label: t("New program…"), onSelect: panelAt("new") },
+      "divider",
+      {
+        label: t("Delete {name}…", { name: p.name }),
+        danger: true,
+        onSelect: () => {
+          setProgramsOpen(false);
+          setDeletingProgramId(p.id);
+        },
       },
-      redo: async () => {
-        id = await pastePhase(sourceId, program.id, afterId);
-        openPhase(id);
-      },
-    });
+    ]);
   }
 
   function menuFor(e: React.MouseEvent, p: PhaseSummary) {
     const current = p.id === phase.id && view === "phase";
     const items: MenuItem[] = [
       { label: t("Open phase {name}", { name: p.phase }), onSelect: () => openPhase(p.id), disabled: current },
+      { label: t("Phase settings…"), disabled: !current, onSelect: () => onPanel("phase-settings") },
       {
         label: t("Rename phase"),
         disabled: !current,
@@ -120,7 +245,7 @@ export function Topbar({
     if (gaps.has(p.id)) {
       items.push("divider", {
         label: t("Close the {gap} before {phase}", { gap: describeGap(gaps.get(p.id)!), phase: p.phase }),
-        onSelect: () => void closePhaseGap(p.id),
+        onSelect: () => void closeGapUndoable(history, p.id),
       });
     }
     items.push("divider", {
@@ -141,38 +266,27 @@ export function Topbar({
   return (
     <header className="border-b border-border bg-background">
       <div style={{ maxWidth: SHELL_MAX_WIDTH }} className="mx-auto w-full px-4 pt-5 pb-3">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <h1 className="text-[22px] font-semibold tracking-tight">{t("Programming")}</h1>
-
-          <div data-tour="exports">
-            <ExportMenu phaseId={phase.id} week={week} />
-          </div>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        {/* Laid out like Tracking's: the heading, what is open under it, the tools on the right. */}
+        <div className="flex flex-wrap items-end gap-x-2 gap-y-3">
+        <div>
+        <h1 className="text-[22px] font-semibold tracking-tight">{t("Programming")}</h1>
+        <div className="mt-1.5 flex items-center gap-2">
           {/* Where you are: the program, then the phase in it — each a menu of the others. */}
           <div className="flex items-center rounded-full border border-border bg-surface text-[12px]">
-            <div data-tour="program" className="flex items-center py-1.5 pl-3 pr-1">
-              <select
-                value={program.id}
-                onChange={(e) => {
-                  const next = programs.find((p) => p.id === e.target.value);
-                  const first = next?.phases[0];
-                  router.push(
-                    first
-                      ? phaseHref(athlete.id, first.id)
-                      : `/programming?athlete=${athlete.id}&program=${e.target.value}`,
-                  );
-                }}
-                className="max-w-[180px] cursor-pointer truncate bg-transparent text-muted outline-none"
-              >
-                {programs.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <button
+              ref={programButtonRef}
+              data-tour="program"
+              type="button"
+              onClick={() => setProgramsOpen((o) => !o)}
+              onContextMenu={(e) => programMenuFor(e, program)}
+              title={t("The athlete's programs")}
+              className="flex max-w-[200px] items-center gap-1.5 py-1.5 pl-3 pr-1 text-muted hover:text-foreground"
+            >
+              <span className="truncate">{program.name}</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
             <span className="text-muted-2">/</span>
             <button
               ref={phaseButtonRef}
@@ -207,7 +321,70 @@ export function Topbar({
             );
           })()}
 
-          <Popover open={phasesOpen} onClose={() => setPhasesOpen(false)} anchorRef={phaseButtonRef} width={300}>
+          <Popover open={programsOpen} onClose={() => setProgramsOpen(false)} anchorRef={programButtonRef} width={320}>
+            <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("PROGRAMS")}</div>
+            <div className="mt-1.5 space-y-0.5">
+              {programs.map((p) => {
+                const weeks = p.phases.reduce((n, x) => n + x.weeks.length, 0);
+                const first = p.phases[0];
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => openProgram(p)}
+                    onContextMenu={(e) => programMenuFor(e, p)}
+                    title={first ? t("From {date}", { date: formatDate(first.startDate) }) : undefined}
+                    className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left text-[12px] ${
+                      p.id === program.id ? "bg-surface-3" : "hover:bg-surface-2"
+                    }`}
+                  >
+                    <span className="min-w-0 truncate">{p.name}</span>
+                    <span className="ml-auto shrink-0 text-[11px] text-muted-2">
+                      {t(p.phases.length === 1 ? "{n} phase" : "{n} phases", { n: p.phases.length })} ·{" "}
+                      {t(weeks === 1 ? "{n} week" : "{n} weeks", { n: weeks })}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-2 flex items-center gap-1.5 border-t border-border pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setProgramsOpen(false);
+                  setPanelFrom("programs");
+                  onPanel("new");
+                }}
+                className="shrink-0 whitespace-nowrap rounded-full border border-dashed border-border px-2.5 py-1 text-[11px] text-muted-2 hover:border-accent hover:text-accent"
+              >
+                + {t("program")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setProgramsOpen(false);
+                  setPanelFrom("programs");
+                  onPanel("copy");
+                }}
+                className="shrink-0 whitespace-nowrap rounded-full border border-border px-2.5 py-1 text-[11px] text-muted hover:border-accent hover:text-accent"
+              >
+                {t("Copy program")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setProgramsOpen(false);
+                  setPanelFrom("programs");
+                  onPanel("settings");
+                }}
+                className="ml-auto shrink-0 whitespace-nowrap rounded-full border border-border px-2.5 py-1 text-[11px] text-muted hover:border-accent hover:text-accent"
+              >
+                {t("Program settings")}
+              </button>
+            </div>
+          </Popover>
+
+          <Popover open={phasesOpen} onClose={() => setPhasesOpen(false)} anchorRef={phaseButtonRef} width={340}>
             <div className="text-[11px] tracking-[0.16em] text-muted-2">{t("PHASES")}</div>
             <div className="mt-1.5 space-y-0.5">
               {program.phases.map((p, i) => (
@@ -279,15 +456,26 @@ export function Topbar({
                 }
                 onClick={async () => {
                   setAddingPhase(true);
-                  const id = await addPhase(program.id);
+                  await addPhaseUndoable(history, program.id, openPhase, phase.id);
                   setAddingPhase(false);
                   setPhasesOpen(false);
-                  openPhase(id);
                 }}
                 title={t("Adds the next phase, starting where this program currently ends")}
-                className="rounded-full border border-dashed border-border px-2.5 py-1 text-[11px] text-muted-2 hover:border-accent hover:text-accent disabled:opacity-50"
+                className="shrink-0 whitespace-nowrap rounded-full border border-dashed border-border px-2.5 py-1 text-[11px] text-muted-2 hover:border-accent hover:text-accent disabled:opacity-50"
               >
                 {addingPhase ? t("adding…") : `+ ${t("phase")}`}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPhasesOpen(false);
+                  onView("phase");
+                  onPanel("phase-settings");
+                }}
+                title={t("Name, dates, 1RMs and nutrition of this phase")}
+                className="shrink-0 whitespace-nowrap rounded-full border border-border px-2.5 py-1 text-[11px] text-muted hover:border-accent hover:text-accent"
+              >
+                {t("Phase settings")}
               </button>
               <button
                 type="button"
@@ -296,7 +484,7 @@ export function Topbar({
                   onView(view === "program" ? "phase" : "program");
                 }}
                 title={t("Every phase of this program end to end")}
-                className={`ml-auto rounded-full border px-2.5 py-1 text-[11px] ${
+                className={`ml-auto shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] ${
                   view === "program"
                     ? "border-accent/50 bg-surface-2 text-foreground"
                     : "border-border text-muted hover:text-foreground"
@@ -306,6 +494,31 @@ export function Topbar({
               </button>
             </div>
           </Popover>
+
+          {deletingProgramId && (() => {
+            const p = programs.find((x) => x.id === deletingProgramId);
+            if (!p) return null;
+            return (
+              <Popover open onClose={() => setDeletingProgramId(null)} anchorRef={programButtonRef} width={260}>
+                <Confirm
+                  label="Delete the program"
+                  question={t(p.phases.length === 1 ? "Delete “{name}” and its phase?" : "Delete “{name}” and all {n} phases?", { name: p.name, n: p.phases.length })}
+                  initiallyConfirming
+                  onConfirm={async () => {
+                    await deleteProgram(p.id);
+                    setDeletingProgramId(null);
+                    // Off the deleted one: the next program the athlete has, or none.
+                    const next = programs.find((x) => x.id !== p.id && x.phases[0]);
+                    if (p.id !== program.id) router.refresh();
+                    else {
+                      onView("phase");
+                      router.push(next ? phaseHref(athlete.id, next.phases[0].id) : `/programming?athlete=${athlete.id}`);
+                    }
+                  }}
+                />
+              </Popover>
+            );
+          })()}
 
           {deletingId && (() => {
             const p = program.phases.find((x) => x.id === deletingId);
@@ -324,72 +537,112 @@ export function Topbar({
                   initiallyConfirming
                   onConfirm={async () => {
                     const remaining = program.phases.filter((x) => x.id !== p.id);
-                    await deleteBlock(p.id);
+                    const current = p.id === phase.id;
                     stopDeleting();
-                    if (p.id === phase.id) {
+                    await deletePhaseUndoable(history, p.id, openPhase, () => {
+                      if (!current) return router.refresh();
                       const next = remaining[0];
                       onView("phase");
                       router.push(next ? phaseHref(athlete.id, next.id) : `/programming?athlete=${athlete.id}`);
-                    } else {
-                      router.refresh();
-                    }
+                    });
                   }}
                 />
               </Popover>
             );
           })()}
 
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <NewProgramButton
-              athleteId={athlete.id}
-              open={panel === "new"}
-              onOpenChange={(open) => onPanel(open ? "new" : null)}
-            />
+        </div>
+        </div>
+          <div className="ml-auto flex items-center gap-2">
+            {/* This phase, or every phase end to end. */}
+            <div className="flex h-8 items-center rounded-full border border-border p-0.5 text-[12px]">
+              {(["phase", "program"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  aria-pressed={view === v}
+                  onClick={() => onView(v)}
+                  title={v === "program" ? t("Every phase of this program end to end") : undefined}
+                  className={`h-full rounded-full px-3 ${
+                    view === v ? "bg-surface-3 text-foreground" : "text-muted hover:text-foreground"
+                  }`}
+                >
+                  {v === "phase" ? t("Phase") : t("Whole program")}
+                </button>
+              ))}
+            </div>
 
-            <CopyProgramButton
-              program={program}
-              athlete={athlete}
-              roster={roster}
-              open={panel === "copy"}
-              onOpenChange={(open) => onPanel(open ? "copy" : null)}
-            />
+            <GridTools />
 
+            <div data-tour="exports">
+              <ExportMenu phaseId={phase.id} athleteId={athlete.id} week={week} />
+            </div>
+
+            {/* New, copy and settings: one menu, their panels open under it. */}
             <button
               ref={settingsRef}
               data-tour="settings"
               type="button"
-              onClick={() => onPanel(panel === "settings" ? null : "settings")}
-              title={t("Program and phase names, dates, the 1RMs this phase uses, and the files")}
-              className={`rounded-full border px-3 py-1.5 text-[12px] ${
-                panel === "settings"
+              aria-label={t("Program menu")}
+              title={t("New program, copy program, settings")}
+              onClick={(e) => {
+                setPanelFrom("menu");
+                programMenu.open(e, [
+                  { label: t("New program…"), onSelect: () => onPanel("new") },
+                  { label: t("Copy program…"), onSelect: () => onPanel("copy") },
+                  "divider",
+                  { label: t("Program settings…"), onSelect: () => onPanel("settings") },
+                  { label: t("Phase settings…"), onSelect: () => onPanel("phase-settings") },
+                ]);
+              }}
+              className={`grid size-8 place-items-center rounded-full border text-[14px] leading-none ${
+                panel !== null && panel !== "delete-phase"
                   ? "border-accent/50 text-accent"
                   : "border-border text-muted hover:border-accent hover:text-accent"
               }`}
             >
-              {t("Settings")}
+              ⋯
             </button>
-
-            <button
-              type="button"
-              onClick={() => onView(view === "program" ? "phase" : "program")}
-              title={t("Every phase of this program end to end")}
-              className={`rounded-full border px-3 py-1.5 text-[12px] ${
-                view === "program"
-                  ? "border-accent/50 bg-surface-2 text-foreground"
-                  : "border-border text-muted hover:text-foreground"
-              }`}
-            >
-              {t("Whole program")}
-            </button>
+            <NewProgramButton
+              athleteId={athlete.id}
+              anchorRef={panelAnchor}
+              align={panelAlign}
+              open={panel === "new"}
+              onOpenChange={(open) => onPanel(open ? "new" : null)}
+            />
+            <CopyProgramButton
+              program={program}
+              athlete={athlete}
+              roster={roster}
+              anchorRef={panelAnchor}
+              align={panelAlign}
+              open={panel === "copy"}
+              onOpenChange={(open) => onPanel(open ? "copy" : null)}
+            />
           </div>
 
           <Popover
             open={panel === "settings"}
             onClose={() => onPanel(null)}
-            anchorRef={settingsRef}
+            anchorRef={panelAnchor}
             width={344}
+            align={panelAlign}
           >
             <ProgramSettings
+              program={program}
+              phase={phase}
+              athlete={athlete}
+              onClose={() => onPanel(null)}
+            />
+          </Popover>
+
+          <Popover
+            open={panel === "phase-settings"}
+            onClose={() => onPanel(null)}
+            anchorRef={phaseButtonRef}
+            width={344}
+          >
+            <PhaseSettings
               program={program}
               phase={phase}
               athlete={athlete}
@@ -399,6 +652,7 @@ export function Topbar({
         </div>
       </div>
       {phaseMenu.menu}
+      {programMenu.menu}
     </header>
   );
 }
@@ -407,16 +661,22 @@ export function NewProgramButton({
   athleteId,
   open: controlledOpen,
   onOpenChange,
+  anchorRef,
+  align = "right",
 }: {
   athleteId: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Opens under this instead of a button of its own — the topbar's ⋯ menu. */
+  anchorRef?: React.RefObject<HTMLElement | null>;
+  align?: "left" | "right";
 }) {
   const router = useRouter();
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
   const setOpen = onOpenChange ?? setUncontrolledOpen;
   const [pending, setPending] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const [form, setForm] = useState({
     name: "",
     phase: "",
@@ -434,20 +694,20 @@ export function NewProgramButton({
   }
 
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="rounded-full border border-border px-3 py-1.5 text-[12px] text-muted hover:border-accent hover:text-accent"
-      >
-        + {t("New program")}
-      </button>
-
-      {open && (
-        <div
-          onKeyDown={formKeys(submit, () => setOpen(false), pending)}
-          className="absolute top-full left-0 z-40 mt-2 w-[268px] rounded-lg border border-border bg-surface-2 p-3 shadow-xl shadow-black/50"
+    <>
+      {!anchorRef && (
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="rounded-full border border-border px-3 py-1.5 text-[12px] text-muted hover:border-accent hover:text-accent"
         >
+          + {t("New program")}
+        </button>
+      )}
+
+      <Popover open={open} onClose={() => setOpen(false)} anchorRef={anchorRef ?? buttonRef} width={268} align={anchorRef ? align : "left"}>
+        <div onKeyDown={formKeys(submit, () => setOpen(false), pending)}>
           <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("NEW PROGRAM")}</div>
 
           <input
@@ -499,8 +759,8 @@ export function NewProgramButton({
             </button>
           </div>
         </div>
-      )}
-    </div>
+      </Popover>
+    </>
   );
 }
 
@@ -515,12 +775,16 @@ function CopyProgramButton({
   roster,
   open,
   onOpenChange,
+  anchorRef,
+  align,
 }: {
   program: ProgramSummary;
   athlete: AthleteData;
   roster: { id: string; name: string }[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  anchorRef: React.RefObject<HTMLElement | null>;
+  align: "left" | "right";
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
@@ -552,21 +816,9 @@ function CopyProgramButton({
   }
 
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => onOpenChange(!open)}
-        title={t("Copy this program, to this athlete or another one")}
-        className="rounded-full border border-border px-3 py-1.5 text-[12px] text-muted hover:border-accent hover:text-accent"
-      >
-        {t("Copy program")}
-      </button>
-
-      {open && (
-        <div
-          onKeyDown={formKeys(submit, () => onOpenChange(false), pending)}
-          className="absolute top-full left-0 z-40 mt-2 w-[290px] rounded-lg border border-border bg-surface-2 p-3 shadow-xl shadow-black/50"
-        >
+    <>
+      <Popover open={open} onClose={() => onOpenChange(false)} anchorRef={anchorRef} width={290} align={align}>
+        <div onKeyDown={formKeys(submit, () => onOpenChange(false), pending)}>
           <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("COPY “{name}”", { name: program.name })}</div>
 
           <select
@@ -620,8 +872,8 @@ function CopyProgramButton({
             </button>
           </div>
         </div>
-      )}
-    </div>
+      </Popover>
+    </>
   );
 }
 
@@ -643,6 +895,7 @@ function GapChip({
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const ref = useRef<HTMLButtonElement>(null);
+  const history = useHistory();
   const isBreak = days > 0;
 
   return (
@@ -671,7 +924,7 @@ function GapChip({
             disabled={pending}
             onClick={() =>
               startTransition(async () => {
-                await closePhaseGap(phaseId);
+                await closeGapUndoable(history, phaseId);
                 setOpen(false);
               })
             }
@@ -698,7 +951,7 @@ function GapChip({
 type ExportItem = { label: string; hint: string; href: string; newTab?: boolean; kind?: ExportKind };
 
 /** Every way out of Topset in one menu, grouped by who the file is for. */
-function ExportMenu({ phaseId, week }: { phaseId: string; week: number }) {
+function ExportMenu({ phaseId, athleteId, week }: { phaseId: string; athleteId: string; week: number }) {
   const [open, setOpen] = useState(false);
   const { defaultExport } = useSettings().settings;
   const ref = useRef<HTMLButtonElement>(null);
@@ -715,6 +968,8 @@ function ExportMenu({ phaseId, week }: { phaseId: string; week: number }) {
         { label: "Phone .pdf", hint: "One week per page", href: url("pdf"), newTab: true, kind: "pdf" },
         { label: "Print week {week}", hint: "Boxes to log what was done", href: url("print", `&week=${week}`), newTab: true },
         { label: "Print this phase", hint: "Every week on paper", href: url("print"), newTab: true, kind: "print" },
+        // The live plan on their phone, next to the paper ones.
+        { label: "Athlete app link / QR", hint: "Their check-in link", href: `/athletes?link=${athleteId}` },
       ],
     },
     {

@@ -1,17 +1,19 @@
-/** The settings page's sections, in order: its side menu, and the palette's "Settings: …". */
+/**
+ * The settings page's sections, in order: its side menu (under their group), and the palette's
+ * "Settings: …". The page renders them in this same order.
+ */
 export const SETTINGS_SECTIONS = [
-  { id: "account", title: "Account" },
-  { id: "units", title: "Units and numbers" },
-  { id: "programming", title: "Programming defaults" },
-  { id: "calendar", title: "Calendar and dates" },
-  { id: "exercises", title: "Exercises" },
-  { id: "view", title: "Grid and view" },
-  { id: "keyboard", title: "Keyboard" },
-  { id: "exports", title: "Exports and print" },
-  { id: "tracking", title: "Tracking and competition" },
-  { id: "athlete-app", title: "Account and athlete app" },
-  { id: "sign-in", title: "Password and sign-in" },
-  { id: "coaches", title: "Coaches", admin: true },
-  { id: "data", title: "Backup and data" },
-  { id: "app", title: "App" },
+  { id: "account", title: "Profile", group: "General" },
+  { id: "units", title: "Units and numbers", group: "Programming" },
+  { id: "programming", title: "Programming defaults", group: "Programming" },
+  { id: "calendar", title: "Calendar and dates", group: "Programming" },
+  { id: "exercises", title: "Exercises", group: "Programming" },
+  { id: "tracking", title: "Tracking and competition", group: "Athletes and results" },
+  { id: "exports", title: "Exports and print", group: "Athletes and results" },
+  { id: "view", title: "Grid and view", group: "This computer" },
+  { id: "keyboard", title: "Keyboard", group: "This computer" },
+  { id: "athlete-app", title: "Account and athlete app", group: "Account and server" },
+  { id: "sign-in", title: "Password and sign-in", group: "Account and server" },
+  { id: "coaches", title: "Coaches", group: "Account and server", admin: true },
+  { id: "data", title: "Backup and data", group: "Data" },
 ] as const;

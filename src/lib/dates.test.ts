@@ -90,10 +90,12 @@ describe("weekdayOf and formatDate", () => {
     // Monday 21 Sept, stored both ways.
     assert.equal(weekdayOf("2026-09-21T00:00:00.000Z"), 0);
     assert.equal(weekdayOf("2026-09-20T22:00:00.000Z"), 0);
-    assert.equal(formatDate("2026-09-20T22:00:00.000Z"), "21 Sept");
+    assert.equal(formatDate("2026-09-20T22:00:00.000Z"), "21/09/2026");
   });
 
   test("the coach's date format", () => {
+    setActiveSettings({ ...DEFAULTS, dateFormat: "d-mmm" });
+    assert.equal(formatDate("2026-09-21T00:00:00.000Z"), "21 Sept");
     setActiveSettings({ ...DEFAULTS, dateFormat: "dd/mm" });
     assert.equal(formatDate("2026-09-21T00:00:00.000Z", true), "21/09/2026");
     setActiveSettings({ ...DEFAULTS, dateFormat: "mm/dd" });

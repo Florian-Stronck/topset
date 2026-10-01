@@ -2,7 +2,8 @@
 
 import { useRef, useState, useTransition } from "react";
 import type { IntensityType, ProgField, ProgOp } from "@prisma/client";
-import { addRule, deleteRule, updateRule } from "@/app/programming/actions";
+import { addRule, deleteRule, restoreRule, updateRule } from "@/app/programming/actions";
+import { useHistory, type History } from "@/components/history";
 import { useAutoCommit, useSelectOnFocus } from "@/components/cells";
 import { Popover } from "@/components/Popover";
 import { describeRule, type Rule } from "@/lib/progression";
@@ -15,6 +16,18 @@ const FIELDS: { value: ProgField; label: string }[] = [
   { value: "INTENSITY", label: "Intensity" },
   { value: "DURATION", label: "Time (seconds)" },
 ];
+
+/** Adds a rule as an undoable edit. */
+async function addTracked(history: History, rowId: string, rule: Parameters<typeof addRule>[1]) {
+  let id = await addRule(rowId, rule);
+  history.push({
+    label: "add rule",
+    undo: () => deleteRule(id),
+    redo: async () => {
+      id = await addRule(rowId, rule);
+    },
+  });
+}
 
 export function ProgressionRules({
   rowId,
@@ -31,6 +44,7 @@ export function ProgressionRules({
   const [pending, startTransition] = useTransition();
   const ref = useRef<HTMLButtonElement>(null);
   const presets = useSettings().settings.progressionPresets;
+  const history = useHistory();
 
   const active = rules.filter((r) => r.enabled);
 
@@ -45,7 +59,7 @@ export function ProgressionRules({
         }`}
       >
         {active.length === 0 ? (
-          <span className="text-muted-2">{t("+ progression")}</span>
+          <span className="text-muted-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100">{t("+ progression")}</span>
         ) : (
           active.map((r) => (
             <span
@@ -84,13 +98,13 @@ export function ProgressionRules({
                 key={label}
                 type="button"
                 onClick={() =>
-                  startTransition(() => {
-                    void addRule(rowId, {
+                  startTransition(() =>
+                    addTracked(history, rowId, {
                       ...rule,
                       startWeek: Math.min(rule.startWeek, weeks),
                       endWeek: rule.endWeek === null ? null : Math.min(rule.endWeek, weeks),
-                    });
-                  })
+                    }),
+                  )
                 }
                 className="rounded border border-border px-2 py-1 text-[11px] text-muted hover:border-accent hover:text-accent"
               >
@@ -116,7 +130,23 @@ function RuleRow({
   weeks: number;
 }) {
   const [, startTransition] = useTransition();
+  const history = useHistory();
   const num = "w-[46px] rounded border border-border bg-surface px-1 py-0.5 text-[11px] outline-none";
+
+  /** One change to the rule, undoable; a number box saving as it is typed folds into one step. */
+  function patch<K extends keyof Rule>(field: K, next: Rule[K]) {
+    const was = rule[field];
+    if (next === was) return;
+    startTransition(() => {
+      void updateRule(rule.id, { [field]: next });
+    });
+    history.push({
+      label: "rule",
+      undo: () => updateRule(rule.id, { [field]: was }),
+      redo: () => updateRule(rule.id, { [field]: next }),
+      key: `rule:${rule.id}:${field}`,
+    });
+  }
 
   return (
     <div className="rounded border border-border bg-surface p-1.5">
@@ -124,11 +154,7 @@ function RuleRow({
         <input
           type="checkbox"
           checked={rule.enabled}
-          onChange={(e) =>
-            startTransition(() => {
-              void updateRule(rule.id, { enabled: e.target.checked });
-            })
-          }
+          onChange={(e) => patch("enabled", e.target.checked)}
           className="accent-[var(--accent)]"
         />
         <span className={`flex-1 text-[11px] ${rule.enabled ? "" : "text-muted-2 line-through"}`}>
@@ -138,8 +164,9 @@ function RuleRow({
           type="button"
           title={t("Remove rule")}
           onClick={() =>
-            startTransition(() => {
-              void deleteRule(rule.id);
+            startTransition(async () => {
+              const gone = await deleteRule(rule.id);
+              history.push({ label: "remove rule", undo: () => restoreRule(gone), redo: () => deleteRule(gone.id) });
             })
           }
           className="px-1 text-[12px] text-accent"
@@ -154,22 +181,14 @@ function RuleRow({
           step="0.5"
           value={rule.amount}
           className={num}
-          onCommit={(v) =>
-            startTransition(() => {
-              void updateRule(rule.id, { amount: Number(v) });
-            })
-          }
+          onCommit={(v) => v !== "" && patch("amount", Number(v))}
         />
         <span>{t("every")}</span>
         <RuleNumber
           min={1}
           value={rule.everyWeeks}
           className={num}
-          onCommit={(v) =>
-            startTransition(() => {
-              void updateRule(rule.id, { everyWeeks: Math.max(1, Number(v)) });
-            })
-          }
+          onCommit={(v) => patch("everyWeeks", Math.max(1, Number(v)))}
         />
         <span>{t("wk, from")}</span>
         <RuleNumber
@@ -177,11 +196,7 @@ function RuleRow({
           max={weeks}
           value={rule.startWeek}
           className={num}
-          onCommit={(v) =>
-            startTransition(() => {
-              void updateRule(rule.id, { startWeek: Math.max(2, Number(v)) });
-            })
-          }
+          onCommit={(v) => patch("startWeek", Math.max(2, Number(v)))}
         />
         <span>{t("to")}</span>
         <RuleNumber
@@ -190,11 +205,7 @@ function RuleRow({
           placeholder={t("end")}
           value={rule.endWeek ?? ""}
           className={num}
-          onCommit={(v) =>
-            startTransition(() => {
-              void updateRule(rule.id, { endWeek: v === "" ? null : Number(v) });
-            })
-          }
+          onCommit={(v) => patch("endWeek", v === "" ? null : Number(v))}
         />
       </div>
     </div>
@@ -203,6 +214,7 @@ function RuleRow({
 
 function CustomRule({ rowId, weeks }: { rowId: string; weeks: number }) {
   const [, startTransition] = useTransition();
+  const history = useHistory();
   const [draft, setDraft] = useState<{ field: ProgField; op: ProgOp; amount: number }>({
     field: "REPS",
     op: "ADD",
@@ -242,14 +254,14 @@ function CustomRule({ rowId, weeks }: { rowId: string; weeks: number }) {
       <button
         type="button"
         onClick={() =>
-          startTransition(() => {
-            void addRule(rowId, {
+          startTransition(() =>
+            addTracked(history, rowId, {
               ...draft,
               everyWeeks: 1,
               startWeek: Math.min(2, weeks),
               endWeek: null,
-            });
-          })
+            }),
+          )
         }
         className="ml-auto rounded bg-accent px-2 py-1 text-[11px] font-medium text-white"
       >

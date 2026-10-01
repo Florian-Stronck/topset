@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     try {
       const pick = (table: string) =>
         `SELECT "id", "storageKey" FROM "${table}" WHERE "id" IN (${ids.map(() => "?").join(", ")}) ` +
-        `AND "uploadedAt" IS NOT NULL AND "deletedAt" IS NULL AND "id" IN (${ownedIdsSql(table)})`;
+        `AND "uploadedAt" IS NOT NULL AND "deletedAt" IS NULL AND "id" IN (${ownedIdsSql(table, true)})`;
       const rs = await client.execute({
         sql: `${pick("AthleteVideo")} UNION ALL ${pick("CheckinPhoto")}`,
         args: [...ids, coach.id, ...ids, coach.id],

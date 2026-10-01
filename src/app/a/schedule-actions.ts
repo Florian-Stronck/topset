@@ -21,7 +21,8 @@ async function athleteOf(token: string) {
 /** The coach's desktop app pulls only once this moves; see `changed` in actions.ts. */
 async function changed(token: string) {
   await prisma.coach.updateMany({
-    where: { athletes: { some: { accessToken: token } } },
+    // The athlete's coach, and everyone on the team they're shared with.
+    where: { OR: [{ athletes: { some: { accessToken: token } } }, { teams: { some: { team: { athletes: { some: { accessToken: token } } } } } }] },
     data: { athleteVersion: { increment: 1 } },
   });
   revalidatePath(`/a/${token}`, "layout");

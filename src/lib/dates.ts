@@ -83,7 +83,18 @@ export function weekdayOfDay(startDate: Date | string, dayIndex: number): number
 
 export const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"];
 
-/** A date in the coach's chosen format: "21 Sept", "21/09" or "09/21", optionally with the year. */
+/**
+ * A timestamp — when something happened, not a day of the plan — in the coach's format,
+ * on this computer's calendar, with the time when asked for.
+ */
+export function formatMoment(at: Date | string, withTime = false): string {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return "";
+  const day = formatDate(new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())), true);
+  return withTime ? `${day} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : day;
+}
+
+/** A date in the coach's chosen format: "21/09/2026" (always with its year), "21 Sept", "21/09" or "09/21". */
 export function formatDate(date: Date | string, withYear = false): string {
   const d = calendarDay(date);
   if (Number.isNaN(d.getTime())) return "";
@@ -92,6 +103,8 @@ export function formatDate(date: Date | string, withYear = false): string {
   const year = d.getUTCFullYear();
   const pad = (n: number) => String(n).padStart(2, "0");
   switch (activeSettings().dateFormat) {
+    case "dd/mm/yyyy":
+      return `${pad(day)}/${pad(month + 1)}/${year}`;
     case "dd/mm":
       return `${pad(day)}/${pad(month + 1)}${withYear ? `/${year}` : ""}`;
     case "mm/dd":

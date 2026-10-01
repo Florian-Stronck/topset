@@ -12,7 +12,8 @@ import { NewAthleteButton } from "@/components/Roster";
 import { startTutorial, Tutorial } from "@/components/Tutorial";
 import { t } from "@/lib/i18n";
 
-type Athlete = { id: string; name: string; sport?: "LIFTER" | "FIGHTER" };
+/** `team`: shared through a team, marked with a small dot. */
+type Athlete = { id: string; name: string; sport?: "LIFTER" | "FIGHTER"; team?: { name: string } | null };
 
 /** The roster in two groups once it holds both lifters and fighters; one list otherwise. */
 function rosterGroups(athletes: Athlete[]): { label: string | null; athletes: Athlete[] }[] {
@@ -251,6 +252,9 @@ export function Sidebar({
                 {a.name.slice(0, 1).toUpperCase()}
               </span>
               {!collapsed && <span className="truncate">{a.name}</span>}
+              {!collapsed && a.team && (
+                <span title={t("Shared with {team}", { team: a.team.name })} className="ml-auto size-1.5 shrink-0 rounded-full bg-muted-2" />
+              )}
             </Link>
           ))}
             </div>

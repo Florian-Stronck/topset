@@ -10,13 +10,14 @@ import { moveData, movesMap, type MoveData } from "@/lib/moves";
 import { dateOfDay, sessionsOf } from "@/lib/schedule";
 import { prisma } from "@/lib/prisma";
 import type { BlockData } from "@/lib/types";
+import { myCoach } from "@/lib/me";
 
 export async function getCoach() {
-  const coach = await prisma.coach.findFirst({
-    include: { athletes: { orderBy: { name: "asc" } } },
-  });
+  const coach = await prisma.coach.findFirst({ where: await myCoach() });
   if (!coach) throw new Error("No coach found — run `npm run db:seed`.");
-  return coach;
+  // Everyone here: the coach's own athletes and those shared with them through a team.
+  const athletes = await prisma.athlete.findMany({ orderBy: { name: "asc" }, include: { team: { select: { name: true } } } });
+  return { ...coach, athletes };
 }
 
 const PHASE_SUMMARY = {
@@ -158,11 +159,11 @@ export async function getExerciseHistory(coachId: string) {
  * athlete is on today — the TARGET/tier pairs the missing-1RM check needs.
  */
 export async function getOverview(today: Date) {
-  const coach = await prisma.coach.findFirst();
+  const coach = await prisma.coach.findFirst({ where: await myCoach() });
   if (!coach) throw new Error("No coach found — run `npm run db:seed`.");
 
   const rows = await prisma.athlete.findMany({
-    where: { coachId: coach.id },
+    // The coach's own athletes and those shared with them: everyone here.
     orderBy: { name: "asc" },
     include: {
       blocks: {
@@ -273,13 +274,14 @@ export async function getAllPhasesForAthlete(athleteId: string) {
 }
 
 export async function getRoster() {
-  const coach = await prisma.coach.findFirst();
+  const coach = await prisma.coach.findFirst({ where: await myCoach() });
   if (!coach) throw new Error("No coach found — run `npm run db:seed`.");
 
   const athletes = await prisma.athlete.findMany({
-    where: { coachId: coach.id },
+    // The coach's own athletes and those shared with them: everyone here.
     orderBy: { name: "asc" },
     include: {
+      team: { select: { name: true } },
       questions: { where: { archived: false }, orderBy: [{ order: "asc" }, { createdAt: "asc" }] },
       programs: {
         orderBy: { createdAt: "asc" },

@@ -114,14 +114,32 @@ export function validMergedRow(table: string, row: Row): boolean {
   return true;
 }
 
-/** Accounts live on the server alone: sign-ins, invites, push sign-ups, sign-in tries, and a coach's login details. */
-export const SERVER_TABLES = new Set(["CoachSession", "Invite", "PushSubscription", "PlanNotice", "LoginAttempt", "PlanChange"]);
+/**
+ * Accounts live on the server alone: sign-ins, invites, push sign-ups, sign-in tries, and a
+ * coach's login details. Teams too: a desktop app keeps a copy, but only the admin changes
+ * them, on the server (see `pullAccess` in sync.ts).
+ */
+export const SERVER_TABLES = new Set(["CoachSession", "Invite", "PushSubscription", "PlanNotice", "LoginAttempt", "PlanChange", "Team", "TeamMember"]);
 
 /** A desktop app's own sync bookkeeping (see `sync.ts`). */
 export const LOCAL_TABLES = new Set(["SyncSent", "SyncMeta"]);
 export const SERVER_COLUMNS: Record<string, readonly string[]> = {
   Coach: ["username", "passwordHash", "isAdmin", "athleteVersion", "disabledAt", "resetCodeHash", "resetExpiresAt"],
 };
+
+/**
+ * Columns that come down with a row but are only ever set on the server: which team an
+ * athlete is on. A push never carries them, and a change to them isn't an edit to send.
+ */
+export const PULLED_COLUMNS: Record<string, readonly string[]> = {
+  Athlete: ["teamId"],
+};
+
+/** The columns of a table a desktop app sends up. */
+export function pushedColumns(table: string, columns: string[]): string[] {
+  const pulled = PULLED_COLUMNS[table] ?? [];
+  return syncedColumns(table, columns).filter((c) => !pulled.includes(c));
+}
 
 /** Never synced: Prisma's own ledger, SQLite's internals, and the server's own tables. */
 export function syncedTable(name: string): boolean {
@@ -147,7 +165,7 @@ export function syncedColumns(table: string, columns: string[]): string[] {
  */
 export function coachSignature(table: string, row: Row, columns: string[]): string {
   const athlete = ATHLETE_COLUMNS[table] ?? [];
-  const values = JSON.stringify(syncedColumns(table, columns).filter((c) => !athlete.includes(c)).map((c) => row[c] ?? null));
+  const values = JSON.stringify(pushedColumns(table, columns).filter((c) => !athlete.includes(c)).map((c) => row[c] ?? null));
   return createHash("sha1").update(values).digest("base64");
 }
 

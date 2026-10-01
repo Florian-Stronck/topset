@@ -13,7 +13,7 @@ import { t } from "@/lib/i18n";
 
 export type E1rmFormula = "rpe" | "epley" | "brzycki";
 export type DayNaming = "session" | "day" | "weekday";
-export type DateFormat = "d-mmm" | "dd/mm" | "mm/dd";
+export type DateFormat = "dd/mm/yyyy" | "d-mmm" | "dd/mm" | "mm/dd";
 export type StartScreen = "overview" | "programming" | "last";
 export type Language = "en" | "de" | "fr" | "lb";
 export type ExportKind = "xlsx" | "pdf" | "print" | "csv" | "repwise" | "repwise-tsv";
@@ -173,7 +173,7 @@ export const DEFAULTS: CoachSettings = {
   customExercises: [],
   hiddenExercises: [],
 
-  dateFormat: "d-mmm",
+  dateFormat: "dd/mm/yyyy",
   startScreen: "programming",
   language: "en",
   showTutorial: true,

@@ -7,7 +7,7 @@ import { Trophy } from "@/components/CheckinIcon";
 import { RowVideos } from "@/components/RowVideos";
 import { formatAnswer, LOW_READINESS, readinessOf, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
 import { dayStatus, daySets, offPlan, rowSets, rpeDelta, type DayStatus, type OffPlan } from "@/lib/compliance";
-import { formatDate, weekdayOf, weekdayOfDay } from "@/lib/dates";
+import { formatDate, formatMoment, weekdayOf, weekdayOfDay } from "@/lib/dates";
 import { useCommands, type Command } from "@/lib/commands";
 import { t, weekdayShort } from "@/lib/i18n";
 import { estimate1RM, formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
@@ -993,7 +993,7 @@ function Feedback({
             <li key={m.id} className="group flex items-start gap-2 text-[12px]">
               <span className="mt-0.5 shrink-0 rounded bg-accent-soft px-1.5 text-[10px] font-semibold text-accent">{t("You")}</span>
               <span className="min-w-0 flex-1 whitespace-pre-wrap text-foreground">{m.body}</span>
-              <span className="shrink-0 text-[10px] text-muted-2" title={new Date(m.createdAt).toLocaleString()}>
+              <span className="shrink-0 text-[10px] text-muted-2" title={formatMoment(m.createdAt, true)}>
                 {m.readAt ? t("read") : t("not read yet")}
               </span>
               <button

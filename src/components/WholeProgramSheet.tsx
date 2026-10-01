@@ -1,6 +1,7 @@
 "use client";
 
-import { LockIcon, ProgrammingGrid } from "@/components/ProgrammingGrid";
+import { useHistory } from "@/components/history";
+import { addWeekUndoable, LockIcon, ProgrammingGrid } from "@/components/ProgrammingGrid";
 import type { MeetSummary } from "@/lib/competition";
 import { SHELL_MAX_WIDTH } from "@/lib/layout";
 import type { AthleteData, BlockData } from "@/lib/types";
@@ -28,7 +29,7 @@ export function WholeProgramSheet({
   open: ProgramPosition;
   onOpen: (open: ProgramPosition) => void;
 }) {
-
+  const history = useHistory();
   const phase = phases.find((p) => p.id === open.phaseId) ?? phases[0];
   if (!phase) return null;
   const week = Math.min(open.week, phase.weeks.length);
@@ -68,6 +69,17 @@ export function WholeProgramSheet({
                 </div>
               );
             })}
+            <button
+              type="button"
+              title={t("Add a week to {name}", { name: p.phase })}
+              onClick={() => {
+                addWeekUndoable(history, p.id, p.weeks.length + 1);
+                setOpen({ phaseId: p.id, week: p.weeks.length + 1 });
+              }}
+              className="px-1.5 py-2 text-[12px] text-muted-2 hover:text-accent"
+            >
+              +
+            </button>
           </div>
         ))}
       </div>

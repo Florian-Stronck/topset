@@ -91,7 +91,8 @@ async function syncRow(rowId: string) {
  */
 async function changed(token: string) {
   await prisma.coach.updateMany({
-    where: { athletes: { some: { accessToken: token } } },
+    // The athlete's coach, and everyone on the team they're shared with.
+    where: { OR: [{ athletes: { some: { accessToken: token } } }, { teams: { some: { team: { athletes: { some: { accessToken: token } } } } } }] },
     data: { athleteVersion: { increment: 1 } },
   });
   revalidatePath("/tracking");

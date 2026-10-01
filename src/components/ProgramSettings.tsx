@@ -3,8 +3,6 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import {
-  closePhaseGap,
-  deleteBlock,
   deleteProgram,
   importProgram,
   updateBlock,
@@ -14,8 +12,9 @@ import {
 } from "@/app/programming/actions";
 import { NumberInput, TextInput } from "@/components/cells";
 import { Confirm } from "@/components/Confirm";
+import { useHistory } from "@/components/history";
+import { closeGapUndoable, deletePhaseUndoable } from "@/components/Topbar";
 import { describeGap, phaseGaps } from "@/lib/dates";
-import { restoreBackup, type RestoreStatus } from "@/lib/pick-file";
 import type { PhaseSummary, ProgramSummary } from "@/lib/queries";
 import type { AthleteData } from "@/lib/types";
 import { t } from "@/lib/i18n";
@@ -33,11 +32,92 @@ const TARGETS = [
   { key: "fatTarget", label: "FAT" },
 ] as const;
 
-/**
- * The program's name, then everything about the phase that is open: when it runs, the
- * 1RMs its target weights come off, what the athlete eats to, the files, and the two deletes.
- */
+/** Saves an edit and puts it on the undo stack. `key` folds repeated saves of one field together. */
+function useTracked() {
+  const [, startTransition] = useTransition();
+  const history = useHistory();
+  return function tracked(label: string, run: () => Promise<unknown>, undo: () => Promise<unknown>, key?: string) {
+    startTransition(() => {
+      void run();
+    });
+    history.push({ label, undo, redo: run, key });
+  };
+}
+
+/** The program as a whole: its name, its file, and deleting it. Phases have their own settings. */
 export function ProgramSettings({
+  program,
+  phase,
+  athlete,
+  onClose,
+}: {
+  program: ProgramSummary;
+  /** The open phase — the export carries the whole program from any of them. */
+  phase: PhaseSummary;
+  athlete: AthleteData;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const tracked = useTracked();
+  const weeks = program.phases.reduce((n, p) => n + p.weeks.length, 0);
+
+  return (
+    <div className="w-[320px]">
+      <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("PROGRAM")}</div>
+      <Label text={t("NAME")}>
+        <TextInput
+          value={program.name}
+          valid={(v) => v.trim() !== ""}
+          onCommit={(v) =>
+            v &&
+            tracked(
+              "rename program",
+              () => updateProgram(program.id, { name: v }),
+              () => updateProgram(program.id, { name: program.name }),
+              `rename program:${program.id}`,
+            )
+          }
+        />
+      </Label>
+      <p className="mt-1.5 text-[11px] leading-snug text-muted-2">
+        {t(program.phases.length === 1 ? "{n} phase" : "{n} phases", { n: program.phases.length })} ·{" "}
+        {t(weeks === 1 ? "{n} week" : "{n} weeks", { n: weeks })}
+      </p>
+
+      <div className="mt-4 text-[11px] tracking-[0.14em] text-muted-2">{t("PROGRAM FILE")}</div>
+      <div className="mt-1.5 flex gap-1.5">
+        <a
+          href={`/api/export?blockId=${phase.id}&format=json`}
+          className="flex-1 rounded border border-border px-2.5 py-1.5 text-center text-[11px] text-muted hover:border-accent hover:text-accent"
+        >
+          {t("Export .topset.json")}
+        </a>
+        <ImportButton athleteId={athlete.id} className="flex-1" />
+      </div>
+      <p className="mt-1.5 text-[11px] leading-snug text-muted-2">
+        {t("Every phase of this program, its progression rules and their 1RMs. Logged weights and athlete notes stay behind.")}
+      </p>
+
+      <div className="mt-4 flex items-center border-t border-border pt-3">
+        <Confirm
+          label="Delete the program"
+          question={t(program.phases.length === 1 ? "Delete “{name}” and its phase?" : "Delete “{name}” and all {n} phases?", { name: program.name, n: program.phases.length })}
+          onConfirm={async () => {
+            await deleteProgram(program.id);
+            onClose();
+            router.push(`/programming?athlete=${athlete.id}`);
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The open phase: what it is called, when it runs, the 1RMs its target weights come off,
+ * what the athlete eats to, and deleting it.
+ */
+export function PhaseSettings({
   program,
   phase,
   athlete,
@@ -49,49 +129,38 @@ export function ProgramSettings({
   onClose: () => void;
 }) {
   const router = useRouter();
-  const [, startTransition] = useTransition();
+  const tracked = useTracked();
+  const history = useHistory();
   const unit = athlete.unit === "LB" ? "lb" : "kg";
+  const openPhase = (id: string) => router.push(`/programming?athlete=${athlete.id}&phase=${id}`);
 
-  function patchPhase(data: Parameters<typeof updateBlock>[1]) {
-    startTransition(() => {
-      void updateBlock(phase.id, data);
-    });
+  function patchPhase(label: string, data: Parameters<typeof updateBlock>[1], was: Parameters<typeof updateBlock>[1]) {
+    tracked(label, () => updateBlock(phase.id, data), () => updateBlock(phase.id, was), `${label}:${phase.id}`);
   }
 
   return (
     <div className="w-[320px]">
-      <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("PROGRAM")}</div>
+      <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("PHASE")}</div>
       <Label text={t("NAME")}>
-        <TextInput
-          value={program.name}
-          onCommit={(v) =>
-            v &&
-            startTransition(() => {
-              void updateProgram(program.id, { name: v });
-            })
-          }
-        />
-      </Label>
-      <p className="mt-1.5 text-[11px] leading-snug text-muted-2">
-        {program.phases.length} phase{program.phases.length === 1 ? "" : "s"}, added from the
-        row under the topbar.
-      </p>
-
-      <div className="mt-4 text-[11px] tracking-[0.14em] text-muted-2">{t("THIS PHASE")}</div>
-      <Label text={t("NAME")}>
-        <TextInput value={phase.phase} onCommit={(v) => v && patchPhase({ phase: v })} />
+        <TextInput value={phase.phase} valid={(v) => v.trim() !== ""} onCommit={(v) => v && patchPhase("rename phase", { phase: v }, { phase: phase.phase })} />
       </Label>
 
       <div className="mt-2 flex gap-1.5">
-        <Label text="STARTS" className="flex-1">
+        <Label text={t("STARTS")} className="flex-1">
           <input
             type="date"
             value={new Date(phase.startDate).toISOString().slice(0, 10)}
-            onChange={(e) => e.target.value && patchPhase({ startDate: e.target.value })}
+            onChange={(e) => {
+              // Typing the year fires on every digit (0002, 0020, 0202…); wait for a real one.
+              const year = Number(e.target.value.slice(0, 4));
+              if (year >= 1900 && year <= 2200) {
+                patchPhase("start date", { startDate: e.target.value }, { startDate: new Date(phase.startDate).toISOString().slice(0, 10) });
+              }
+            }}
             className="w-full bg-transparent px-2 py-1.5 text-[12px] outline-none"
           />
         </Label>
-        <Label text="WEEKS" className="w-[84px]">
+        <Label text={t("WEEKS")} className="w-[84px]">
           <div
             title={t("Weeks are added and removed from the tabs above the grid")}
             className="px-2 py-1.5 text-[12px] text-muted-2"
@@ -111,18 +180,21 @@ export function ProgramSettings({
             <NumberInput
               value={phase[m.key]}
               align="left"
+              placeholder={athlete[m.key] === null ? "—" : String(athlete[m.key])}
               onCommit={(v) =>
-                startTransition(() => {
-                  void updateBlockMaxes(phase.id, { [m.key]: v });
-                })
+                tracked(
+                  "1RM",
+                  () => updateBlockMaxes(phase.id, { [m.key]: v }),
+                  () => updateBlockMaxes(phase.id, { [m.key]: phase[m.key] }),
+                  `1RM:${phase.id}:${m.key}`,
+                )
               }
             />
           </Label>
         ))}
       </div>
       <p className="mt-1.5 text-[11px] leading-snug text-muted-2">
-        In {unit}. Editing these moves this phase&rsquo;s target weights only — the other phases,
-        and {athlete.name}&rsquo;s own 1RMs, stay as they are.
+        {t("In {unit}. Editing these moves this phase’s target weights only — the other phases, and {name}’s own 1RMs, stay as they are.", { unit, name: athlete.name })}
       </p>
 
       <div className="mt-4 text-[11px] tracking-[0.14em] text-muted-2">{t("NUTRITION — TARGETS PER DAY")}</div>
@@ -133,9 +205,12 @@ export function ProgramSettings({
               value={phase[m.key]}
               align="left"
               onCommit={(v) =>
-                startTransition(() => {
-                  void updateBlockTargets(phase.id, { [m.key]: v });
-                })
+                tracked(
+                  "nutrition target",
+                  () => updateBlockTargets(phase.id, { [m.key]: v }),
+                  () => updateBlockTargets(phase.id, { [m.key]: phase[m.key] }),
+                  `target:${phase.id}:${m.key}`,
+                )
               }
             />
           </Label>
@@ -145,136 +220,22 @@ export function ProgramSettings({
         {t("Kcal, then grams. A day hits when calories land within 10% and protein reaches its target. The next phase starts with these.")}
       </p>
 
-      <div className="mt-4 text-[11px] tracking-[0.14em] text-muted-2">{t("PROGRAM FILE")}</div>
-      <div className="mt-1.5 flex gap-1.5">
-        <a
-          href={`/api/export?blockId=${phase.id}&format=json`}
-          className="flex-1 rounded border border-border px-2.5 py-1.5 text-center text-[11px] text-muted hover:border-accent hover:text-accent"
-        >
-          {t("Export .topset.json")}
-        </a>
-        <ImportButton athleteId={athlete.id} className="flex-1" />
-      </div>
-      <p className="mt-1.5 text-[11px] leading-snug text-muted-2">
-        {t("Every phase of this program, its progression rules and their 1RMs. Logged weights and athlete notes stay behind.")}
-      </p>
-
-      <div className="mt-4 text-[11px] tracking-[0.14em] text-muted-2">{t("REPWISE — THIS PHASE")}</div>
-      <div className="mt-1.5 flex gap-1.5">
-        <a
-          href={`/api/export?blockId=${phase.id}&format=repwise`}
-          className="flex-1 rounded border border-border px-2.5 py-1.5 text-center text-[11px] text-muted hover:border-accent hover:text-accent"
-        >
-          {t("Sheet (.xlsx)")}
-        </a>
-        <a
-          href={`/api/export?blockId=${phase.id}&format=repwise-tsv`}
-          className="flex-1 rounded border border-border px-2.5 py-1.5 text-center text-[11px] text-muted hover:border-accent hover:text-accent"
-        >
-          {t("Paste (.tsv)")}
-        </a>
-      </div>
-      <p className="mt-1.5 text-[11px] leading-snug text-muted-2">
-        {t("RPECALC’s layout: one tab per week, day headers, sets/reps/RPE. The .tsv is for pasting straight into a Google Sheet tab.")}
-      </p>
-
-      <div className="mt-4 text-[11px] tracking-[0.14em] text-muted-2">{t("BACKUP — EVERYTHING")}</div>
-      <BackupButtons />
-
-      <div className="mt-4 flex items-center gap-3 border-t border-border pt-3">
-        {program.phases.length > 1 && (
+      {program.phases.length > 1 && (
+        <div className="mt-4 flex items-center border-t border-border pt-3">
           <Confirm
             label="Delete this phase"
             question={t("Delete the phase “{name}”?", { name: phase.phase })}
             onConfirm={async () => {
-              await deleteBlock(phase.id);
               onClose();
               const next = program.phases.find((p) => p.id !== phase.id);
-              router.push(
-                next
-                  ? `/programming?athlete=${athlete.id}&phase=${next.id}`
-                  : `/programming?athlete=${athlete.id}`,
+              await deletePhaseUndoable(history, phase.id, openPhase, () =>
+                next ? openPhase(next.id) : router.push(`/programming?athlete=${athlete.id}`),
               );
             }}
           />
-        )}
-
-        <Confirm
-          label="Delete the program"
-          question={t("Delete “{name}” and all {n} phases?", { name: program.name, n: program.phases.length })}
-          className="ml-auto"
-          onConfirm={async () => {
-            await deleteProgram(program.id);
-            onClose();
-            router.push(`/programming?athlete=${athlete.id}`);
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-/** Reads a file in the browser and hands the text to the server action. */
-/**
- * Every athlete and program in one file. Restoring doesn't touch the open database — the
- * desktop app swaps the file in when it next starts, and keeps a copy of what it replaced.
- */
-function BackupButtons() {
-  const [status, setStatus] = useState<RestoreStatus | null>(null);
-  const [pending, setPending] = useState(false);
-
-  async function restore(file: File) {
-    setPending(true);
-    setStatus(null);
-    try {
-      setStatus(await restoreBackup(file));
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return (
-    <>
-      <div className="mt-1.5 flex gap-1.5">
-        <a
-          href="/api/backup"
-          download
-          className="flex-1 rounded border border-border px-2.5 py-1.5 text-center text-[11px] text-muted hover:border-accent hover:text-accent"
-        >
-          {t("Download backup")}
-        </a>
-        <label
-          className={`flex-1 cursor-pointer rounded border border-border px-2.5 py-1.5 text-center text-[11px] ${
-            pending ? "text-muted-2" : "text-muted hover:border-accent hover:text-accent"
-          }`}
-        >
-          {pending ? t("Checking…") : t("Restore backup…")}
-          <input
-            type="file"
-            accept=".db"
-            className="hidden"
-            disabled={pending}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              e.target.value = "";
-              if (file) void restore(file);
-            }}
-          />
-        </label>
-      </div>
-      {status && (
-        <p
-          className={`mt-1.5 rounded px-2 py-1 text-[11px] leading-snug ${
-            status.tone === "ok" ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
-          }`}
-        >
-          {status.text}
-        </p>
+        </div>
       )}
-      <p className="mt-1.5 text-[11px] leading-snug text-muted-2">
-        {t("All athletes and programs. Topset also keeps a copy each day it opens, the last 14, in the topset-backups folder beside the app.")}
-      </p>
-    </>
+    </div>
   );
 }
 
@@ -287,6 +248,7 @@ function GapNotes({ program, phase }: { program: ProgramSummary; phase: PhaseSum
   const after = nextPhase ? gaps.get(nextPhase.id) : undefined;
 
   const [pending, startTransition] = useTransition();
+  const history = useHistory();
 
   type Note = { days: number; text: string; fixId: string };
   const notes = [
@@ -315,7 +277,7 @@ function GapNotes({ program, phase }: { program: ProgramSummary; phase: PhaseSum
         >
           <span className="flex-1">
             {n.text}
-            {n.days > 0 ? " — no training then. Fine for rest or vacation." : " — both phases would run at once."}
+            {n.days > 0 ? t(" — no training then. Fine for rest or vacation.") : t(" — both phases would run at once.")}
           </span>
           <button
             type="button"
@@ -323,7 +285,7 @@ function GapNotes({ program, phase }: { program: ProgramSummary; phase: PhaseSum
             title={t("Start the later phase the day the earlier one ends; phases after it move too")}
             onClick={() =>
               startTransition(async () => {
-                await closePhaseGap(n.fixId);
+                await closeGapUndoable(history, n.fixId);
               })
             }
             className="shrink-0 rounded border border-current px-1.5 py-0.5 hover:bg-white/5 disabled:opacity-60"

@@ -122,6 +122,8 @@ export type RowTemplate = {
   restTime: string | null;
   videoUrl: string | null;
   duration: number | null;
+  /** Only a copied day carries its sessions; a row paste keeps the target's. */
+  session?: string | null;
 };
 
 /**
@@ -372,6 +374,12 @@ export async function fillMeetDay(dayId: string, meetId: string) {
   const maxes = maxesOf(block, block.athlete);
   const keep = day.rows.filter((row) => !ATTEMPT_PATTERN.test(row.exercise));
   const base = keep.reduce((max, row) => Math.max(max, row.order), -1);
+  // The attempt rows written over, whole, and what is written — for an undo.
+  const removed = await prisma.exerciseRow.findMany({
+    where: { id: { in: day.rows.filter((r) => !keep.includes(r)).map((r) => r.id) } },
+    include: { rules: true, logs: true },
+  });
+  const created: string[] = [];
 
   await prisma.$transaction(async (tx) => {
     await tx.exerciseRow.deleteMany({
@@ -386,7 +394,7 @@ export async function fillMeetDay(dayId: string, meetId: string) {
           ?.weight ?? planned(planned_, attempt.number, block.athlete.unit);
 
       // The day belongs to the meet's week alone, so these rows are singles outright.
-      await tx.exerciseRow.create({
+      const row = await tx.exerciseRow.create({
         data: {
           dayId,
           order: base + 1 + i,
@@ -399,11 +407,31 @@ export async function fillMeetDay(dayId: string, meetId: string) {
           intensity: weight,
         },
       });
+      created.push(row.id);
     }
   });
 
   revalidatePath("/programming");
-  return { ok: true as const, week };
+  return { ok: true as const, week, undo: { dayId, wasRest: day.rest, removed, created } };
+}
+
+export type MeetFillUndo = Extract<Awaited<ReturnType<typeof fillMeetDay>>, { ok: true }>["undo"];
+
+/** Undoes `fillMeetDay`: its rows out, the ones it replaced back in, the day as it was. */
+export async function unfillMeetDay({ dayId, wasRest, removed, created }: MeetFillUndo) {
+  assertCoach();
+  const day = await prisma.day.findUniqueOrThrow({ where: { id: dayId }, select: { week: { select: { blockId: true } } } });
+  await prisma.$transaction(async (tx) => {
+    await tx.exerciseRow.deleteMany({ where: { id: { in: created } } });
+    await tx.exerciseRow.createMany({ data: removed.map((r) => ({ ...bare(r, "rules", "logs"), fromId: null })) });
+    const rules = removed.flatMap((r) => r.rules);
+    const logs = removed.flatMap((r) => r.logs);
+    if (rules.length > 0) await tx.progressionRule.createMany({ data: rules });
+    if (logs.length > 0) await tx.setLog.createMany({ data: logs });
+    if (wasRest) await tx.day.update({ where: { id: dayId }, data: { rest: true } });
+  });
+  await relinkChain(day.week.blockId);
+  revalidatePath("/programming");
 }
 
 /**
@@ -412,6 +440,8 @@ export async function fillMeetDay(dayId: string, meetId: string) {
  */
 export async function restoreRow(
   row: RowTemplate & { id: string; dayId: string; order: number; fromId: string | null; session?: string | null },
+  /** What `deleteRow` said the athlete had logged on the rows it took, to put back. */
+  lost: LoggedRow[] = [],
 ) {
   assertCoach();
   await prisma.$transaction(async (tx) => {
@@ -459,7 +489,48 @@ export async function restoreRow(
     }
   });
   await syncFromDay(row.dayId);
+  if (lost.length > 0) await putBackLogged(row.dayId, lost);
   revalidatePath("/programming");
+}
+
+/** What the athlete logged on a row, and where the row sat — a week's copies come back with new ids. */
+export type LoggedRow = Awaited<ReturnType<typeof loggedRows>>[number];
+
+/** Every row of a phase that the athlete logged anything on, by its place in the phase. */
+async function loggedRows(blockId: string) {
+  const rows = await prisma.exerciseRow.findMany({
+    where: {
+      day: { week: { blockId } },
+      OR: [{ logs: { some: {} } }, { actualWeight: { not: null } }, { performedRpe: { not: null } }, { athleteNotes: { not: null } }],
+    },
+    select: {
+      id: true,
+      order: true,
+      actualWeight: true,
+      performedRpe: true,
+      athleteNotes: true,
+      logs: true,
+      day: { select: { index: true, week: { select: { order: true } } } },
+    },
+  });
+  return rows.map(({ day, ...row }) => ({ ...row, week: day.week.order, dayIndex: day.index }));
+}
+
+/** Puts logs back on whichever rows now sit where the logged ones did. */
+async function putBackLogged(dayId: string, lost: LoggedRow[]) {
+  const { week } = await prisma.day.findUniqueOrThrow({ where: { id: dayId }, select: { week: { select: { blockId: true } } } });
+  await prisma.$transaction(async (tx) => {
+    for (const { week: order, dayIndex, order: slot, logs, actualWeight, performedRpe, athleteNotes } of lost) {
+      const row = await tx.exerciseRow.findFirst({
+        where: { order: slot, day: { index: dayIndex, week: { blockId: week.blockId, order } } },
+        select: { id: true },
+      });
+      if (!row) continue;
+      await tx.exerciseRow.update({ where: { id: row.id }, data: { actualWeight, performedRpe, athleteNotes } });
+      await tx.setLog.deleteMany({ where: { rowId: row.id } });
+      if (logs.length > 0) await tx.setLog.createMany({ data: logs.map((log) => ({ ...log, rowId: row.id })) });
+    }
+  });
 }
 
 /**
@@ -468,11 +539,21 @@ export async function restoreRow(
  */
 export async function deleteRow(rowId: string) {
   assertCoach();
-  const gone = await prisma.exerciseRow.findUnique({ where: { id: rowId }, select: { dayId: true } });
-  if (!gone) return;
+  const gone = await prisma.exerciseRow.findUnique({
+    where: { id: rowId },
+    select: { dayId: true, day: { select: { week: { select: { blockId: true } } } } },
+  });
+  if (!gone) return [];
+  // The sync takes this row out of the other weeks too; what was logged on any of them
+  // goes back to the undo.
+  const logged = await loggedRows(gone.day.week.blockId);
   await prisma.$transaction((tx) => removeRow(tx, rowId));
   await syncFromDay(gone.dayId);
   revalidatePath("/programming");
+  const left = new Set(
+    (await prisma.exerciseRow.findMany({ where: { id: { in: logged.map((r) => r.id) } }, select: { id: true } })).map((r) => r.id),
+  );
+  return logged.filter((r) => !left.has(r.id));
 }
 
 /** Deletes a row and joins the week after it to the week before, as `deleteRow` says. */
@@ -509,6 +590,31 @@ export async function updateDay(dayId: string, patch: { label?: string; rest?: b
   }
   await prisma.day.update({ where: { id: dayId }, data });
   await syncFromDay(dayId);
+  revalidatePath("/programming");
+}
+
+/**
+ * Moves a day onto another: the two trade their rows, names and rest flags, so nothing
+ * on the day moved onto is lost. Running it again puts them back.
+ */
+export async function swapDays(aId: string, bId: string) {
+  assertCoach();
+  if (aId === bId) return;
+  const [a, b] = await Promise.all(
+    [aId, bId].map((id) =>
+      prisma.day.findUniqueOrThrow({ where: { id }, include: { rows: { select: { id: true, order: true } } } }),
+    ),
+  );
+  await prisma.$transaction(async (tx) => {
+    // Park every row below the real slots first: (dayId, order) is unique.
+    for (const r of a.rows) await tx.exerciseRow.update({ where: { id: r.id }, data: { order: -1 - r.order, dayId: b.id } });
+    for (const r of b.rows) await tx.exerciseRow.update({ where: { id: r.id }, data: { order: -1 - r.order, dayId: a.id } });
+    for (const r of [...a.rows, ...b.rows]) await tx.exerciseRow.update({ where: { id: r.id }, data: { order: r.order } });
+    await tx.day.update({ where: { id: a.id }, data: { label: b.label, rest: b.rest } });
+    await tx.day.update({ where: { id: b.id }, data: { label: a.label, rest: a.rest } });
+  });
+  await syncFromDay(a.id);
+  if (a.weekId !== b.weekId) await syncFromDay(b.id);
   revalidatePath("/programming");
 }
 
@@ -677,10 +783,18 @@ export async function addRule(rowId: string, rule: Omit<Rule, "id" | "order" | "
     orderBy: { order: "desc" },
   });
 
-  await prisma.progressionRule.create({
+  const created = await prisma.progressionRule.create({
     data: { rowId, order: (last?.order ?? -1) + 1, ...rule },
   });
   await applyProgression(rowId);
+  return created.id;
+}
+
+/** Puts a deleted rule back as it was, id and place included. */
+export async function restoreRule(rule: Rule & { rowId: string; order: number }) {
+  assertCoach();
+  await prisma.progressionRule.create({ data: rule });
+  await applyProgression(rule.rowId);
 }
 
 export async function updateRule(
@@ -696,6 +810,7 @@ export async function deleteRule(ruleId: string) {
   assertCoach();
   const rule = await prisma.progressionRule.delete({ where: { id: ruleId } });
   await applyProgression(rule.rowId);
+  return rule;
 }
 
 /** A phase's weeks, each starting as the same set of days. */
@@ -929,13 +1044,60 @@ async function relinkChain(blockId: string) {
 }
 
 /** Deletes one phase. The program stays, even when that was its last phase. */
+/** Deletes a phase, and returns all of it — weeks, rows, rules, logged sets — so it can be undone. */
 export async function deleteBlock(blockId: string) {
   assertCoach();
+  const snapshot = await prisma.block.findUnique({ where: { id: blockId }, include: { weeks: { include: WEEK_TREE } } });
+  if (!snapshot) return null;
   await prisma.block.delete({ where: { id: blockId } });
+  revalidateAll();
+  return snapshot;
+}
+
+export type BlockSnapshot = NonNullable<Awaited<ReturnType<typeof deleteBlock>>>;
+
+/** Undoes `deleteBlock`: the phase back in its program under its own ids. */
+export async function restoreBlock({ weeks, ...block }: BlockSnapshot) {
+  assertCoach();
+  await prisma.$transaction(async (tx) => {
+    await tx.block.create({ data: block });
+    await recreateWeeks(tx, weeks);
+  });
+  await relinkChain(block.id);
   revalidateAll();
 }
 
-/** Drops a week and slides every later week down, keeping week numbers contiguous. */
+/** A record without the relations nested in it, for writing back with createMany. */
+function bare<T extends object, K extends keyof T>(record: T, ...keys: K[]): Omit<T, K> {
+  const out = { ...record };
+  for (const key of keys) delete out[key];
+  return out;
+}
+
+/** A week with everything under it, logged sets included — what an undo needs to put it back. */
+const WEEK_TREE = { days: { include: { rows: { include: { rules: true, logs: true } } } } } as const;
+
+/** Writes back weeks as a delete found them, under their own ids; relinkChain rejoins the chain after. */
+async function recreateWeeks(tx: Tx, weeks: WeekSnapshot["week"][]) {
+  const days = weeks.flatMap((w) => w.days);
+  const rows = days.flatMap((d) => d.rows);
+  await tx.week.createMany({ data: weeks.map((w) => bare(w, "days")) });
+  await tx.day.createMany({ data: days.map((d) => bare(d, "rows")) });
+  await tx.exerciseRow.createMany({ data: rows.map((r) => ({ ...bare(r, "rules", "logs"), fromId: null })) });
+  const rules = rows.flatMap((r) => r.rules);
+  const logs = rows.flatMap((r) => r.logs);
+  if (rules.length > 0) await tx.progressionRule.createMany({ data: rules });
+  if (logs.length > 0) await tx.setLog.createMany({ data: logs });
+}
+
+/** Everything `deleteWeek` takes away, for `restoreWeek` to put back as it was. */
+export type WeekSnapshot = NonNullable<Awaited<ReturnType<typeof deleteWeek>>>;
+
+/**
+ * Drops a week and slides every later week down, keeping week numbers contiguous.
+ * Returns what it removed — the week whole, logged sets included, and the rule weeks it
+ * shifted — so the delete can be undone.
+ */
 export async function deleteWeek(blockId: string, week: number) {
   assertCoach();
   const weeks = await prisma.week.findMany({
@@ -943,12 +1105,19 @@ export async function deleteWeek(blockId: string, week: number) {
     orderBy: { order: "asc" },
     include: { days: { select: { rows: { select: { id: true } } } } },
   });
-  if (weeks.length <= 1) return;
+  if (weeks.length <= 1) return null;
 
   const doomed = weeks.find((w) => w.order === week);
-  if (!doomed) return;
+  if (!doomed) return null;
 
   const rowIds = weeks.flatMap((w) => w.days.flatMap((d) => d.rows.map((r) => r.id)));
+  const snapshot = {
+    week: await prisma.week.findUniqueOrThrow({ where: { id: doomed.id }, include: WEEK_TREE }),
+    rules: await prisma.progressionRule.findMany({
+      where: { rowId: { in: rowIds } },
+      select: { id: true, startWeek: true, endWeek: true },
+    }),
+  };
 
   await prisma.$transaction(async (tx) => {
     // Its days and rows go with it, and the rows that pointed at them are unlinked by
@@ -975,6 +1144,35 @@ export async function deleteWeek(blockId: string, week: number) {
       where: { rowId: { in: rowIds }, startWeek: { lt: 2 } },
       data: { startWeek: 2 },
     });
+  });
+
+  await relinkChain(blockId);
+  revalidatePath("/programming");
+  return snapshot;
+}
+
+/** Undoes `deleteWeek`: the week back in its place under its own ids, so links to its rows hold. */
+export async function restoreWeek(blockId: string, { week, rules }: WeekSnapshot) {
+  assertCoach();
+  const later = await prisma.week.findMany({
+    where: { blockId, order: { gte: week.order } },
+    select: { id: true, order: true },
+  });
+
+  await prisma.$transaction(async (tx) => {
+    // Park them out of the way first: (blockId, order) is unique.
+    for (const w of later) await tx.week.update({ where: { id: w.id }, data: { order: -w.order } });
+    for (const w of later) await tx.week.update({ where: { id: w.id }, data: { order: w.order + 1 } });
+
+    await recreateWeeks(tx, [week]);
+
+    // The rule weeks the delete shifted, as they were.
+    for (const rule of rules) {
+      await tx.progressionRule.updateMany({
+        where: { id: rule.id },
+        data: { startWeek: rule.startWeek, endWeek: rule.endWeek },
+      });
+    }
   });
 
   await relinkChain(blockId);
@@ -1022,11 +1220,13 @@ export async function closePhaseGap(phaseId: string) {
 
   const i = phases.findIndex((p) => p.id === phaseId);
   const prev = phases[i - 1];
-  if (!prev) return;
+  if (!prev) return [];
 
   const end = prev.startDate.getTime() + prev._count.weeks * 7 * 24 * 60 * 60 * 1000;
   const shift = end - phase.startDate.getTime();
-  if (shift === 0) return;
+  if (shift === 0) return [];
+  // Where the moved phases started, for an undo.
+  const before = phases.slice(i).map((p) => ({ id: p.id, startDate: p.startDate }));
 
   await prisma.$transaction(
     phases.slice(i).map((p) =>
@@ -1035,6 +1235,16 @@ export async function closePhaseGap(phaseId: string) {
         data: { startDate: new Date(p.startDate.getTime() + shift) },
       }),
     ),
+  );
+  revalidateAll();
+  return before;
+}
+
+/** Puts phases back on the start dates they had — the undo of `closePhaseGap`. */
+export async function setPhaseStarts(starts: { id: string; startDate: Date }[]) {
+  assertCoach();
+  await prisma.$transaction(
+    starts.map((p) => prisma.block.update({ where: { id: p.id }, data: { startDate: p.startDate } })),
   );
   revalidateAll();
 }
@@ -1324,7 +1534,13 @@ const RULED: Record<ProgField, readonly (typeof PLAN_FIELDS)[number][]> = {
  */
 async function syncWeeks(weekId: string) {
   const settings = await loadSettings();
-  if (!settings.syncWeeks) return;
+  if (!settings.syncWeeks) {
+    // The weeks aren't copied across, but rules still carry an edit to week 1 forward.
+    const week = await prisma.week.findUnique({ where: { id: weekId }, select: { blockId: true } });
+    const writes = week ? await progressionWrites(week.blockId) : [];
+    if (writes.length > 0) await prisma.$transaction(writes);
+    return;
+  }
   const source = await prisma.week.findUnique({
     where: { id: weekId },
     include: { days: { include: { rows: { orderBy: { order: "asc" } } } } },

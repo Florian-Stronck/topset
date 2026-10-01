@@ -182,6 +182,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "progressions", group: "Program", title: "Apply progressions", keys: ["alt+p"] },
   { id: "program-new", group: "Program", title: "New program…", keys: ["alt+n"] },
   { id: "program-settings", group: "Program", title: "Program settings…", keys: ["alt+,"] },
+  { id: "phase-settings", group: "Phase", title: "Phase settings…" },
   { id: "program-rename", group: "Program", title: "Rename program" },
   { id: "program-import", group: "Program", title: "Import program file…" },
   { id: "program-copy", group: "Program", title: "Copy program…" },
@@ -189,7 +190,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
 
   { id: "row-insert", group: "Row", title: "Insert a row below", keys: ["alt+enter"], when: "grid" },
   { id: "row-duplicate", group: "Row", title: "Duplicate the row", keys: ["alt+d"], when: "grid" },
-  { id: "row-delete", group: "Row", title: "Delete the row", keys: ["alt+backspace"], when: "grid" },
+  // ⌥⌫ deletes a word on a Mac, and the grid is all text fields.
+  { id: "row-delete", group: "Row", title: "Delete the row", keys: [IS_MAC ? "mod+shift+backspace" : "alt+backspace"], when: "grid" },
   { id: "row-up", group: "Row", title: "Move the row up", keys: ["alt+arrowup"], when: "grid" },
   { id: "row-down", group: "Row", title: "Move the row down", keys: ["alt+arrowdown"], when: "grid" },
   { id: "row-copy", group: "Row", title: "Copy the row's prescription", keys: ["alt+c"], when: "grid" },

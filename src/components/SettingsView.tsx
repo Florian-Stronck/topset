@@ -13,6 +13,8 @@ import {
   deleteMyAccount,
   listCoaches,
   manageCoach,
+  createTeam,
+  manageTeam,
   resetPassword,
   signedInComputers,
   signIn,
@@ -22,10 +24,12 @@ import {
   type AccountStatus,
   type CoachListing,
   type InviteListing,
+  type TeamListing,
 } from "@/app/settings/cloud-actions";
 import { useSettings } from "@/components/SettingsProvider";
 import { EXERCISE_CATALOG } from "@/lib/exercises";
 import { LANGUAGES, plural, t, weekdayShort } from "@/lib/i18n";
+import { formatMoment } from "@/lib/dates";
 import { pickFile, restoreBackup, type RestoreStatus } from "@/lib/pick-file";
 import { colorOfTarget, PREF_DEFAULTS, resetPref, setPref, usePref, type Column } from "@/lib/prefs";
 import {
@@ -65,8 +69,13 @@ export function SettingsView({ coachName }: { coachName: string }) {
       <nav className="sticky top-7 hidden h-fit w-[190px] shrink-0 lg:block">
         <h1 className="text-[22px] font-semibold tracking-tight">{t("Settings")}</h1>
         <ul className="mt-5 space-y-0.5">
-          {SECTIONS.filter((s) => !("admin" in s) || admin).map((s) => (
+          {SECTIONS.filter((s) => !("admin" in s) || admin).map((s, i, shown) => (
             <li key={s.id}>
+              {s.group !== shown[i - 1]?.group && (
+                <div className={`px-2 text-[10px] tracking-[0.16em] text-muted-2 ${i ? "mt-3.5" : ""} mb-0.5`}>
+                  {t(s.group).toUpperCase()}
+                </div>
+              )}
               <a
                 href={`#${s.id}`}
                 className="block rounded-md px-2 py-1 text-[12px] text-muted hover:bg-surface-2 hover:text-foreground"
@@ -81,20 +90,19 @@ export function SettingsView({ coachName }: { coachName: string }) {
 
       <div className="min-w-0 flex-1 pb-24">
         <h1 className="text-[22px] font-semibold tracking-tight lg:hidden">{t("Settings")}</h1>
-        <Account name={coachName} />
+        <Account name={coachName} settings={settings} update={update} />
         <Units settings={settings} update={update} />
         <Programming settings={settings} update={update} />
         <Calendar settings={settings} update={update} />
         <Exercises settings={settings} update={update} />
+        <Tracking settings={settings} update={update} />
+        <Exports settings={settings} update={update} />
         <View />
         <Keyboard />
-        <Exports settings={settings} update={update} />
-        <Tracking settings={settings} update={update} />
         <AthleteApp settings={settings} update={update} />
         <SignInSecurity />
         {admin && <Coaches />}
         <Data settings={settings} update={update} />
-        <App settings={settings} update={update} />
       </div>
     </div>
   );
@@ -105,7 +113,7 @@ type Props = { settings: CoachSettings; update: (patch: SettingsPatch) => void }
 // ---------------------------------------------------------------------------------------
 // Sections
 
-function Account({ name }: { name: string }) {
+function Account({ name, settings, update }: Props & { name: string }) {
   const [, startTransition] = useTransition();
   const save = (patch: { name?: string }) =>
     startTransition(async () => {
@@ -113,9 +121,34 @@ function Account({ name }: { name: string }) {
     });
 
   return (
-    <Section id="account" title="Account" hint="Shown in the sidebar and, if you like, on exports.">
+    <Section id="account" title="Profile" hint="Shown in the sidebar and, if you like, on exports.">
       <Row label="Name">
         <TextField value={name} onCommit={(v) => save({ name: v })} width={220} />
+      </Row>
+      <Row label="Language">
+        <Select
+          value={settings.language}
+          options={LANGUAGES.map((l) => [l.id, l.name])}
+          onChange={(v) => {
+            update({ language: v as CoachSettings["language"] });
+            // Every screen reads its text once; a reload redraws them all in the new language.
+            setTimeout(() => location.reload(), 400);
+          }}
+        />
+      </Row>
+      <Row label="Open on start">
+        <Select
+          value={settings.startScreen}
+          options={[
+            ["programming", t("Programming")],
+            ["overview", t("Overview")],
+            ["last", t("Where I left off")],
+          ]}
+          onChange={(v) => update({ startScreen: v as CoachSettings["startScreen"] })}
+        />
+      </Row>
+      <Row label="Show the tutorial on first start" hint="For a new computer or a fresh install.">
+        <Switch on={settings.showTutorial} onChange={(v) => update({ showTutorial: v })} />
       </Row>
     </Section>
   );
@@ -337,6 +370,7 @@ function Calendar({ settings, update }: Props) {
         <Select
           value={settings.dateFormat}
           options={[
+            ["dd/mm/yyyy", "21/09/2026"],
             ["d-mmm", "21 Sept"],
             ["dd/mm", "21/09"],
             ["mm/dd", "09/21"],
@@ -786,7 +820,7 @@ function AthleteApp({ settings, update }: Props) {
     <Section
       id="athlete-app"
       title="Account and athlete app"
-      hint="Sign in to your Topset server to give athletes their check-in links. You keep working on this computer; your athletes sync in the background. Every coach only ever sees their own athletes."
+      hint="Sign in to your Topset server to give athletes their check-in links. You keep working on this computer; your athletes sync in the background. Every coach only ever sees their own athletes, and those shared with their team."
     >
       {status && !status.canSignIn ? (
         <Row label="Account" hint="Signing in works in the desktop app.">
@@ -1134,8 +1168,9 @@ function SignInSecurity() {
  * athletes' links working until it's turned back on.
  */
 function Coaches() {
-  const [data, setData] = useState<{ coaches: CoachListing[]; invites: InviteListing[]; error?: string } | null>(null);
+  const [data, setData] = useState<{ coaches: CoachListing[]; invites: InviteListing[]; teams: TeamListing[]; error?: string } | null>(null);
   const [label, setLabel] = useState("");
+  const [teamName, setTeamName] = useState("");
   const [fresh, setFresh] = useState<string | null>(null);
   const [reset, setReset] = useState<{ id: string; code: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1242,12 +1277,99 @@ function Coaches() {
                   {t("Reset code for {name}:", { name: c.name })}{" "}
                   <code className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-foreground">{reset.code}</code>{" "}
                   {t("— works once, until {date}. They enter it under “Forgot password?” when signing in.", {
-                    date: new Date(reset.expiresAt).toLocaleString(),
+                    date: formatMoment(reset.expiresAt, true),
                   })}
                 </p>
               )}
             </div>
           ))}
+        </div>
+      </Row>
+
+      <Row
+        label="Teams"
+        stacked
+        hint="Coaches on a team see and edit every athlete on it. Each coach shares their own athletes from the athlete card."
+      >
+        <div className="space-y-1.5">
+          {data?.teams.map((team) => {
+            const off = data.coaches.filter((c) => !c.disabled && !team.coaches.includes(c.id));
+            return (
+              <div key={team.id} className="flex flex-wrap items-center gap-2 text-[12px]">
+                <span className="font-medium">{team.name}</span>
+                {team.coaches.map((id) => {
+                  const c = data.coaches.find((x) => x.id === id);
+                  return (
+                    <span key={id} className="flex items-center gap-1 rounded bg-surface-3 px-1.5 text-muted">
+                      {c?.name ?? id}
+                      <button
+                        type="button"
+                        disabled={pending}
+                        title={t("Take off the team")}
+                        onClick={() => act(() => manageTeam(team.id, { action: "remove", coachId: id }))}
+                        className="text-muted-2 hover:text-red-400"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
+                {off.length > 0 && (
+                  <select
+                    value=""
+                    disabled={pending}
+                    onChange={(e) => e.target.value && act(() => manageTeam(team.id, { action: "add", coachId: e.target.value }))}
+                    className={`${fieldClass} w-[140px]`}
+                  >
+                    <option value="">{t("Add a coach…")}</option>
+                    {off.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <span className="ml-auto text-muted-2">{plural(team.athletes, "{n} athlete", "{n} athletes")}</span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => {
+                    const name = window.prompt(t("New name for {name}", { name: team.name }), team.name)?.trim();
+                    if (name && name !== team.name) act(() => manageTeam(team.id, { action: "rename", name }));
+                  }}
+                  className={button}
+                >
+                  {t("Rename")}
+                </button>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => {
+                    if (window.confirm(t("Delete the team {name}? Its athletes go back to the coaches who added them. Nothing else is deleted.", { name: team.name }))) {
+                      act(() => manageTeam(team.id, { action: "delete" }));
+                    }
+                  }}
+                  className={`${button} hover:!border-red-400 hover:!text-red-400`}
+                >
+                  {t("Delete")}
+                </button>
+              </div>
+            );
+          })}
+          <div className="flex items-center gap-2 pt-1">
+            <input value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder={t("Team name")} className={`${fieldClass} w-[200px]`} />
+            <button
+              type="button"
+              disabled={pending || !teamName.trim()}
+              onClick={() => {
+                act(() => createTeam(teamName));
+                setTeamName("");
+              }}
+              className="rounded bg-accent px-2.5 py-1 text-[12px] font-medium text-white disabled:opacity-50"
+            >
+              {t("New team")}
+            </button>
+          </div>
         </div>
       </Row>
 
@@ -1262,7 +1384,7 @@ function Coaches() {
               <code className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-foreground">{i.code}</code>
               <span className="truncate">{i.note}</span>
               <span className="ml-auto text-muted-2">
-                {t("open until {date}", { date: new Date(i.expiresAt).toLocaleDateString() })}
+                {t("open until {date}", { date: formatMoment(i.expiresAt) })}
               </span>
               <button type="button" disabled={pending} onClick={() => act(() => deleteInvite(i.code))} className={button}>
                 {t("Withdraw")}
@@ -1354,38 +1476,6 @@ function Data({ settings, update }: Props) {
       </Row>
       <Row label="Undo reaches back" hint="Steps kept per program while it is open.">
         <NumberField value={settings.undoLimit} min={10} max={1000} width={70} suffix={t("steps")} onCommit={(v) => update({ undoLimit: v ?? 100 })} />
-      </Row>
-    </Section>
-  );
-}
-
-function App({ settings, update }: Props) {
-  return (
-    <Section id="app" title="App">
-      <Row label="Language">
-        <Select
-          value={settings.language}
-          options={LANGUAGES.map((l) => [l.id, l.name])}
-          onChange={(v) => {
-            update({ language: v as CoachSettings["language"] });
-            // Every screen reads its text once; a reload redraws them all in the new language.
-            setTimeout(() => location.reload(), 400);
-          }}
-        />
-      </Row>
-      <Row label="Open on start">
-        <Select
-          value={settings.startScreen}
-          options={[
-            ["programming", t("Programming")],
-            ["overview", t("Overview")],
-            ["last", t("Where I left off")],
-          ]}
-          onChange={(v) => update({ startScreen: v as CoachSettings["startScreen"] })}
-        />
-      </Row>
-      <Row label="Show the tutorial on first start" hint="For a new computer or a fresh install.">
-        <Switch on={settings.showTutorial} onChange={(v) => update({ showTutorial: v })} />
       </Row>
       <Row label="Reset every setting" hint="Your athletes and programs stay; only settings go back to how Topset ships.">
         <ResetAll />

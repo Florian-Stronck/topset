@@ -38,7 +38,9 @@ export function Confirm({
   useEffect(() => {
     if (!confirming || pending) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Delete" || e.key === "Enter") {
+      // Enter or Delete typed into a field elsewhere is that field's, not a yes.
+      const typing = (e.target as HTMLElement).closest?.("input, textarea, select, [contenteditable='true']");
+      if ((e.key === "Delete" || e.key === "Enter") && !typing) {
         e.preventDefault();
         e.stopPropagation();
         void confirmRef.current();
@@ -69,6 +71,8 @@ export function Confirm({
       <button
         type="button"
         disabled={pending}
+        // Focus on the answer, so Enter is a yes wherever the question came from.
+        autoFocus
         onClick={confirm}
         title={t("Delete or Enter")}
         className="ml-auto rounded bg-accent px-2 py-0.5 text-[11px] font-medium text-white disabled:opacity-60"

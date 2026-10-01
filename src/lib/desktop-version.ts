@@ -28,3 +28,14 @@ export function tooOld(request: Request, min = MIN_DESKTOP_VERSION): string | nu
   const version = request.headers.get(VERSION_HEADER) ?? "0.0.0";
   return olderThan(version, min) ? `This Topset (${version}) is too old for the server. Update to ${min} or later.` : null;
 }
+
+/**
+ * The first desktop app that knows about teams. Older ones keep syncing, but only see and
+ * get the coach's own athletes: a teammate's would arrive without the coach they belong to.
+ */
+export const TEAMS_VERSION = "0.6.0";
+
+/** Whether this request's desktop app can take athletes shared through a team. */
+export function knowsTeams(request: Request): boolean {
+  return !olderThan(request.headers.get(VERSION_HEADER) ?? "0.0.0", TEAMS_VERSION);
+}

@@ -51,14 +51,41 @@ const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
 /**
  * SQL selecting the ids of `table` that belong to one coach, with a single `?` for the
- * coach's id — a chain of `IN (SELECT …)` up to the Coach row.
+ * coach's id — a chain of `IN (SELECT …)` up to the Coach row. With `shared`, athletes on
+ * a team the coach is in count too, and so does everything under them: what a teammate may
+ * read and edit. Without it, only what the coach owns: what they may delete outright.
  */
-export function ownedIdsSql(table: string): string {
+export function ownedIdsSql(table: string, shared = false): string {
   const entry = SCOPE.find((s) => s.table === table);
   if (!entry) throw new Error(`No ownership rule for ${table}.`);
   if (entry.parents.length === 0) return `SELECT "id" FROM ${quote(table)} WHERE "id" = ?`;
+  if (table === "Athlete" && shared) {
+    // Still one `?`, so callers that mix in their own arguments stay as they are.
+    return (
+      `SELECT a."id" FROM "Athlete" a, (SELECT ? AS "me") m WHERE a."coachId" = m."me" ` +
+      `OR a."teamId" IN (SELECT "teamId" FROM "TeamMember" WHERE "coachId" = m."me")`
+    );
+  }
   const [parent] = entry.parents;
-  return `SELECT "id" FROM ${quote(table)} WHERE ${quote(parent.column)} IN (${ownedIdsSql(parent.table)})`;
+  return `SELECT "id" FROM ${quote(table)} WHERE ${quote(parent.column)} IN (${ownedIdsSql(parent.table, shared)})`;
+}
+
+/**
+ * The joins from `table` (as `t0`) up to its athlete, and the expression for that athlete's
+ * id; null for the Coach table, which has none.
+ */
+export function athleteChain(table: string): { from: string; athlete: string } | null {
+  if (table === "Coach") return null;
+  if (table === "Athlete") return { from: `"Athlete" t0`, athlete: `t0."id"` };
+  let from = `${quote(table)} t0`;
+  let at = table;
+  for (let i = 0; ; i++) {
+    const [parent] = SCOPE.find((s) => s.table === at)?.parents ?? [];
+    if (!parent) throw new Error(`No athlete above ${table}.`);
+    if (parent.table === "Athlete") return { from, athlete: `t${i}.${quote(parent.column)}` };
+    from += ` JOIN ${quote(parent.table)} t${i + 1} ON t${i + 1}."id" = t${i}.${quote(parent.column)}`;
+    at = parent.table;
+  }
 }
 
 export type PushTables = Record<string, { upsert: Row[]; remove: string[] }>;
@@ -66,10 +93,18 @@ export type PushTables = Record<string, { upsert: Row[]; remove: string[] }>;
 /**
  * Whether one coach may make these changes: every row it sends is new or already theirs,
  * and hangs off a parent that is theirs or arrives in the same push; every row it removes
- * is theirs. `owned` is what the coach has now; `taken` holds ids that exist but belong
- * to someone else. Returns the first problem, or null.
+ * is theirs. `owned` is what the coach has now, teammates' athletes included; `taken` holds
+ * ids that exist but belong to someone else. `owners` names the owner of each athlete in
+ * `owned` that isn't the coach's own: only an owner removes an athlete or hands it over.
+ * Returns the first problem, or null.
  */
-export function checkPush(coachId: string, tables: PushTables, owned: Map<string, Set<string>>, taken: Set<string>): string | null {
+export function checkPush(
+  coachId: string,
+  tables: PushTables,
+  owned: Map<string, Set<string>>,
+  taken: Set<string>,
+  owners: Map<string, string> = new Map(),
+): string | null {
   for (const name of Object.keys(tables)) {
     // Sets come from the athlete app only; merged tables have their own channel.
     if (!SCOPED_TABLES.includes(name) || name === "SetLog" || MERGED_TABLES.has(name)) return `${name} can't be synced.`;
@@ -85,8 +120,12 @@ export function checkPush(coachId: string, tables: PushTables, owned: Map<string
       if (typeof row.id !== "string" || row.id === "") return `A ${table} row has no id.`;
       if (taken.has(row.id)) return `${table} ${row.id} belongs to someone else.`;
       if (table === "Coach" && row.id !== coachId) return "Only your own coach profile can be changed.";
+      // A new athlete is the coach's own; a teammate's stays theirs.
+      if (table === "Athlete" && row.coachId !== (owners.get(row.id) ?? coachId)) return `Athlete ${row.id} isn't yours to hand over.`;
       for (const p of parents) {
         const value = row[p.column];
+        // A teammate's athlete hangs off its owner, checked just above.
+        if (table === "Athlete" && owners.has(row.id) && value === owners.get(row.id)) continue;
         if (value === null || value === undefined) {
           if (p.optional) continue;
           return `${table} ${row.id} has no ${p.column}.`;
@@ -102,6 +141,7 @@ export function checkPush(coachId: string, tables: PushTables, owned: Map<string
     arriving.set(table, incoming);
     for (const id of change.remove) {
       if (!mine(table).has(id)) return `${table} ${id} isn't yours to remove.`;
+      if (table === "Athlete" && owners.has(id)) return "Only the coach who added an athlete can delete them.";
     }
   }
   if (tables.Coach?.remove.length) return "A coach profile can't be removed by sync.";

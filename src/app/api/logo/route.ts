@@ -1,6 +1,7 @@
 import { assertCoach } from "@/lib/role";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { myCoach } from "@/lib/me";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ const TYPES = ["image/png", "image/jpeg"];
  * uploaded here: at up to 2 MB it has no business travelling with every page's settings.
  */
 async function coach() {
-  const row = await prisma.coach.findFirstOrThrow({ select: { id: true, settings: true } });
+  const row = await prisma.coach.findFirstOrThrow({ where: await myCoach(), select: { id: true, settings: true } });
   let stored: { branding?: { logo?: string | null } } & Record<string, unknown> = {};
   try {
     stored = JSON.parse(row.settings);

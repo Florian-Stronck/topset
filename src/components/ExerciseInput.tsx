@@ -54,7 +54,16 @@ export function ExerciseInput({
     open && active < 0 && cycling === null ? completionFor(draft, history, fighter) : "";
 
   useLayoutEffect(() => {
-    if (open) setRect(inputRef.current?.getBoundingClientRect() ?? null);
+    if (!open) return;
+    // Kept on the cell while the grid scrolls under it.
+    const place = () => setRect(inputRef.current?.getBoundingClientRect() ?? null);
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
   }, [open, draft]);
 
   function close() {
@@ -69,6 +78,14 @@ export function ExerciseInput({
     close();
     const out = next.trim() === "" ? null : next.trim();
     if (picked || out !== value) onCommit(out, picked);
+  }
+
+  /** A name taken from the list or the completion, and the cell left. */
+  function take(name: string) {
+    commit(name, true);
+    // The blur below still sees the half-typed draft; it must not save that over the pick.
+    discard.current = true;
+    inputRef.current?.blur();
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -116,8 +133,7 @@ export function ExerciseInput({
       if (open && active >= 0 && options[active]) {
         e.preventDefault();
         e.stopPropagation();
-        commit(options[active], true);
-        inputRef.current?.blur();
+        take(options[active]);
         return;
       }
       e.currentTarget.blur();
@@ -181,7 +197,16 @@ export function ExerciseInput({
           className={`${inputBase} pointer-events-none absolute inset-0 z-20 flex items-center truncate ${className}`}
         >
           <span className="invisible">{draft}</span>
-          <span className="text-muted-2">{completion}</span>
+          {/* Clicking the greyed rest takes it, like Tab or a click in the list. */}
+          <span
+            title={t("Click or Tab to take it")}
+            // Mousedown would blur the input first and close the list.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => take(options[0])}
+            className="pointer-events-auto cursor-pointer text-muted-2 hover:text-foreground"
+          >
+            {completion}
+          </span>
         </div>
       )}
 
@@ -192,8 +217,11 @@ export function ExerciseInput({
               style={{
                 position: "fixed",
                 left: rect.left,
-                top: rect.bottom + 2,
                 width: Math.max(rect.width, 200),
+                // Above the cell when there is no room for the list below it.
+                ...(window.innerHeight - rect.bottom < 250 && rect.top > window.innerHeight - rect.bottom
+                  ? { bottom: window.innerHeight - rect.top + 2 }
+                  : { top: rect.bottom + 2 }),
               }}
             >
               {options.map((name, i) => (
@@ -202,10 +230,7 @@ export function ExerciseInput({
                     type="button"
                     // Mousedown would blur the input first and close the list.
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      commit(name, true);
-                      inputRef.current?.blur();
-                    }}
+                    onClick={() => take(name)}
                     onMouseEnter={() => setActive(i)}
                     className={`block w-full truncate px-2.5 py-1 text-left text-[12px] ${
                       i === active ? "bg-surface-3 text-foreground" : "text-muted"

@@ -85,15 +85,23 @@ async function coachVoice(coachId: string): Promise<{ name: string; lang: Langua
 
 // --- the coach's notes ----------------------------------------------------------------------
 
+/** The voice of each athlete's own coach: on a team, whoever wrote, it's the one they know. */
+function voices() {
+  const known = new Map<string, Promise<Awaited<ReturnType<typeof coachVoice>>>>();
+  return (coachId: string) => {
+    if (!known.has(coachId)) known.set(coachId, coachVoice(coachId));
+    return known.get(coachId)!;
+  };
+}
+
 /** Tells each athlete about the coach's new notes: one notification per note. */
-export async function notifyNotes(coachId: string, notes: NewNote[]): Promise<void> {
+export async function notifyNotes(notes: NewNote[]): Promise<void> {
   if (notes.length === 0 || !configured()) return;
-  const voice = await coachVoice(coachId);
-  if (!voice) return;
+  const voiceOf = voices();
   const athleteIds = [...new Set(notes.map((n) => n.athleteId))];
   const athletes = await prisma.athlete.findMany({
-    where: { id: { in: athleteIds }, coachId, accessToken: { not: null } },
-    select: { id: true, accessToken: true },
+    where: { id: { in: athleteIds }, accessToken: { not: null } },
+    select: { id: true, accessToken: true, coachId: true },
   });
   const unread = await prisma.coachMessage.groupBy({
     by: ["athleteId"],
@@ -104,6 +112,8 @@ export async function notifyNotes(coachId: string, notes: NewNote[]): Promise<vo
 
   for (const a of athletes) {
     const token = a.accessToken!;
+    const voice = await voiceOf(a.coachId);
+    if (!voice) continue;
     const subs = await phones(a.id, token, "notes");
     if (subs.length === 0) continue;
     const theirs = notes.filter((n) => n.athleteId === a.id);
@@ -132,13 +142,12 @@ const MEETING_TITLE: Record<NewMeeting["news"], string> = {
  * Tells each athlete what the coach did with their meetings: one proposed, answered or
  * called off. Rides on the notes switch — it is the coach talking to them either way.
  */
-export async function notifyMeetings(coachId: string, meetings: NewMeeting[]): Promise<void> {
+export async function notifyMeetings(meetings: NewMeeting[]): Promise<void> {
   if (meetings.length === 0 || !configured()) return;
-  const voice = await coachVoice(coachId);
-  if (!voice) return;
+  const voiceOf = voices();
   const athletes = await prisma.athlete.findMany({
-    where: { id: { in: [...new Set(meetings.map((m) => m.athleteId))] }, coachId, accessToken: { not: null } },
-    select: { id: true, accessToken: true },
+    where: { id: { in: [...new Set(meetings.map((m) => m.athleteId))] }, accessToken: { not: null } },
+    select: { id: true, accessToken: true, coachId: true },
   });
   const rows = new Map(
     (await prisma.meeting.findMany({ where: { id: { in: meetings.map((m) => m.id) } }, select: { id: true, minutes: true, timeZone: true } })).map(
@@ -147,6 +156,8 @@ export async function notifyMeetings(coachId: string, meetings: NewMeeting[]): P
   );
   for (const a of athletes) {
     const token = a.accessToken!;
+    const voice = await voiceOf(a.coachId);
+    if (!voice) continue;
     const subs = await phones(a.id, token, "notes");
     if (subs.length === 0) continue;
     for (const m of meetings.filter((x) => x.athleteId === a.id)) {

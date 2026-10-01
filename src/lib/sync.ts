@@ -6,7 +6,7 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import Database from "better-sqlite3";
 import { clipFileName } from "@/lib/athlete-videos";
 import { syncResetPath } from "@/lib/backup";
-import { SCOPE } from "@/lib/coach-scope";
+import { athleteChain, SCOPE } from "@/lib/coach-scope";
 import { VERSION_HEADER } from "@/lib/desktop-version";
 import { serial } from "@/lib/serial";
 import {
@@ -15,18 +15,18 @@ import {
   coachSignature,
   MERGED_COLUMNS,
   PULL_ONLY_TABLES,
+  pushedColumns,
   logChanges,
   mergeAthleteColumns,
   newerRows,
   quote,
   stampOf,
-  syncedColumns,
   syncedTable,
   tableChanges,
   type Row,
 } from "@/lib/sync-plan";
 import { markPhotoGone, photoFile, photoSettled, photosRoot } from "@/lib/photos";
-import type { PlanData } from "@/lib/sync-server";
+import type { AccessData, PlanData } from "@/lib/sync-server";
 import { newVideoPath, readLedger, writeLedger } from "@/lib/videos";
 
 /**
@@ -35,8 +35,8 @@ import { newVideoPath, readLedger, writeLedger } from "@/lib/videos";
  * coach, never to the database itself:
  *
  * - up, every couple of seconds: whatever the coach changed;
- * - down, every few seconds and on Refresh: what their athletes logged, and plan changes
- *   made on the coach's other computers.
+ * - down, every few seconds and on Refresh: what their athletes logged, plan changes made
+ *   on the coach's other computers or by teammates, and the teams the coach is on.
  *
  * What was last sent is kept in the database (SyncSent), so a restart knows exactly what
  * changed or was deleted here. A row this computer never had is never deleted from the
@@ -406,6 +406,109 @@ async function pullPlan(config: CloudConfig): Promise<void> {
   }
 }
 
+/**
+ * The coach's teams, and which athletes they may see: teams and teammates' names are copied
+ * in, athletes newly shared with the coach come down whole, and ones no longer shared go,
+ * with everything under them. A server from before teams has none of this, and is skipped.
+ */
+async function pullAccess(config: CloudConfig): Promise<void> {
+  const s = state();
+  const db = local();
+  // Taking over too: a restored backup may hold a teammate's athlete no longer shared, which
+  // the server would refuse, and hold up the take-over.
+  if (!s.sent) return;
+  let access: AccessData;
+  try {
+    access = await api<AccessData>(config.server, "sync?part=access", { token: config.token });
+  } catch (error) {
+    if (error instanceof ServerError && error.status === 400) return;
+    throw error;
+  }
+  const here = new Set((db.prepare(`SELECT "id" FROM "Athlete"`).all() as Row[]).map((r) => String(r.id)));
+  const fresh = access.athletes.map((a) => a.id).filter((id) => !here.has(id));
+  const { tables: incoming } = fresh.length
+    ? await api<{ tables: Record<string, Row[]> }>(config.server, `sync?part=athletes&ids=${fresh.map(encodeURIComponent).join(",")}`, {
+        token: config.token,
+      })
+    : { tables: {} as Record<string, Row[]> };
+
+  const sent = s.sent;
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      const before: Sent = new Map([...sent].map(([t, m]) => [t, new Map(m)]));
+      applyAccess(db, access, incoming, sent, config.coachId);
+      saveSent(db, before, sent);
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  // What was logged under the new athletes comes with a full athlete pull.
+  if (fresh.length) {
+    s.athleteVersion = null;
+    s.merged = null;
+  }
+}
+
+/** The pure-database half of `pullAccess`, apart for testing. Changes `sent` to match. */
+export function applyAccess(db: Database.Database, access: AccessData, incoming: Record<string, Row[]>, sent: Sent, me: string): void {
+  // Teammates first: athletes and memberships point at them. Their rows are never sent up.
+  const addCoach = db.prepare(`INSERT OR IGNORE INTO "Coach" ("id", "username", "name") VALUES (?, ?, ?)`);
+  const nameCoach = db.prepare(`UPDATE "Coach" SET "name" = ? WHERE "id" = ?`);
+  for (const c of access.coaches) {
+    if (c.id === me) continue;
+    addCoach.run(c.id, `team:${c.id}`, c.name);
+    nameCoach.run(c.name, c.id);
+  }
+  db.prepare(`DELETE FROM "TeamMember"`).run();
+  db.prepare(`DELETE FROM "Team"`).run();
+  const addTeam = db.prepare(`INSERT INTO "Team" ("id", "name") VALUES (?, ?)`);
+  for (const t of access.teams) addTeam.run(t.id, t.name);
+  const addMember = db.prepare(`INSERT OR IGNORE INTO "TeamMember" ("teamId", "coachId") VALUES (?, ?)`);
+  for (const m of access.members) addMember.run(m.teamId, m.coachId);
+
+  // Athletes no longer shared go: a teammate's always, the coach's own only once the server
+  // has had them (one made here and not sent yet stays, to go up).
+  const allowed = new Map(access.athletes.map((a) => [a.id, a.teamId]));
+  const here = db.prepare(`SELECT "id", "coachId" FROM "Athlete"`).all() as Row[];
+  const gone = here
+    .filter((a) => !allowed.has(a.id) && (a.coachId !== me || sent.get("Athlete")?.has(a.id)))
+    .map((a) => String(a.id));
+  if (gone.length) {
+    const marks = gone.map(() => "?").join(", ");
+    for (const { table } of [...SCOPE].reverse()) {
+      const chain = athleteChain(table);
+      if (!chain) continue;
+      const ids = (db.prepare(`SELECT t0."id" AS "id" FROM ${chain.from} WHERE ${chain.athlete} IN (${marks})`).all(...gone) as Row[]).map((r) =>
+        String(r.id),
+      );
+      const drop = db.prepare(`DELETE FROM ${quote(table)} WHERE "id" = ?`);
+      for (const id of ids) {
+        drop.run(id);
+        sent.get(table)?.delete(id);
+      }
+    }
+  }
+
+  // Athletes newly shared come in whole, as the server has them.
+  const names = tables(db);
+  for (const t of inOrder(names)) {
+    const list = t === "Coach" ? [] : (incoming[t] ?? []);
+    if (list.length === 0) continue;
+    const cols = columnsOf(db, t);
+    const has = db.prepare(`SELECT 1 FROM ${quote(t)} WHERE "id" = ?`);
+    const missing = list.filter((r) => !has.get(r.id));
+    insertAll(db, t, missing);
+    let mine = sent.get(t);
+    if (!mine) sent.set(t, (mine = new Map()));
+    for (const r of missing) mine.set(String(r.id), coachSignature(t, r, cols));
+  }
+
+  // Which team each is on: set on the server only, so never an edit to send.
+  const setTeam = db.prepare(`UPDATE "Athlete" SET "teamId" = ? WHERE "id" = ?`);
+  for (const [id, teamId] of allowed) setTeam.run(teamId, id);
+}
+
 /** The pure-database half of `pullPlan`, apart for testing. Changes `sent` to match. */
 export function applyPlan(db: Database.Database, data: Pick<PlanData, "rows" | "removed">, sent: Sent): void {
   const names = new Set(tables(db));
@@ -545,8 +648,10 @@ async function push(config: CloudConfig, force: boolean): Promise<void> {
 
   for (const t of names) {
     const cols = columnsOf(db, t);
-    const sentCols = syncedColumns(t, cols);
-    const rows = db.prepare(`SELECT * FROM ${quote(t)}`).all() as Row[];
+    const sentCols = pushedColumns(t, cols);
+    // Teammates' coach rows are here to name them; only the coach's own goes up.
+    const all = db.prepare(`SELECT * FROM ${quote(t)}`).all() as Row[];
+    const rows = t === "Coach" ? all.filter((r) => r.id === config.coachId) : all;
     const changes = tableChanges(t, rows, cols, s.sent.get(t) ?? new Map());
     next.set(t, changes.signatures);
     if (changes.upsert.length || changes.remove.length) {
@@ -659,6 +764,7 @@ async function cycle(forcePull: boolean): Promise<void> {
       forcePull = true;
     }
     if (forcePull || Date.now() - s.lastPull >= PULL_EVERY_MS) {
+      await pullAccess(config);
       await pull(config);
       await pullPlan(config);
     }

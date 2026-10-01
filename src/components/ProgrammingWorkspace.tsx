@@ -3,23 +3,20 @@
 import Link from "next/link";
 import { injuryLabel, type InjuryData } from "@/lib/injuries";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { createExampleAthlete } from "@/app/athletes/actions";
 import { syncEverything } from "@/app/settings/cloud-actions";
 import {
-  addPhase,
-  addWeek,
   applyAllProgressions,
-  closePhaseGap,
+  deleteWeek,
   importProgram,
-  pastePhase,
   pasteWeek,
   setWeekLock,
   updateDay,
 } from "@/app/programming/actions";
 import { useHistory } from "@/components/history";
-import { ProgrammingGrid } from "@/components/ProgrammingGrid";
-import { Topbar, type Panel } from "@/components/Topbar";
+import { addWeekUndoable, ProgrammingGrid } from "@/components/ProgrammingGrid";
+import { addPhaseUndoable, closeGapUndoable, pastePhaseUndoable, Topbar, type Panel } from "@/components/Topbar";
 import { WholeProgramSheet, type ProgramPosition } from "@/components/WholeProgramSheet";
 import type { MeetSummary } from "@/lib/competition";
 import { describeGap, phaseGaps } from "@/lib/dates";
@@ -55,6 +52,7 @@ function focusField(name: string) {
  */
 export function ProgrammingWorkspace({
   phase: block,
+  initialWeek,
   program,
   programs,
   wholeProgram,
@@ -65,6 +63,8 @@ export function ProgrammingWorkspace({
   injuries,
 }: {
   phase: BlockData;
+  /** The week in the URL, so a reload opens where the coach was. */
+  initialWeek: number;
   program: ProgramSummary;
   programs: ProgramSummary[];
   wholeProgram: BlockData[];
@@ -79,7 +79,7 @@ export function ProgrammingWorkspace({
   const [, startTransition] = useTransition();
   const history = useHistory();
 
-  const [week, setWeek] = useState(1);
+  const [week, setWeek] = useState(initialWeek);
   const [view, setView] = useState<"phase" | "program">("phase");
   const [panel, setPanel] = useState<Panel>(null);
   const [deletingWeek, setDeletingWeek] = useState<number | null>(null);
@@ -96,6 +96,16 @@ export function ProgrammingWorkspace({
   const phase = program.phases.find((p) => p.id === block.id) ?? program.phases[0];
 
   const activeWeek = Math.min(week, block.weeks.length);
+
+  // The phase and week open go in the URL — written in place, not navigated to, so a
+  // week switch stays instant — and a reload comes back to them.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("phase") === block.id && url.searchParams.get("week") === String(activeWeek)) return;
+    url.searchParams.set("phase", block.id);
+    url.searchParams.set("week", String(activeWeek));
+    window.history.replaceState(null, "", url);
+  }, [block.id, activeWeek]);
   const tightIntensity = usePref("tightIntensity");
   const columns = usePref("columns");
   const copied = usePref("clipboard");
@@ -131,6 +141,18 @@ export function ProgrammingWorkspace({
       const next = programWeeks[Math.min(programWeeks.length - 1, Math.max(0, at + by))];
       if (next) setProgramPos(next);
     };
+    /** Pastes a week after the open one and opens it; undo takes it out again. */
+    const pasteWeekUndoable = async (sourceId: string, label: string) => {
+      let order = await pasteWeek(sourceId, block.id, activeWeek);
+      setWeek(order);
+      history.push({
+        label,
+        undo: () => deleteWeek(block.id, order),
+        redo: async () => {
+          order = await pasteWeek(sourceId, block.id, activeWeek);
+        },
+      });
+    };
     const edit = (name: string) => {
       setView("phase");
       focusField(name);
@@ -155,9 +177,7 @@ export function ProgrammingWorkspace({
         title: t("Add a week"),
         run: () => {
           setWeek(block.weeks.length + 1);
-          startTransition(() => {
-            void addWeek(block.id);
-          });
+          startTransition(() => addWeekUndoable(history, block.id, block.weeks.length + 1));
         },
       },
       {
@@ -205,8 +225,18 @@ export function ProgrammingWorkspace({
         id: "program-settings",
         group: "Program",
         title: t("Program settings…"),
-        keywords: "rename dates 1rm maxes import export file delete",
+        keywords: "rename import export file delete",
         run: () => setPanel("settings"),
+      },
+      {
+        id: "phase-settings",
+        group: "Phase",
+        title: t("Phase settings…"),
+        keywords: "rename dates start 1rm maxes nutrition kcal protein delete",
+        run: () => {
+          setView("phase");
+          setPanel("phase-settings");
+        },
       },
       {
         id: "view-tight-intensity",
@@ -246,10 +276,7 @@ export function ProgrammingWorkspace({
         group: "Phase",
         title: t("Add a phase"),
         keywords: "block new next",
-        run: async () => {
-          const id = await addPhase(program.id);
-          openPhase(id);
-        },
+        run: () => addPhaseUndoable(history, program.id, openPhase, block.id),
       },
       {
         id: "program-import",
@@ -336,7 +363,7 @@ export function ProgrammingWorkspace({
         group: "Phase",
         title: t("Duplicate phase"),
         keywords: "copy clone",
-        run: async () => openPhase(await pastePhase(block.id, program.id, block.id)),
+        run: () => pastePhaseUndoable(history, program.id, openPhase, block.id, block.id, block.id, "duplicate phase"),
       },
     );
     if (copied?.kind === "phase") {
@@ -345,7 +372,7 @@ export function ProgrammingWorkspace({
         group: "Phase",
         title: t("Paste “{name}” after this phase", { name: copied.label }),
         keywords: "clipboard",
-        run: async () => openPhase(await pastePhase(copied.id, program.id, block.id)),
+        run: () => pastePhaseUndoable(history, program.id, openPhase, copied.id, block.id, block.id, "paste phase"),
       });
     }
     if (weekData) {
@@ -363,7 +390,7 @@ export function ProgrammingWorkspace({
           group: "Week",
           title: t("Duplicate week"),
           keywords: "copy clone",
-          run: async () => setWeek(await pasteWeek(weekData.id, block.id, activeWeek)),
+          run: () => pasteWeekUndoable(weekData.id, "duplicate week"),
         },
       );
       if (copied?.kind === "week") {
@@ -372,7 +399,7 @@ export function ProgrammingWorkspace({
           group: "Week",
           title: t("Paste “{name}” after this week", { name: copied.label }),
           keywords: "clipboard",
-          run: async () => setWeek(await pasteWeek(copied.id, block.id, activeWeek)),
+          run: () => pasteWeekUndoable(copied.id, "paste week"),
         });
       }
     }
@@ -463,10 +490,7 @@ export function ProgrammingWorkspace({
             ? t("Close the {gap} before {phase}", { gap: describeGap(days), phase: p.phase })
             : t("Fix the {gap}: start {phase} when {previous} ends", { gap: describeGap(days), phase: p.phase, previous }),
         keywords: "gap break overlap dates start",
-        run: () =>
-          startTransition(() => {
-            void closePhaseGap(p.id);
-          }),
+        run: () => closeGapUndoable(history, p.id),
       });
     }
 
@@ -653,6 +677,41 @@ export function ProgrammingWorkspace({
           onDeletingWeek={setDeletingWeek}
         />
       )}
+      <SaveFailed />
     </>
+  );
+}
+
+/**
+ * Edits show before the server has them, and are sent fire-and-forget — so a save that
+ * fails surfaces only as an unhandled rejection. Say so, rather than leave the grid
+ * showing something that isn't stored.
+ */
+function SaveFailed() {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    const onFail = () => setFailed(true);
+    window.addEventListener("unhandledrejection", onFail);
+    return () => window.removeEventListener("unhandledrejection", onFail);
+  }, []);
+  if (!failed) return null;
+  return (
+    <div
+      role="alert"
+      className="fixed bottom-4 left-1/2 z-[200] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-miss/50 bg-surface-2 px-4 py-2.5 text-[12px] shadow-xl shadow-black/50"
+    >
+      <span className="h-2 w-2 shrink-0 rounded-full bg-miss" />
+      <span className="text-foreground">{t("A change didn't save. Reload to see what is stored.")}</span>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="rounded bg-accent px-2.5 py-1 text-[11px] font-medium text-white"
+      >
+        {t("Reload")}
+      </button>
+      <button type="button" onClick={() => setFailed(false)} className="text-[11px] text-muted-2 hover:text-foreground">
+        {t("Dismiss")}
+      </button>
+    </div>
   );
 }

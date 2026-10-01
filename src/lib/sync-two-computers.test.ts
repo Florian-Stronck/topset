@@ -100,8 +100,10 @@ before(async () => {
     const part = url.searchParams.get("part");
     const since = url.searchParams.get("since");
     if (part === "athlete") return reply({ ok: true, ...(await athleteData(server, "me", since === null ? undefined : Number(since))) });
+    // A server from before teams, as this coach is on none.
+    if (part === "access" || part === "athletes") return reply({ ok: false, error: "Unknown part." }, 400);
     if (part === "plan") return reply({ ok: true, ...(await planData(server, "me", session, Number(since))) });
-    const rev = await planRev(server, "me");
+    const rev = await planRev(server);
     return reply({ ok: true, rev, tables: await snapshot(server, "me", part === "ids") });
   }) as typeof fetch;
 });

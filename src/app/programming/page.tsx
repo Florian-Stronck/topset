@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic";
 export default async function ProgrammingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ athlete?: string; program?: string; phase?: string }>;
+  searchParams: Promise<{ athlete?: string; program?: string; phase?: string; week?: string }>;
 }) {
   await loadSettings();
   const params = await searchParams;
@@ -68,6 +68,7 @@ export default async function ProgrammingPage({
           <HistoryProvider resetKey={phaseData.program.id}>
             <ProgrammingWorkspace
               phase={phaseData}
+              initialWeek={Math.max(1, Math.trunc(Number(params.week)) || 1)}
               program={program}
               programs={programs}
               wholeProgram={wholeProgram}
