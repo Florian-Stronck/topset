@@ -151,6 +151,8 @@ export type CellPrescription = {
   intensity: number | null;
   intensityMax: number | null;
   rampStep?: number | null;
+  /** A weight typed over the one the intensity works out to. */
+  load?: number | null;
 };
 
 export type ResolvedIntensity = {
@@ -207,7 +209,10 @@ export function resolveIntensity(
   unit: Unit,
   topSet: number | null = null,
 ): ResolvedIntensity {
-  const base = resolveBase(cell, oneRM, unit, topSet);
+  const base =
+    cell.load == null
+      ? resolveBase(cell, oneRM, unit, topSet)
+      : { label: `${cell.load} ${unit === "LB" ? "lb" : "kg"}`, weight: cell.load };
   const step = cell.rampStep ?? null;
   if (step === null || base.weight === null) return { ...base, ramp: [] };
 

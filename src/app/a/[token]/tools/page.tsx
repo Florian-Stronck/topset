@@ -24,15 +24,9 @@ export default async function AthleteTools({ params }: { params: Promise<{ token
     <div>
       <h1 className="text-[20px] font-semibold tracking-tight">{t("Tools")}</h1>
       <div className="mt-4 space-y-4">
-        {/* A fighter's gym clock first; the bar maths only for lifters. */}
-        {athlete.sport === "FIGHTER" ? (
-          <IntervalTimer />
-        ) : (
-          <>
-            <PlateCalculator unit={athlete.unit} />
-            <E1rmCalculator unit={athlete.unit} />
-          </>
-        )}
+        <PlateCalculator unit={athlete.unit} />
+        <E1rmCalculator unit={athlete.unit} />
+        <IntervalTimer />
         <InjuryPanel initial={injuries} today={today} save={saveInjury.bind(null, token)} remove={deleteInjury.bind(null, token)} phone />
         <ThemePicker />
       </div>

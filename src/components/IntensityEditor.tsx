@@ -11,6 +11,8 @@ export type IntensityValue = {
   intensity: number | null;
   intensityMax: number | null;
   rampStep: number | null;
+  /** A weight typed over the calculated one, in the WEIGHT column. */
+  load?: number | null;
 };
 
 /** The kinds of intensity: the chip's short name, and the menu's. */
@@ -25,20 +27,14 @@ const KINDS: { value: IntensityType; chip: string; label: string }[] = [
 
 /**
  * The intensity cell in two: what kind (a chip that opens the kinds, the range's top and
- * the ramp) and how much, typed straight into the cell. What it comes to — the weight —
- * sits to the right.
+ * the ramp) and how much, typed straight into the cell. The weight it comes to has its
+ * own column.
  */
 export function IntensityEditor({
   value,
-  resolved,
   onCommit,
-  kinds: offered,
 }: {
-  /** The kinds to offer, in the menu's order; every kind when left out. The one in use always shows. */
-  kinds?: IntensityType[];
   value: IntensityValue;
-  /** The weight it works out to, or null to leave it out. */
-  resolved: string | null;
   onCommit: (v: Partial<IntensityValue>) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -77,17 +73,12 @@ export function IntensityEditor({
         </>
       )}
 
-      {resolved !== null && (
-        <span className="ml-auto min-w-0 truncate text-right text-[12px] tabular-nums">
-          {resolved}
-          {value.rampStep !== null && <span className="ml-1 text-[11px] text-muted-2">+{value.rampStep}</span>}
-        </span>
-      )}
+      {value.rampStep !== null && <span className="ml-auto text-[11px] text-muted-2">+{value.rampStep}</span>}
 
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={196}>
         <div>
           <div role="menu" className="rounded-md border border-border bg-surface-2 p-1">
-            {KINDS.filter((k) => !offered || offered.includes(k.value) || k.value === value.intensityType).map((k) => {
+            {KINDS.map((k) => {
               const on = k.value === value.intensityType;
               return (
                 <button
@@ -110,6 +101,15 @@ export function IntensityEditor({
               );
             })}
           </div>
+          {value.load != null && (
+            <button
+              type="button"
+              onClick={() => onCommit({ load: null })}
+              className="mt-1 w-full rounded px-2 py-1 text-left text-[12px] text-accent hover:bg-surface-3"
+            >
+              {t("Recalculate the weight")}
+            </button>
+          )}
           {value.intensityType === "BACKOFF" && (
             <p className="mt-1.5 text-[11px] leading-snug text-muted">
               {t("Percent drop from the last exercise above with a real weight.")}

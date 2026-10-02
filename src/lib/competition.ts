@@ -1,4 +1,4 @@
-import type { AttemptResult, MeetKind, MeetLift, Unit } from "@prisma/client";
+import type { AttemptResult, MeetLift, Unit } from "@prisma/client";
 import { roundToIncrement } from "@/lib/intensity";
 import { activeSettings } from "@/lib/settings";
 import { t } from "@/lib/i18n";
@@ -26,12 +26,6 @@ export type MeetData = {
   weightClass: string | null;
   bodyweight: number | null;
   date: string;
-  kind: MeetKind;
-  opponent: string | null;
-  /** yyyy-mm-dd, or null when the fight's weigh-in isn't set. */
-  weighIn: string | null;
-  targetWeight: number | null;
-  outcome: string | null;
   attempts: AttemptData[];
 };
 
@@ -113,7 +107,6 @@ export type MeetSummary = {
   name: string;
   /** yyyy-mm-dd, so it compares without a timezone moving it a day. */
   date: string;
-  kind: MeetKind;
   attempts: { lift: MeetLift; number: number; weight: number | null }[];
 };
 

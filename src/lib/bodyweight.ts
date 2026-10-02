@@ -97,17 +97,9 @@ export function classLimit(weightClass: string | null | undefined): number | nul
   return Number.isFinite(limit) && limit > 0 ? limit : null;
 }
 
-/**
- * The weight a competition has to be made, and the day it is checked: a fight's own
- * target and weigh-in when the coach set them, else the class limit on the day itself.
- */
-export function weightToMake(meet: {
-  date: Date;
-  weightClass: string | null;
-  targetWeight?: number | null;
-  weighIn?: Date | null;
-}): { limit: number | null; day: string } {
-  return { limit: meet.targetWeight ?? classLimit(meet.weightClass), day: ymdOf(meet.weighIn ?? meet.date) };
+/** The weight a meet has to be made, and the day it is checked: the class limit on the day itself. */
+export function weightToMake(meet: { date: Date; weightClass: string | null }): { limit: number | null; day: string } {
+  return { limit: classLimit(meet.weightClass), day: ymdOf(meet.date) };
 }
 
 /** How far back the projection looks, and the least it needs to go on. */

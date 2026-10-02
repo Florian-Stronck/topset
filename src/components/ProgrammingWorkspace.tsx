@@ -22,12 +22,23 @@ import type { MeetSummary } from "@/lib/competition";
 import { describeGap, phaseGaps } from "@/lib/dates";
 import { pickFile, restoreBackup } from "@/lib/pick-file";
 import { fresh, useCommands, type Command } from "@/lib/commands";
-import { setPref, togglePref, usePref } from "@/lib/prefs";
+import { setPref, togglePref, usePref, type Column } from "@/lib/prefs";
 import type { ProgramSummary } from "@/lib/queries";
 import type { AthleteData, BlockData } from "@/lib/types";
 import { t } from "@/lib/i18n";
 
 /** The export routes are downloads, not pages: the router would try to navigate to them. */
+/** The grid's switchable columns as the palette names them: header, then search words. */
+const COLUMN_COMMANDS: [Column, string, string][] = [
+  ["progression", "PROGRESSION", "rules"],
+  ["time", "TIME", "duration rounds seconds minutes interval timed"],
+  ["weight", "WEIGHT", "load kg lb calculated override"],
+  ["tempo", "TEMPO", ""],
+  ["rest", "REST", "timer pause between sets"],
+  ["video", "VIDEO", "link url"],
+  ["notes", "COACH NOTES", "comments"],
+];
+
 function download(url: string) {
   const link = document.createElement("a");
   link.href = url;
@@ -108,6 +119,7 @@ export function ProgrammingWorkspace({
   }, [block.id, activeWeek]);
   const tightIntensity = usePref("tightIntensity");
   const columns = usePref("columns");
+  const hideRest = usePref("hideRestDays");
   const copied = usePref("clipboard");
 
   // The whole-program view opens where the phase view is, until a week is picked in it.
@@ -245,12 +257,20 @@ export function ProgrammingWorkspace({
         keywords: "columns layout width notes compact wide",
         run: () => togglePref("tightIntensity"),
       },
-      {
-        id: "view-time",
+      // One show/hide per column, as in Settings. TIME also shows itself once a row is timed.
+      ...COLUMN_COMMANDS.map(([c, name, keywords]) => ({
+        id: `view-${c}`,
         group: "View",
-        title: columns.time ? t("Hide the TIME column") : t("Show the TIME column"),
-        keywords: "columns duration rounds seconds minutes interval timed",
-        run: () => setPref("columns", { ...columns, time: !columns.time }),
+        title: columns[c] ? t("Hide the {name} column", { name: t(name) }) : t("Show the {name} column", { name: t(name) }),
+        keywords: `columns ${keywords}`,
+        run: () => setPref("columns", { ...columns, [c]: !columns[c] }),
+      })),
+      {
+        id: "view-rest-days",
+        group: "View",
+        title: hideRest ? t("Show rest days") : t("Hide rest days"),
+        keywords: "off days strip collapse",
+        run: () => togglePref("hideRestDays"),
       },
       {
         id: "program-rename",
@@ -621,7 +641,7 @@ export function ProgrammingWorkspace({
     // Pushed in several passes; keep each group together under one heading.
     const groups = [...new Set(list.map((c) => c.group))];
     return list.sort((a, b) => groups.indexOf(a.group) - groups.indexOf(b.group));
-  }, [activeWeek, athlete, tightIntensity, columns, copied, view, programOpen, wholeProgram, block, history, program, programs, router]);
+  }, [activeWeek, athlete, tightIntensity, columns, hideRest, copied, view, programOpen, wholeProgram, block, history, program, programs, router]);
 
   // Above the sidebar's: "Tracking" here knows which phase to open.
   useCommands("workspace", commands, 1);

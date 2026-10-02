@@ -9,13 +9,12 @@ import { t } from "@/lib/i18n";
 import { SHELL_MAX_WIDTH } from "@/lib/layout";
 import { setTrackingPref, usePref } from "@/lib/prefs";
 
-export type TrackingView = "review" | "progress" | "wellness" | "load" | "schedule";
+export type TrackingView = "review" | "progress" | "wellness" | "schedule";
 
 export const VIEWS: { id: TrackingView; label: string; icon: string }[] = [
   { id: "review", label: "Review", icon: "M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" },
   { id: "progress", label: "Progress", icon: "M3 17l6-6 4 4 8-8M14 7h7v7" },
   { id: "wellness", label: "Wellness", icon: "M3 12h4l3-8 4 16 3-8h4" },
-  { id: "load", label: "Load", icon: "M12 6v6l4 2M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z" },
   { id: "schedule", label: "Schedule", icon: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" },
 ];
 
@@ -38,8 +37,6 @@ export function TrackingShell({
   hasLink,
   unreviewed,
   scheduleNews = 0,
-  hasLoad,
-  fighter = false,
   children,
 }: {
   view: TrackingView;
@@ -54,21 +51,10 @@ export function TrackingShell({
   unreviewed: number;
   /** Moved sessions not yet seen and meetings waiting on the coach, for the Schedule tab's badge. */
   scheduleNews?: number;
-  /** Timed work on file, so the Load tab has something to show. */
-  hasLoad: boolean;
-  /** A fighter's tabs lead with Load and Wellness; a lifter's with Progress. */
-  fighter?: boolean;
   children: ReactNode;
 }) {
   const router = useRouter();
   const search = useSearchParams();
-  const views = useMemo(() => {
-    const shown = VIEWS.filter((v) => v.id !== "load" || hasLoad || fighter || view === "load");
-    const order: TrackingView[] = fighter
-      ? ["review", "load", "wellness", "progress", "schedule"]
-      : ["review", "progress", "wellness", "load", "schedule"];
-    return shown.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-  }, [fighter, hasLoad, view]);
   const [, startTransition] = useTransition();
   const autoSync = usePref("tracking").autoSync;
   const [lastRefresh, setLastRefresh] = useState<number | null>(null);
@@ -124,7 +110,7 @@ export function TrackingShell({
     const track = (blockId: string) => router.push(`/tracking?athlete=${athlete.id}&block=${blockId}${view === "review" ? "" : `&view=${view}`}`);
     const at = block ? phases.findIndex((p) => p.id === block.id) : -1;
     return [
-      ...views.map(
+      ...VIEWS.map(
         (v): Command => ({
           id: `view-${v.id}`,
           group: "Tracking view",
@@ -201,7 +187,7 @@ export function TrackingShell({
           ]
         : []),
     ];
-  }, [athlete, autoSync, block, href, phases, programs, refresh, router, view, views]);
+  }, [athlete, autoSync, block, href, phases, programs, refresh, router, view]);
   // Above the sidebar's: "Programming" here opens this very phase.
   useCommands("tracking", commands, 1);
 
@@ -279,7 +265,7 @@ export function TrackingShell({
         </div>
 
         <nav data-tour="tracking-views" role="tablist" aria-label={t("Tracking view")} className="mt-5 flex gap-1 border-b border-border">
-          {views.map((v) => {
+          {VIEWS.map((v) => {
             const on = v.id === view;
             return (
               <Link

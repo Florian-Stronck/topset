@@ -13,17 +13,7 @@ import { startTutorial, Tutorial } from "@/components/Tutorial";
 import { t } from "@/lib/i18n";
 
 /** `team`: shared through a team, marked with a small dot. */
-type Athlete = { id: string; name: string; sport?: "LIFTER" | "FIGHTER"; team?: { name: string } | null };
-
-/** The roster in two groups once it holds both lifters and fighters; one list otherwise. */
-function rosterGroups(athletes: Athlete[]): { label: string | null; athletes: Athlete[] }[] {
-  const fighters = athletes.filter((a) => a.sport === "FIGHTER");
-  if (fighters.length === 0 || fighters.length === athletes.length) return [{ label: null, athletes }];
-  return [
-    { label: "LIFTERS", athletes: athletes.filter((a) => a.sport !== "FIGHTER") },
-    { label: "FIGHTERS", athletes: fighters },
-  ];
-}
+type Athlete = { id: string; name: string; team?: { name: string } | null };
 
 /** Small enough to read at 16px, and drawn rather than lettered so a collapsed rail
  *  still says what each screen is. */
@@ -98,9 +88,6 @@ export function Sidebar({
 }) {
   const router = useRouter();
   const athleteMenu = useContextMenu();
-  const groups = useMemo(() => rosterGroups(athletes), [athletes]);
-  // Stepping through athletes goes in the order they're listed.
-  const ordered = useMemo(() => groups.flatMap((g) => g.athletes), [groups]);
 
   // Getting around, from any screen's palette.
   const commands = useMemo<Command[]>(() => {
@@ -114,11 +101,11 @@ export function Sidebar({
       run: () => router.push(href),
     });
     const inSection = (id: string) => `${SECTION_HREF[section] ?? "/programming"}?athlete=${id}${keep ? `&${keep}` : ""}`;
-    const at = ordered.findIndex((a) => a.id === activeAthleteId);
+    const at = athletes.findIndex((a) => a.id === activeAthleteId);
     const step = (by: 1 | -1) => {
-      if (ordered.length === 0) return;
+      if (athletes.length === 0) return;
       // Round the roster, the way Tracking's arrows go.
-      const next = ordered[(Math.max(at, 0) + by + ordered.length) % ordered.length];
+      const next = athletes[(Math.max(at, 0) + by + athletes.length) % athletes.length];
       router.push(inSection(next.id));
     };
     return [
@@ -160,7 +147,7 @@ export function Sidebar({
           run: () => router.push(inSection(a.id)),
         })),
     ];
-  }, [athletes, ordered, activeAthleteId, keep, router, section]);
+  }, [athletes, activeAthleteId, keep, router, section]);
   useCommands("sidebar", commands);
 
   // Remembered for "open where I left off" — a cookie, so the server can read it at "/".
@@ -223,12 +210,7 @@ export function Sidebar({
         )}
 
         <div className="mt-2 min-h-0 space-y-1 overflow-y-auto">
-          {groups.map((group) => (
-            <div key={group.label ?? "all"} className="space-y-1">
-              {group.label && !collapsed && (
-                <div className="px-1 pt-1.5 text-[10px] tracking-[0.16em] text-muted-2">{t(group.label)}</div>
-              )}
-          {group.athletes.map((a) => (
+          {athletes.map((a) => (
             <Link
               key={a.id}
               onContextMenu={(e) =>
@@ -256,8 +238,6 @@ export function Sidebar({
                 <span title={t("Shared with {team}", { team: a.team.name })} className="ml-auto size-1.5 shrink-0 rounded-full bg-muted-2" />
               )}
             </Link>
-          ))}
-            </div>
           ))}
         </div>
 

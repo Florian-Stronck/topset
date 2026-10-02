@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatDuration, parseDuration, rowMinutes, volumeText } from "@/lib/duration";
+import { formatDuration, parseDuration, restSeconds, rowMinutes, volumeText } from "@/lib/duration";
 
 test("durations read the way coaches write them", () => {
   assert.equal(parseDuration("5:00"), 300);
@@ -37,4 +37,13 @@ test("volume reads as sets of reps, of time, or both", () => {
   assert.equal(volumeText({ sets: 5, reps: null, duration: 180 }), "5 × 3:00");
   assert.equal(volumeText({ sets: 3, reps: 10, duration: 40 }), "3 × 10 / 0:40");
   assert.equal(volumeText({ sets: 3, reps: 8, repsMax: 10 }), "3 × 8–10");
+});
+
+test("rest rests the low end of a range", () => {
+  assert.equal(restSeconds("2-3 min"), 120);
+  assert.equal(restSeconds("90s"), 90);
+  assert.equal(restSeconds("2:00–3:00"), 120);
+  assert.equal(restSeconds("90-120s"), 90);
+  assert.equal(restSeconds("as needed"), null);
+  assert.equal(restSeconds(null), null);
 });

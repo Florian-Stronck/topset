@@ -11,7 +11,7 @@ import { useSyncExternalStore } from "react";
 
 const EVENT = "topset:prefs";
 
-export type Column = "progression" | "notes" | "time" | "tempo" | "rest" | "video";
+export type Column = "progression" | "notes" | "time" | "weight" | "tempo" | "rest" | "video";
 
 export type Prefs = {
   /** Intensity sits right next to reps instead of stretching across the week. */
@@ -20,8 +20,6 @@ export type Prefs = {
   columns: Record<Column, boolean>;
   hideRestDays: boolean;
   sidebarCollapsed: boolean;
-  /** What the intensity cell shows: the weight, the prescription, or both. */
-  cellDisplay: "both" | "weight" | "intensity";
   fontSize: "small" | "medium" | "large";
   /** "system" follows the device's own light or dark setting. */
   theme: "dark" | "light" | "system";
@@ -76,10 +74,9 @@ export type TrackingPrefs = {
 export const PREF_DEFAULTS: Prefs = {
   tightIntensity: false,
   density: "comfortable",
-  columns: { progression: true, notes: true, time: false, tempo: false, rest: false, video: false },
+  columns: { progression: true, notes: true, time: false, weight: true, tempo: false, rest: false, video: false },
   hideRestDays: false,
   sidebarCollapsed: false,
-  cellDisplay: "both",
   fontSize: "medium",
   theme: "dark",
   accent: "#e5365a",

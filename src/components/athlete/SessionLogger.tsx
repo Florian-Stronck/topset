@@ -9,7 +9,7 @@ import { beep, openAudio } from "@/components/athlete/beep";
 import { Trophy } from "@/components/CheckinIcon";
 import type { AthleteRow, AthleteSession } from "@/lib/athlete-queries";
 import { t } from "@/lib/i18n";
-import { formatDuration, parseDuration, volumeText } from "@/lib/duration";
+import { formatDuration, parseDuration, restSeconds, volumeText } from "@/lib/duration";
 import { formatSet, type SetLogData } from "@/lib/setlog";
 
 /** A number as typed on a phone: "82,5" is as good as "82.5"; blank is nothing. */
@@ -70,6 +70,7 @@ export function SessionLogger({
   const [rows, setRows] = useState(session.rows);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+  const [rest, setRest] = useState<{ endAt: number; audio: AudioContext | null } | null>(null);
   const [open, setOpen] = useState<Set<string>>(() => {
     const first = session.rows.find((r) => !finishedRow(r));
     return new Set(first ? [first.id] : []);
@@ -161,23 +162,10 @@ export function SessionLogger({
           {t("Nothing written for this day yet.")}
         </div>
       ) : (
-        sessionsOf(rows).map(({ name, rows: group }) => (
-          <section key={name ?? ""} className={name === null ? "" : "mb-4"}>
-            {name !== null && (
-              <h2 className="mb-3 flex items-baseline justify-between border-b border-border pb-1.5 text-[12px] font-semibold tracking-[0.14em] text-muted">
-                <span>{name.toUpperCase()}</span>
-                <span className="font-normal tabular-nums">
-                  {t("{done}/{of} sets", {
-                    done: group.reduce((n, r) => n + r.logs.filter((l) => l.done).length, 0),
-                    of: group.reduce((n, r) => n + Math.max(1, r.sets ?? 1), 0),
-                  })}
-                </span>
-              </h2>
-            )}
         <ol className="relative">
           {/* The thread the exercises hang from, circle to circle. */}
-          {group.length > 1 && <span aria-hidden className="absolute bottom-8 left-[13px] top-4 w-[2px] rounded bg-accent/70" />}
-          {group.map((row) => (
+          {rows.length > 1 && <span aria-hidden className="absolute bottom-8 left-[13px] top-4 w-[2px] rounded bg-accent/70" />}
+          {rows.map((row) => (
             <ExerciseItem
               key={row.id}
               token={token}
@@ -190,27 +178,14 @@ export function SessionLogger({
               onLog={(i, patch) => setLog(row.id, i, patch)}
               onDrop={(i) => dropSet(row.id, i)}
               onNotes={(notes) => setNotes(row.id, notes)}
+              onRest={(seconds) => setRest((r) => ({ endAt: Date.now() + seconds * 1000, audio: openAudio(r?.audio ?? null) }))}
             />
           ))}
         </ol>
-          </section>
-        ))
       )}
+      {rest && <RestTimer key={rest.endAt} endAt={rest.endAt} audio={rest.audio} onEnd={() => setRest(null)} onAdd={(s) => setRest({ ...rest, endAt: rest.endAt + s * 1000 })} />}
     </div>
   );
-}
-
-/** The day's rows cut into its sessions, in order; one unnamed group when it has fewer than two. */
-function sessionsOf(rows: AthleteRow[]): { name: string | null; rows: AthleteRow[] }[] {
-  const out: { name: string | null; rows: AthleteRow[] }[] = [];
-  for (const row of rows) {
-    const name = row.session?.trim() || null;
-    const last = out[out.length - 1];
-    if (last && last.name === name) last.rows.push(row);
-    else out.push({ name, rows: [row] });
-  }
-  // A day that names one session reads the same as a day that names none.
-  return out.length === 1 ? [{ name: null, rows }] : out;
 }
 
 function ExerciseItem({
@@ -224,6 +199,7 @@ function ExerciseItem({
   onLog,
   onDrop,
   onNotes,
+  onRest,
 }: {
   token: string;
   /** The session's day, which a video is filed under. */
@@ -236,6 +212,8 @@ function ExerciseItem({
   onLog: (setIndex: number, patch: SetPatch) => void;
   onDrop: (setIndex: number) => void;
   onNotes: (notes: string) => void;
+  /** A set was ticked off: rest starts, for this long. */
+  onRest: (seconds: number) => void;
 }) {
   const [extra, setExtra] = useState(0);
   // RPE or RIR, for this exercise: however it was logged before, else however it is written.
@@ -261,6 +239,10 @@ function ExerciseItem({
   const lastLogged = row.logs.reduce((m, l) => Math.max(m, l.setIndex + 1), 0);
   const count = Math.max(planned, lastLogged + extra);
   const timed = row.duration !== null;
+  const restFor = restSeconds(row.restTime);
+  const rested = () => {
+    if (restFor) onRest(restFor);
+  };
 
   /** Ticked off without anything typed means it went as written. */
   const asWritten = (i: number): SetPatch => {
@@ -274,6 +256,7 @@ function ExerciseItem({
     let i = 0;
     while (logOf(i)?.done) i++;
     onLog(i, { ...asWritten(i), seconds });
+    rested();
   }
 
   function toggleDone() {
@@ -414,7 +397,10 @@ function ExerciseItem({
                   unit={u}
                   effort={effort}
                   onLog={(patch) => onLog(i, patch)}
-                  onTick={() => onLog(i, log?.done ? { done: false } : asWritten(i))}
+                  onTick={() => {
+                    onLog(i, log?.done ? { done: false } : asWritten(i));
+                    if (!log?.done) rested();
+                  }}
                   onPr={log?.done ? () => onLog(i, { pr: !log.pr }) : null}
                   onDrop={
                     isExtra
@@ -726,6 +712,57 @@ function RoundTimer({ seconds, onRound }: { seconds: number; onRound: (seconds: 
             {t("Reset")}
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Rest between sets, along the bottom over the tab bar: counts down from the tick that
+ * started it, beeps and buzzes at zero, and goes away. +15 s or Skip while it runs.
+ */
+function RestTimer({
+  endAt,
+  audio,
+  onEnd,
+  onAdd,
+}: {
+  endAt: number;
+  audio: AudioContext | null;
+  onEnd: () => void;
+  onAdd: (seconds: number) => void;
+}) {
+  const [left, setLeft] = useState(() => Math.ceil((endAt - Date.now()) / 1000));
+  const end = useRef(onEnd);
+  useEffect(() => {
+    end.current = onEnd;
+  });
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const ms = endAt - Date.now();
+      if (ms > 0) return setLeft(Math.ceil(ms / 1000));
+      beep(audio);
+      navigator.vibrate?.([300, 120, 300]);
+      end.current();
+    }, 250);
+    return () => clearInterval(id);
+  }, [endAt, audio]);
+
+  const button = "h-10 rounded-xl px-3 text-[14px] font-medium";
+  return (
+    <div className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-20 border-t border-border bg-surface/95 backdrop-blur">
+      <div className="mx-auto flex max-w-[560px] items-center gap-2 px-4 py-2">
+        <span className="text-[11px] tracking-[0.14em] text-muted">{t("REST")}</span>
+        <span className={`flex-1 text-[28px] font-semibold tabular-nums ${left <= 10 ? "text-accent" : ""}`}>
+          {formatDuration(Math.max(0, left))}
+        </span>
+        <button type="button" onClick={() => onAdd(15)} className={`${button} border border-border`}>
+          +15s
+        </button>
+        <button type="button" onClick={onEnd} className={`${button} border border-border text-muted`}>
+          {t("Skip")}
+        </button>
       </div>
     </div>
   );

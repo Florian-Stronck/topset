@@ -167,16 +167,6 @@ function Units({ settings, update }: Props) {
           onChange={(v) => update({ defaultUnit: v as CoachSettings["defaultUnit"] })}
         />
       </Row>
-      <Row label="New athletes are" hint="Fighters get time per round, load and fights up front; lifters get 1RMs and meets.">
-        <Select
-          value={settings.defaultSport}
-          options={[
-            ["LIFTER", t("Lifters")],
-            ["FIGHTER", t("Fighters")],
-          ]}
-          onChange={(v) => update({ defaultSport: v as CoachSettings["defaultSport"] })}
-        />
-      </Row>
       <Row label="Round kg loads to" hint="Every calculated weight snaps to this step.">
         <Select
           value={String(settings.roundKg)}
@@ -464,7 +454,6 @@ function View() {
   const density = usePref("density");
   const columns = usePref("columns");
   const hideRest = usePref("hideRestDays");
-  const cellDisplay = usePref("cellDisplay");
   const fontSize = usePref("fontSize");
   const theme = usePref("theme");
   const accent = usePref("accent");
@@ -473,6 +462,7 @@ function View() {
     progression: "Progression",
     notes: "Coach notes",
     time: "Time per set",
+    weight: "Weight",
     tempo: "Tempo",
     rest: "Rest time",
     video: "Video link",
@@ -505,17 +495,6 @@ function View() {
       </Row>
       <Row label="Hide rest days" hint="A strip of the week's days stays on top; click a rest day there to train on it.">
         <Switch on={hideRest} onChange={(v) => setPref("hideRestDays", v)} />
-      </Row>
-      <Row label="Intensity cell shows">
-        <Select
-          value={cellDisplay}
-          options={[
-            ["both", t("Weight and prescription")],
-            ["weight", t("Weight only")],
-            ["intensity", t("Prescription only")],
-          ]}
-          onChange={(v) => setPref("cellDisplay", v as typeof cellDisplay)}
-        />
       </Row>
       <Row label="Text size">
         <Select

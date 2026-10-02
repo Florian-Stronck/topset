@@ -391,16 +391,6 @@ export const PRESETS: Preset[] = [
     icon: "pill",
     color: "purple",
   },
-  // For fighters: a head knock after sparring is worth asking about every day it happens.
-  { key: "head", label: "Headache or dizziness after sparring", kind: "YESNO", config: {}, icon: "thermometer", color: "red" },
-  {
-    key: "sparred",
-    label: "Sparring today",
-    kind: "SINGLE",
-    config: { options: ["None", "Light", "Hard"] },
-    icon: "heart",
-    color: "red",
-  },
   { key: "notes", label: "Notes", kind: "TEXT", config: {}, icon: "note", color: "purple" },
 ];
 

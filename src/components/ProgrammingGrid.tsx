@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { flushSync } from "react-dom";
 import type { Tier } from "@prisma/client";
 import {
@@ -15,7 +15,6 @@ import {
   restoreRow,
   restoreWeek,
   duplicateRow,
-  setRowSessions,
   insertRow,
   moveRow,
   pasteRows,
@@ -43,7 +42,6 @@ import { maxesOf, resolveDay } from "@/lib/intensity";
 import { dayName } from "@/lib/days";
 import { formatDuration, parseDuration } from "@/lib/duration";
 import { parseReps, repsText } from "@/lib/reps";
-import { intensitiesFor, newRowFor } from "@/lib/sport";
 import { formatDate, weekdayOf, weekdayOfDay } from "@/lib/dates";
 import { GRID_MIN_WIDTH, SHELL_MAX_WIDTH } from "@/lib/layout";
 import { colorOfTarget, setPref, tierShade, usePref, togglePref, type Column } from "@/lib/prefs";
@@ -64,13 +62,14 @@ import { t, weekdayShort } from "@/lib/i18n";
 import { tutorialDid } from "@/components/Tutorial";
 
 /** The week's columns in the order they sit, left to right. */
-type WeekCol = "sets" | "reps" | "time" | "intensity" | "tempo" | "rest" | "video" | "notes";
+type WeekCol = "sets" | "reps" | "time" | "intensity" | "load" | "tempo" | "rest" | "video" | "notes";
 
 const WEEK_COL_LABEL: Record<WeekCol, string> = {
   sets: "SETS",
   reps: "REPS",
   time: "TIME",
   intensity: "INTENSITY",
+  load: "WEIGHT",
   tempo: "TEMPO",
   rest: "REST",
   video: "VIDEO",
@@ -91,6 +90,7 @@ const COL_FIELDS: Record<NavKey, readonly (keyof RowTemplate)[]> = {
   reps: ["reps", "repsMax"],
   time: ["duration"],
   intensity: ["intensityType", "intensity", "intensityMax", "rampStep"],
+  load: ["load"],
   tempo: ["tempo"],
   rest: ["restTime"],
   video: ["videoUrl"],
@@ -117,6 +117,7 @@ let rowClip: RowClip | null = null;
 function gridLayout(columns: Record<Column, boolean>, tight: boolean, timed: boolean) {
   // TIME shows when switched on, or on its own once any row of the phase is timed.
   const cols: WeekCol[] = ["sets", "reps", ...(columns.time || timed ? (["time"] as const) : []), "intensity"];
+  if (columns.weight) cols.push("load");
   if (columns.tempo) cols.push("tempo");
   if (columns.rest) cols.push("rest");
   if (columns.video) cols.push("video");
@@ -127,7 +128,9 @@ function gridLayout(columns: Record<Column, boolean>, tight: boolean, timed: boo
     reps: "56px",
     time: "64px",
     // The kind, the number and the weight they come to, side by side.
-    intensity: tight || !columns.notes ? "200px" : "minmax(184px,1fr)",
+    intensity: "128px",
+    // The weight it all comes to, or a ramp ("90→100 kg").
+    load: tight || !columns.notes ? "112px" : "minmax(112px,1fr)",
     tempo: "76px",
     rest: "76px",
     video: "140px",
@@ -297,7 +300,7 @@ export function ProgrammingGrid({
       edit("move day", () => swapDays(source.id, target.id), () => swapDays(source.id, target.id));
       return;
     }
-    const create = source.rows.filter((r) => !isBlank(r)).map((r) => ({ id: crypto.randomUUID(), template: { ...rowTemplate(r), session: r.session } }));
+    const create = source.rows.filter((r) => !isBlank(r)).map((r) => ({ id: crypto.randomUUID(), template: rowTemplate(r) }));
     // An empty or rest day takes the copied day's name too.
     const takeName = target.rest || target.rows.every(isBlank);
     edit(
@@ -350,13 +353,10 @@ export function ProgrammingGrid({
   const targetColors = usePref("targetColors");
   const columns = usePref("columns");
   const compact = usePref("density") === "compact";
-  const cellDisplay = usePref("cellDisplay");
   const hideRestDays = usePref("hideRestDays");
   const { tiers, targets } = useSettings().settings;
   const timed = useMemo(() => block.weeks.some((w) => w.days.some((d) => d.rows.some((r) => r.duration !== null))), [block]);
-  // A fighter's rounds need TIME from the first row on.
-  const fighter = athlete.sport === "FIGHTER";
-  const layout = useMemo(() => gridLayout(columns, tightIntensity, timed || fighter), [columns, tightIntensity, timed, fighter]);
+  const layout = useMemo(() => gridLayout(columns, tightIntensity, timed), [columns, tightIntensity, timed]);
   const { template, cols, navKeys } = layout;
   const NAV_COLS = navKeys.length;
 
@@ -722,69 +722,6 @@ export function ProgrammingGrid({
    * One row action, named by its command id — the keys, the palette and the right-click
    * menu all come through here. `index` is the row's nav slot.
    */
-  /** Moves rows into sessions (null: out of any) as one undoable edit. */
-  function sessionEdit(label: string, day: DayData, next: Map<string, string | null>) {
-    if (next.size === 0) return;
-    const prev = new Map(day.rows.filter((r) => next.has(r.id)).map((r) => [r.id, r.session]));
-    const apply = (m: Map<string, string | null>) => {
-      setBlock((b) => mapRows(b, (r) => (m.has(r.id) ? { ...r, session: m.get(r.id)! } : r)));
-      const groups = new Map<string | null, string[]>();
-      for (const [id, s] of m) groups.set(s, [...(groups.get(s) ?? []), id]);
-      return Promise.all([...groups].map(([s, ids]) => setRowSessions(ids, s)));
-    };
-    void apply(next);
-    history.push({ label, undo: () => apply(prev), redo: () => apply(next) });
-  }
-
-  /**
-   * A divider above this row: a day with no sessions yet becomes AM and PM, split here;
-   * otherwise the session this row is in is cut in two, the lower half with a new name.
-   */
-  function splitSession(day: DayData, index: number) {
-    const rows = day.rows;
-    const next = new Map<string, string | null>();
-    if (!rows.some((r) => r.session !== null)) {
-      if (index === 0) return;
-      rows.forEach((r, i) => next.set(r.id, i < index ? t("AM") : t("PM")));
-    } else {
-      const current = rows[index].session;
-      if (index === 0 || rows[index - 1].session !== current) return;
-      const names = new Set(rows.map((r) => r.session));
-      let n = names.size + 1;
-      while (names.has(t("Session {n}", { n }))) n++;
-      for (let i = index; i < rows.length && rows[i].session === current; i++) next.set(rows[i].id, t("Session {n}", { n }));
-    }
-    sessionEdit("new session", day, next);
-  }
-
-  /** The rows of the session starting at `index`. */
-  function sessionAt(day: DayData, index: number) {
-    const name = day.rows[index].session;
-    const out: RowData[] = [];
-    for (let i = index; i < day.rows.length && day.rows[i].session === name; i++) out.push(day.rows[i]);
-    return out;
-  }
-
-  function renameSession(day: DayData, index: number, name: string | null) {
-    const clean = name?.trim() || null;
-    if (clean === day.rows[index].session) return;
-    sessionEdit("rename session", day, new Map(sessionAt(day, index).map((r) => [r.id, clean])));
-  }
-
-  /** Takes a divider out: its rows join the session above, and a day left with one session has none. */
-  function removeSession(day: DayData, index: number) {
-    const joined = index > 0 ? day.rows[index - 1].session : (day.rows.find((r) => r.session !== day.rows[0].session)?.session ?? null);
-    const moving = new Set(sessionAt(day, index).map((r) => r.id));
-    const after = day.rows.map((r) => (moving.has(r.id) ? joined : r.session));
-    const single = new Set(after).size <= 1;
-    const next = new Map<string, string | null>();
-    day.rows.forEach((r, i) => {
-      const s = single ? null : after[i];
-      if (s !== r.session) next.set(r.id, s);
-    });
-    sessionEdit("remove session", day, next);
-  }
-
   function rowAction(id: string, index: number, handled: () => void = () => {}): boolean {
     const slot = nav.slots.get(index);
     if (!slot) return false;
@@ -837,13 +774,6 @@ export function ProgrammingGrid({
         );
       }
 
-      case "row-session": {
-        if (!row) return false;
-        handled();
-        splitSession(day, day.rows.indexOf(row));
-        return true;
-      }
-
       case "row-delete": {
         if (!row) return false;
         handled();
@@ -864,8 +794,7 @@ export function ProgrammingGrid({
 
       case "meet-fill": {
         const meet = meetByDay.get(day.id);
-        // A fight has no attempts to write.
-        if (!meet || meet.kind === "FIGHT") return false;
+        if (!meet) return false;
         return act(() => {
           void fillMeet(day.id, meet.id);
         });
@@ -1073,7 +1002,6 @@ export function ProgrammingGrid({
       dayId,
       order: row.order,
       fromId: row.fromId,
-      session: row.session,
     }));
     // What the athlete had logged on each, in this week or the others the sync reaches.
     const lost = new Map<string, LoggedRow[]>();
@@ -1123,7 +1051,7 @@ export function ProgrammingGrid({
         weeks: b.weeks.map((w) => ({
           ...w,
           days: w.days.map((d) =>
-            d.id === day.id ? { ...d, rows: [...d.rows, blankRow(id, d, athlete.sport)] } : d,
+            d.id === day.id ? { ...d, rows: [...d.rows, blankRow(id, d)] } : d,
           ),
         })),
       }));
@@ -1277,7 +1205,7 @@ export function ProgrammingGrid({
                 onSelect: () => materialize(day, 1),
               },
               ...dayItems,
-              ...(meet?.kind === "MEET"
+              ...(meet
                 ? [
                     {
                       label: t("Fill a meet day with its attempts"),
@@ -1329,7 +1257,7 @@ export function ProgrammingGrid({
                     title={t("{name} — competition day", { name: meet.name })}
                     className="rounded border border-accent/60 bg-accent-soft px-1.5 py-0.5 text-[11px] tracking-wider text-accent"
                   >
-                    {meet.kind === "FIGHT" ? t("FIGHT") : "MEET"} · {meet.name}
+                    MEET · {meet.name}
                   </span>
                 )}
                 {day.rest && (
@@ -1413,19 +1341,9 @@ export function ProgrammingGrid({
                     const own = ghost ? null : colorOfTarget(targetColors, row.target);
                     const tint = own === null ? null : tierShade(own, row.tier);
                     const quietBadge = !tint && row.tier === "ACCESSORY";
-                    // A day split into sessions shows a divider where each one starts.
-                    const divider =
-                      day.rows.some((x) => x.session !== null) && (i === 0 || day.rows[i - 1].session !== row.session);
                     return (
-                      <Fragment key={row.id}>
-                      {divider && (
-                        <SessionDivider
-                          name={row.session}
-                          onRename={(name) => renameSession(day, i, name)}
-                          onRemove={() => removeSession(day, i)}
-                        />
-                      )}
                       <div
+                        key={row.id}
                         onContextMenu={(e) => {
                           const k = (id: string) => {
                             const key = primaryKey(id);
@@ -1461,17 +1379,14 @@ export function ProgrammingGrid({
                               disabled: clipboard === null,
                             },
                             "divider",
+                            ...(row.load !== null
+                              ? [{ label: t("Recalculate the weight"), onSelect: () => patchCell(row.id, { load: null }) }, "divider" as const]
+                              : []),
                             { label: t("Move the row up"), hint: k("row-up"), onSelect: run("row-up"), disabled: i === 0 },
                             { label: t("Move the row down"), hint: k("row-down"), onSelect: run("row-down"), disabled: i === day.rows.length - 1 },
                             "divider",
                             { label: day.rest ? t("Make it a training day") : t("Make it a rest day"), hint: k("day-rest"), onSelect: run("day-rest") },
-                            {
-                              label: t("Start a new session here"),
-                              hint: k("row-session"),
-                              onSelect: run("row-session"),
-                              disabled: divider || (i === 0 && !day.rows.some((x) => x.session !== null)),
-                            },
-                            ...(meetByDay.get(day.id)?.kind === "MEET"
+                            ...(meetByDay.get(day.id)
                               ? [{ label: t("Fill a meet day with its attempts"), hint: k("meet-fill"), onSelect: run("meet-fill") }]
                               : []),
                             ...dayItems,
@@ -1562,7 +1477,6 @@ export function ProgrammingGrid({
                           <ExerciseInput
                             value={row.exercise}
                             history={exerciseHistory}
-                            fighter={fighter}
                             className={`font-medium ${ghost ? "keep-placeholder" : ""}`}
                             onCommit={(v, picked) => commitExercise(row, v, picked)}
                           />
@@ -1593,15 +1507,6 @@ export function ProgrammingGrid({
                             weight: null,
                             ramp: [],
                           };
-                          // The kind and the number are typed into the cell itself; beside them, the
-                          // weight they work out to — unless the coach asked for the prescription
-                          // alone, or it would only repeat a fixed weight.
-                          const shown =
-                            cellDisplay === "intensity" || resolved.weight === null
-                              ? null
-                              : cell.intensityType === "WEIGHT" && !cell.rampStep
-                                ? null
-                                : resolved.label;
 
                           return (
                             <div key={w} className="contents">
@@ -1658,13 +1563,25 @@ export function ProgrammingGrid({
                                       className={`${ghostHide} ${last}`}
                                     >
                                       <IntensityEditor
-                                        kinds={intensitiesFor(athlete.sport)}
                                         value={cell}
-                                        resolved={shown}
                                         onCommit={(v) => {
                                           patchCell(row.id, v);
                                           tutorialDid("intensity");
                                         }}
+                                      />
+                                    </GridCell>
+                                  );
+                                }
+                                if (col === "load") {
+                                  // Shows what the intensity works out to; a number typed in wins (in the
+                                  // accent), and clearing it goes back to the calculated weight.
+                                  return (
+                                    <GridCell key={col} nav={at} className={`${ghostHide} ${last}`}>
+                                      <NumberInput
+                                        value={cell.load}
+                                        placeholder={resolved.weight === null ? "—" : resolved.label}
+                                        className={`tabular-nums ${cell.load === null ? "placeholder:!text-foreground" : "font-medium text-accent"}`}
+                                        onCommit={(v) => patchCell(row.id, { load: v })}
                                       />
                                     </GridCell>
                                   );
@@ -1707,7 +1624,6 @@ export function ProgrammingGrid({
                         })}
 
                       </div>
-                      </Fragment>
                     );
                   })}
 
@@ -1838,6 +1754,7 @@ function rowTemplate(row: RowData): RowTemplate {
     restTime: row.restTime,
     videoUrl: row.videoUrl,
     duration: row.duration,
+    load: row.load,
   };
 }
 
@@ -1847,8 +1764,8 @@ function isBlank(row: RowData | undefined) {
 }
 
 /** A row's optimistic shape, matching what `addRow` writes on the server. */
-function blankRow(id: string, day: DayData, sport: AthleteData["sport"] = "LIFTER"): RowData {
-  const newRow = newRowFor(activeSettings().newRow, sport);
+function blankRow(id: string, day: DayData): RowData {
+  const newRow = activeSettings().newRow;
   return {
     id,
     order: (day.rows[day.rows.length - 1]?.order ?? -1) + 1,
@@ -1856,8 +1773,6 @@ function blankRow(id: string, day: DayData, sport: AthleteData["sport"] = "LIFTE
     tier: newRow.tier,
     target: newRow.target,
     exercise: "",
-    // Matches `addRow`: a new row joins the session the day ends on.
-    session: day.rows[day.rows.length - 1]?.session ?? null,
     fromId: null,
     sets: newRow.sets,
     reps: newRow.reps,
@@ -1871,6 +1786,7 @@ function blankRow(id: string, day: DayData, sport: AthleteData["sport"] = "LIFTE
     restTime: null,
     videoUrl: null,
     duration: null,
+    load: null,
     actualWeight: null,
     performedRpe: null,
     athleteNotes: null,
@@ -1935,37 +1851,6 @@ function GhostRow({
           {cell(k + 2, col === "notes" ? t("add note") : "—", col === "notes" ? "text-left" : "text-center")}
         </GridCell>
       ))}
-    </div>
-  );
-}
-
-/** Where one of a day's sessions starts: its name, to rename in place, and × to merge it up. */
-function SessionDivider({
-  name,
-  onRename,
-  onRemove,
-}: {
-  name: string | null;
-  onRename: (name: string | null) => void;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="border-b border-border/60 bg-surface-2/50">
-      <div className="sticky left-0 flex w-[336px] items-center gap-2 px-2 py-1">
-        <span className="text-[10px] tracking-[0.14em] text-muted-2">{t("SESSION")}</span>
-        <span className="min-w-0 flex-1">
-          <TextInput value={name} placeholder={t("name it")} className="!px-0 !py-0 !text-[12px] font-semibold" onCommit={onRename} />
-        </span>
-        <button
-          type="button"
-          title={t("Remove the divider")}
-          aria-label={t("Remove the divider")}
-          onClick={onRemove}
-          className="shrink-0 px-1 text-[13px] text-muted-2 hover:text-accent"
-        >
-          ×
-        </button>
-      </div>
     </div>
   );
 }
@@ -2350,8 +2235,6 @@ function Header({
         <span className="text-[12px] font-semibold">{t("Week {n}", { n: week })}</span>
         <span className="text-[11px] text-muted-2">{weekDate(startDate, week)}</span>
 
-        {/* A fighter's phase leaves the 1RMs out until some are on file. */}
-        {(athlete.sport === "LIFTER" || MAX_FIELDS.some(({ key }) => block[key] !== null || athlete[key] !== null)) && (
         <div
           data-tour="maxes"
           className="ml-auto flex items-center gap-1"
@@ -2379,7 +2262,6 @@ function Header({
           ))}
           <span className="text-[11px] text-muted-2">{athlete.unit === "LB" ? "lb" : "kg"}</span>
         </div>
-        )}
       </div>
     </div>
   );

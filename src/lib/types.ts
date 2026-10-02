@@ -1,4 +1,4 @@
-import type { IntensityType, Sport, Tier, Unit } from "@prisma/client";
+import type { IntensityType, Tier, Unit } from "@prisma/client";
 import type { Rule } from "@/lib/progression";
 import type { SetLogData } from "@/lib/setlog";
 
@@ -18,6 +18,8 @@ export type Prescription = {
   videoUrl: string | null;
   /** Seconds per set, for a timed row. */
   duration: number | null;
+  /** A weight typed over the one the intensity works out to; null follows the intensity. */
+  load: number | null;
   actualWeight: number | null;
   performedRpe: number | null;
   athleteNotes: string | null;
@@ -30,8 +32,6 @@ export type RowData = Prescription & {
   tier: Tier;
   target: string;
   exercise: string;
-  /** Which of the day's sessions the row is in; null when the day has one. */
-  session: string | null;
   /** The same exercise in the week before, which progressions walk forward from. */
   fromId: string | null;
   /** Sets the athlete checked off in the athlete app. Absent on rows made on screen. */
@@ -77,7 +77,6 @@ export type AthleteData = {
   id: string;
   name: string;
   unit: Unit;
-  sport: Sport;
   squat1RM: number | null;
   bench1RM: number | null;
   dead1RM: number | null;

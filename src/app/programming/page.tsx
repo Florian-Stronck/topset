@@ -47,7 +47,6 @@ export default async function ProgrammingPage({
     id: meet.id,
     name: meet.name,
     date: meet.date.toISOString().slice(0, 10),
-    kind: meet.kind,
     attempts: meet.attempts.map((a) => ({ lift: a.lift, number: a.number, weight: a.weight })),
   }));
 

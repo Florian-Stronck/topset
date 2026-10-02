@@ -178,13 +178,10 @@ function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <SportToggle sport={athlete.sport} onChange={(sport) => patch({ sport })} />
           <UnitToggle unit={athlete.unit} onChange={(u) => patch({ unit: u })} />
         </div>
       </div>
 
-      {/* A fighter's 1RMs stay out of the way until some are on file. */}
-      {(athlete.sport === "LIFTER" || total > 0) && (
       <div data-maxes className="mt-3 flex items-center gap-2">
         {MAXES.map((m) => (
           <div key={m.key} className="flex-1 rounded-lg border border-border bg-surface-2 px-2 py-1.5">
@@ -204,7 +201,6 @@ function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams
           </div>
         </div>
       </div>
-      )}
 
       <CheckinQuestions athleteId={athlete.id} questions={athlete.questions} />
 
@@ -258,25 +254,6 @@ function TeamPicker({ athlete, teams }: { athlete: RosterEntry; teams: { id: str
         ))}
       </select>
     </label>
-  );
-}
-
-/** Lifter or fighter: what the screens lead with for this athlete. */
-export function SportToggle({ sport, onChange }: { sport: AthleteData["sport"]; onChange: (s: AthleteData["sport"]) => void }) {
-  return (
-    <div role="group" aria-label={t("Trains for")} className="flex shrink-0 overflow-hidden rounded-full border border-border text-[11px]">
-      {(["LIFTER", "FIGHTER"] as const).map((s) => (
-        <button
-          key={s}
-          type="button"
-          aria-pressed={s === sport}
-          onClick={() => s !== sport && onChange(s)}
-          className={`px-2.5 py-1 ${s === sport ? "bg-accent-soft font-medium text-accent" : "text-muted-2 hover:text-foreground"}`}
-        >
-          {s === "LIFTER" ? t("Lifter") : t("Fighter")}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -360,11 +337,10 @@ export function NewAthleteButton({
   const router = useRouter();
   const [open, setOpen] = useState(initiallyOpen);
   const [pending, setPending] = useState(false);
-  const { defaultUnit, defaultSport } = useSettings().settings;
+  const { defaultUnit } = useSettings().settings;
   const blank = () => ({
     name: "",
     unit: defaultUnit as AthleteData["unit"],
-    sport: defaultSport as AthleteData["sport"],
     squat1RM: "",
     bench1RM: "",
     dead1RM: "",
@@ -384,7 +360,6 @@ export function NewAthleteButton({
     const id = await createAthlete({
       name: form.name,
       unit: form.unit,
-      sport: form.sport,
       squat1RM: num(form.squat1RM),
       bench1RM: num(form.bench1RM),
       dead1RM: num(form.dead1RM),
@@ -427,10 +402,6 @@ export function NewAthleteButton({
             className={`mt-2 ${field}`}
           />
 
-          <div className="mt-1.5">
-            <SportToggle sport={form.sport} onChange={(sport) => setForm({ ...form, sport })} />
-          </div>
-
           <select
             value={form.unit}
             onChange={(e) => setForm({ ...form, unit: e.target.value as AthleteData["unit"] })}
@@ -440,7 +411,7 @@ export function NewAthleteButton({
             <option value="LB">{t("lb")}</option>
           </select>
 
-          {form.sport === "LIFTER" && <div className="mt-1.5 flex gap-1.5">
+          <div className="mt-1.5 flex gap-1.5">
             {(["squat1RM", "bench1RM", "dead1RM"] as const).map((k, i) => (
               <input
                 key={k}
@@ -451,7 +422,7 @@ export function NewAthleteButton({
                 className={field}
               />
             ))}
-          </div>}
+          </div>
 
           <div className="mt-2.5 flex justify-end gap-1.5">
             <button

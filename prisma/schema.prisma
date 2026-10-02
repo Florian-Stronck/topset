@@ -80,8 +80,6 @@ model Athlete {
   coach    Coach   @relation(fields: [coachId], references: [id], onDelete: Cascade)
   name     String
   unit     Unit    @default(KG)
-  /// What the athlete trains for. Decides what the screens lead with, never what data is kept.
-  sport    Sport   @default(LIFTER)
   squat1RM Float?
   bench1RM Float?
   dead1RM  Float?
@@ -160,15 +158,6 @@ model Meet {
   weightClass String?
   bodyweight  Float?
   date        DateTime
-  /// A powerlifting meet with nine attempts, or a fight.
-  kind        MeetKind  @default(MEET)
-  // A fight's own details; a meet leaves them empty.
-  opponent     String?
-  weighIn      DateTime?
-  /// The weight to make at the weigh-in, in the athlete's unit.
-  targetWeight Float?
-  /// Free text: "W — TKO R2".
-  outcome      String?
   createdAt   DateTime  @default(now())
   attempts    Attempt[]
 
@@ -267,6 +256,9 @@ model ExerciseRow {
   intensity     Float?
   intensityMax  Float?
   rampStep      Float?
+  /// The weight to use, typed over whatever the intensity works out to; null follows the
+  /// intensity. Lets a row carry RPE 8 and 60 kg, or 60 s with 24 kg.
+  load          Float?
   coachNotes    String?
   /// e.g. "3-1-X", free text.
   tempo         String?
@@ -275,9 +267,6 @@ model ExerciseRow {
   videoUrl      String?
   /// Seconds per set — a round, an interval. Null for a row counted in reps alone.
   duration      Int?
-  /// Which of the day's sessions the row is in ("AM", "PM", "Sparring"); null when the
-  /// day has only one. Rows of a session sit together in `order`.
-  session       String?
 
   // What the athlete actually did.
   actualWeight Float?
@@ -558,11 +547,6 @@ enum Unit {
   LB
 }
 
-enum Sport {
-  LIFTER
-  FIGHTER
-}
-
 enum Tier {
   PRIMARY
   SECONDARY
@@ -576,11 +560,6 @@ enum ProgField {
   REPS
   INTENSITY
   DURATION
-}
-
-enum MeetKind {
-  MEET
-  FIGHT
 }
 
 enum ProgOp {

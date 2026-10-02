@@ -268,7 +268,7 @@ export async function dailyNotices(now = new Date()): Promise<{ sent: number }> 
   for (const [athleteId, theirs] of byAthlete) {
     const athlete = await prisma.athlete.findUnique({
       where: { id: athleteId },
-      select: { id: true, coachId: true, name: true, unit: true, sport: true, squat1RM: true, bench1RM: true, dead1RM: true, accessToken: true },
+      select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, accessToken: true },
     });
     if (!athlete?.accessToken) continue;
     const token = athlete.accessToken;

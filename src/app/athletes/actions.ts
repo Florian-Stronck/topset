@@ -2,7 +2,7 @@
 
 import { assertCoach } from "@/lib/role";
 import { revalidatePath } from "next/cache";
-import type { IntensityType, Sport, Tier, Unit } from "@prisma/client";
+import type { IntensityType, Tier, Unit } from "@prisma/client";
 import { applyAllProgressions } from "@/app/programming/actions";
 import { loadSettings } from "@/lib/coach-settings";
 import { snapStart } from "@/lib/dates";
@@ -20,7 +20,6 @@ function revalidateAll() {
 export async function createAthlete(input: {
   name: string;
   unit: Unit;
-  sport?: Sport;
   squat1RM?: number | null;
   bench1RM?: number | null;
   dead1RM?: number | null;
@@ -36,7 +35,6 @@ export async function createAthlete(input: {
       coachId: coach.id,
       name: input.name.trim() || "New athlete",
       unit: input.unit,
-      sport: input.sport === "FIGHTER" ? "FIGHTER" : "LIFTER",
       squat1RM: input.squat1RM ?? null,
       bench1RM: input.bench1RM ?? null,
       dead1RM: input.dead1RM ?? null,
@@ -195,7 +193,6 @@ export async function updateAthleteProfile(
   patch: {
     name?: string;
     unit?: Unit;
-    sport?: Sport;
     squat1RM?: number | null;
     bench1RM?: number | null;
     dead1RM?: number | null;
@@ -388,7 +385,7 @@ export async function copyProgram(
                       restTime: row.restTime,
                       videoUrl: row.videoUrl,
                       duration: row.duration ?? null,
-                      session: row.session ?? null,
+                      load: row.load ?? null,
                       rules: {
                         create: row.rules.map((rule) => ({
                           order: rule.order,

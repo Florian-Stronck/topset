@@ -30,7 +30,6 @@ export type AthleteSummary = {
   id: string;
   name: string;
   unit: "KG" | "LB";
-  sport?: "LIFTER" | "FIGHTER";
   squat1RM: number | null;
   bench1RM: number | null;
   dead1RM: number | null;

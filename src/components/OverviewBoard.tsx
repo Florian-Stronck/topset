@@ -10,7 +10,7 @@ import { formatDate } from "@/lib/dates";
 import { Trophy } from "@/components/CheckinIcon";
 
 /** What kind of thing needs doing, for the counts across the top. */
-export type IssueCategory = "review" | "program" | "training" | "wellness" | "weight" | "load" | "link";
+export type IssueCategory = "review" | "program" | "training" | "wellness" | "weight" | "link";
 
 /** Something the coach should do for an athlete, and the button that goes and does it. */
 export type Issue = {
@@ -25,7 +25,6 @@ export type Issue = {
 export type BoardRow = {
   id: string;
   name: string;
-  sport: "LIFTER" | "FIGHTER";
   unit: string;
   /** Tracking, at the phase and week the athlete is in. */
   href: string;
@@ -47,9 +46,6 @@ export type BoardRow = {
   bodyweight: { weight: number; change7: number | null; age: number | null; overClass: number | null } | null;
   meet: {
     name: string;
-    fight: boolean;
-    /** A fight's opponent. */
-    opponent: string | null;
     days: number;
     weightClass: string | null;
     limit: number | null;
@@ -60,8 +56,6 @@ export type BoardRow = {
   readiness: { score: number; day: string } | null;
   /** Active injuries, worst first. */
   injuries: { label: string; severity: number }[];
-  /** A fighter's acute:chronic load today. */
-  load: number | null;
   issues: Issue[];
 };
 
@@ -71,7 +65,6 @@ const CATEGORIES: { id: IssueCategory; label: string }[] = [
   { id: "training", label: "Training" },
   { id: "wellness", label: "Wellness" },
   { id: "weight", label: "Weight" },
-  { id: "load", label: "Load" },
   { id: "link", label: "Check-in links" },
 ];
 
@@ -260,9 +253,6 @@ function AthleteCard({ row, week }: { row: BoardRow; week: { ymd: string; day: s
           <span className="min-w-0">
             <span className="flex items-center gap-1.5">
               <span className="truncate text-[14px] font-semibold group-hover:text-accent">{row.name}</span>
-              <span className="shrink-0 rounded bg-surface-3 px-1 py-px text-[9px] font-semibold tracking-wider text-muted-2">
-                {row.sport === "FIGHTER" ? t("FIGHTER") : t("LIFTER")}
-              </span>
               {row.prs > 0 && (
                 <span
                   title={t("{n} PR this week", { n: row.prs })}
@@ -325,7 +315,7 @@ function AthleteCard({ row, week }: { row: BoardRow; week: { ymd: string; day: s
   );
 }
 
-/** The athlete's state in a few words each: readiness, weight, injuries, load, what's next. */
+/** The athlete's state in a few words each: readiness, weight, injuries, what's next. */
 function Chips({ row }: { row: BoardRow }) {
   const chip = (key: string, body: ReactNode, tone: "plain" | "warn" | "bad" | "ok" = "plain", title?: string) => (
     <span
@@ -385,25 +375,13 @@ function Chips({ row }: { row: BoardRow }) {
     );
   }
 
-  if (row.load !== null) {
-    out.push(
-      chip(
-        "load",
-        t("Load {n}×", { n: row.load }),
-        row.load > 1.5 ? "bad" : row.load > 1.3 ? "warn" : "plain",
-        t("The last 7 days against the weekly average of the last 28"),
-      ),
-    );
-  }
-
   if (row.meet) {
     const m = row.meet;
     out.push(
       chip(
         "meet",
         <>
-          {m.fight ? t("Fight") : t("Meet")} {m.days === 0 ? t("today") : t("in {n}d", { n: m.days })}
-          {m.opponent ? ` · ${t("vs {name}", { name: m.opponent })}` : ""}
+          {t("Meet")} {m.days === 0 ? t("today") : t("in {n}d", { n: m.days })}
           {m.projected !== null && m.limit !== null && ` · → ${m.projected} ${row.unit}`}
         </>,
         m.projected !== null && m.limit !== null && m.projected > m.limit ? "warn" : m.days <= 14 ? "ok" : "plain",

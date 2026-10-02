@@ -17,9 +17,8 @@ import {
   trainingFlags,
   type FlagAction,
 } from "@/lib/overview";
-import { getActiveInjuries, getBodyweights, getCheckins, getNextMeets, getOverview, getRecentCheckins, getRecentPrs, getTimedRows, getTrainingWindow, getUnreviewed } from "@/lib/queries";
+import { getActiveInjuries, getBodyweights, getCheckins, getNextMeets, getOverview, getRecentCheckins, getRecentPrs, getTrainingWindow, getUnreviewed } from "@/lib/queries";
 import { injuryLabel } from "@/lib/injuries";
-import { acwr, acwrZone, dailyLoad } from "@/lib/load";
 import { latestReadiness } from "@/lib/checkins";
 import { formatEffort } from "@/lib/setlog";
 import { Trophy } from "@/components/CheckinIcon";
@@ -74,14 +73,6 @@ export default async function OverviewPage() {
     getActiveInjuries(ids, today),
   ]);
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  // Acute:chronic load for the fighters, the only ones whose load is counted in minutes.
-  const fighterLoad = new Map(
-    await Promise.all(
-      athletes
-        .filter((a) => a.sport === "FIGHTER")
-        .map(async (a) => [a.id, acwr(dailyLoad(await getTimedRows(a.id)), today)] as const),
-    ),
-  );
   const linksOn = syncEnabled();
 
   const rows: BoardRow[] = athletes.map((athlete) => {
@@ -141,17 +132,6 @@ export default async function OverviewPage() {
       urgent: flag.urgent ?? false,
       fix: hrefFor[flag.action],
     }));
-    // A fighter's load jumping well past the last month is worth a look before it hurts.
-    const ratio = fighterLoad.get(athlete.id) ?? null;
-    if (ratio !== null && acwrZone(ratio) === "spike") {
-      issues.push({
-        key: `${athlete.id}-load`,
-        text: t("Load spike: {n}× the last month", { n: ratio }),
-        category: "load",
-        urgent: true,
-        fix: { label: t("See load"), href: `/tracking?athlete=${athlete.id}&view=load` },
-      });
-    }
     // A bad injury, or a knock to the head, is worth a word before the next session.
     const hurt = injuries.get(athlete.id) ?? [];
     for (const injury of hurt.filter((i) => i.severity >= 4 || i.area === "head")) {
@@ -170,14 +150,12 @@ export default async function OverviewPage() {
     return {
       id: athlete.id,
       name: athlete.name,
-      sport: athlete.sport ?? "LIFTER",
       unit,
       href: review,
       running: window?.status === "active",
       issues,
       readiness: readiness?.score != null ? { score: readiness.score, day: readiness.day } : null,
       injuries: hurt.map((i) => ({ label: injuryLabel(i), severity: i.severity })),
-      load: ratio,
       prs: prs.filter((p) => p.athleteId === athlete.id && p.loggedAt >= weekAgo).length,
       phase:
         block && window
@@ -205,8 +183,6 @@ export default async function OverviewPage() {
             },
       meet: nextMeet && {
         name: nextMeet.name,
-        fight: meet?.kind === "FIGHT",
-        opponent: meet?.opponent ?? null,
         days: nextMeet.days,
         weightClass: nextMeet.weightClass,
         limit: nextMeet.limit,

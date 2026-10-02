@@ -138,6 +138,22 @@ export function CommandCenter() {
         keywords: "dark light colour color mode",
         run: () => setPref("theme", resolveTheme(getPref("theme")) === "dark" ? "light" : "dark"),
       },
+      {
+        id: "view-density",
+        group: "View",
+        title: getPref("density") === "compact" ? t("Comfortable row spacing") : t("Compact row spacing"),
+        keywords: "dense tight rows spacing padding",
+        run: () => setPref("density", getPref("density") === "compact" ? "comfortable" : "compact"),
+      },
+      ...(["small", "medium", "large"] as const)
+        .filter((size) => size !== getPref("fontSize"))
+        .map((size) => ({
+          id: `view-text-${size}`,
+          group: "View",
+          title: t(size === "small" ? "Small text" : size === "medium" ? "Medium text" : "Large text"),
+          keywords: "font size zoom bigger smaller text",
+          run: () => setPref("fontSize", size),
+        })),
     ],
     // Titles follow the prefs they toggle; the palette re-reads commands each opening.
     // openPalette is new every render and only reads what is listed here — depending on

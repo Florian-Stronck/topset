@@ -27,6 +27,11 @@ export function parseDuration(text: string): number | null {
   return positive(Math.round(n <= 30 ? n * 60 : n));
 }
 
+/** Rest as the coach wrote it, in seconds: a range rests its low end ("2-3 min" → 120). */
+export function restSeconds(text: string | null): number | null {
+  return text ? parseDuration(text.replace(/\s*[-–\/]\s*[\d.:]+/, "")) : null;
+}
+
 const positive = (n: number) => (n > 0 && n <= 24 * 3600 ? n : null);
 
 /** 300 → "5:00", 45 → "0:45", 3900 → "1:05:00". */

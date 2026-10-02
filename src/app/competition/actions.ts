@@ -2,7 +2,7 @@
 
 import { assertCoach } from "@/lib/role";
 import { revalidatePath } from "next/cache";
-import type { AttemptResult, MeetKind, MeetLift } from "@prisma/client";
+import type { AttemptResult, MeetLift } from "@prisma/client";
 import { best, MEET_LIFTS, maxFor, planned } from "@/lib/competition";
 import { prisma } from "@/lib/prisma";
 
@@ -12,37 +12,27 @@ function revalidateAll() {
   revalidatePath("/programming");
 }
 
-/**
- * A meet is created with its nine empty attempts, so the card is never half-built. A
- * fight has none: it is a date, an opponent and a weight to make.
- */
+/** A meet is created with its nine empty attempts, so the card is never half-built. */
 export async function createMeet(input: {
   athleteId: string;
   name: string;
   date: string;
-  kind?: MeetKind;
   federation?: string;
   weightClass?: string;
-  opponent?: string;
 }) {
   assertCoach();
-  const fight = input.kind === "FIGHT";
   const meet = await prisma.meet.create({
     data: {
       athleteId: input.athleteId,
-      name: input.name.trim() || (fight ? "Fight" : "Meet"),
+      name: input.name.trim() || "Meet",
       date: new Date(input.date),
-      kind: fight ? "FIGHT" : "MEET",
       federation: input.federation?.trim() || null,
       weightClass: input.weightClass?.trim() || null,
-      opponent: input.opponent?.trim() || null,
-      attempts: fight
-        ? undefined
-        : {
-            create: MEET_LIFTS.flatMap((lift) =>
-              [1, 2, 3].map((number) => ({ lift, number })),
-            ),
-          },
+      attempts: {
+        create: MEET_LIFTS.flatMap((lift) =>
+          [1, 2, 3].map((number) => ({ lift, number })),
+        ),
+      },
     },
   });
 
@@ -58,21 +48,15 @@ export async function updateMeet(
     federation?: string | null;
     weightClass?: string | null;
     bodyweight?: number | null;
-    opponent?: string | null;
-    /** yyyy-mm-dd; null clears it. */
-    weighIn?: string | null;
-    targetWeight?: number | null;
-    outcome?: string | null;
   },
 ) {
   assertCoach();
-  const { date, weighIn, ...rest } = patch;
+  const { date, ...rest } = patch;
   await prisma.meet.update({
     where: { id: meetId },
     data: {
       ...rest,
       ...(date ? { date: new Date(date) } : {}),
-      ...(weighIn !== undefined ? { weighIn: weighIn ? new Date(weighIn) : null } : {}),
     },
   });
   revalidateAll();

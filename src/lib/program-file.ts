@@ -39,6 +39,8 @@ export type Prescription = {
   videoUrl: string | null;
   /** Seconds per set; absent from files written before timed sets. */
   duration?: number | null;
+  /** The weight typed over the intensity; absent from older files. */
+  load?: number | null;
 };
 
 export type ProgramRow = Prescription & {
@@ -157,6 +159,7 @@ function toPhase(block: SourcePhase): ProgramPhase {
           restTime: row.restTime,
           videoUrl: row.videoUrl,
           duration: row.duration ?? null,
+          load: row.load ?? null,
           session: row.session ?? null,
           rules: row.rules.map((rule) => ({
             order: rule.order,
@@ -294,6 +297,7 @@ function parsePrescription(value: Record<string, unknown>, where: string): Presc
     restTime: optionalText(value.restTime, `${where} rest`, 40),
     videoUrl: optionalText(value.videoUrl, `${where} video`, 500),
     duration: optionalNum(value.duration, `${where} duration`, 1, 24 * 3600),
+    load: optionalNum(value.load, `${where} load`, 0, 10000),
   };
 }
 
@@ -310,6 +314,7 @@ const EMPTY: Prescription = {
   restTime: null,
   videoUrl: null,
   duration: null,
+  load: null,
 };
 
 function parseRow(value: unknown, r: number, where: string) {

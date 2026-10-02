@@ -6,12 +6,10 @@ import { ReviewView } from "@/components/tracking/ReviewView";
 import { ScheduleView } from "@/components/tracking/ScheduleView";
 import { TrackingShell, type TrackingView } from "@/components/tracking/TrackingShell";
 import { InjuryPanel } from "@/components/InjuryPanel";
-import { LoadView } from "@/components/tracking/LoadView";
 import { deleteCoachInjury, saveCoachInjury } from "@/app/tracking/actions";
 import { WellnessView } from "@/components/tracking/WellnessView";
 import { weightToMake } from "@/lib/bodyweight";
-import { today as calendarToday, weekStartOf, ymdOf } from "@/lib/dates";
-import { acwr, dailyLoad, weekLoad } from "@/lib/load";
+import { today as calendarToday, ymdOf } from "@/lib/dates";
 import { blockWindow, startOfDay } from "@/lib/overview";
 import { liftProgress } from "@/lib/progress";
 import { exerciseHistory } from "@/lib/exercise-history";
@@ -26,9 +24,7 @@ import {
   getNextMeets,
   getNutrition,
   getTargetSpans,
-  getTimedRows,
   getWorkspace,
-  hasTimedRows,
   scheduleNews,
   injuriesFor,
   toBlockData,
@@ -57,7 +53,7 @@ export default async function TrackingPage({
   if (coach.athletes.length === 0) redirect("/athletes");
 
   const view: TrackingView =
-    params.view === "progress" || params.view === "wellness" || params.view === "load" || params.view === "schedule" ? params.view : "review";
+    params.view === "progress" || params.view === "wellness" || params.view === "schedule" ? params.view : "review";
   const show = REVIEW_FILTERS.includes(params.show as ReviewFilter) ? (params.show as ReviewFilter) : null;
 
   const athlete = coach.athletes.find((a) => a.id === params.athlete) ?? coach.athletes[0];
@@ -68,11 +64,10 @@ export default async function TrackingPage({
   };
   const now = new Date();
   const today = ymdOf(calendarToday());
-  const [{ programs, program, phase }, phases, checkinMap, hasLoad, news, moves] = await Promise.all([
+  const [{ programs, program, phase }, phases, checkinMap, news, moves] = await Promise.all([
     getWorkspace(athlete.id, undefined, params.block),
     getAllPhasesForAthlete(athlete.id),
     getCheckins([athlete.id]),
-    hasTimedRows(athlete.id),
     scheduleNews(athlete.id, today),
     getMoves(athlete.id),
   ]);
@@ -119,21 +114,6 @@ export default async function TrackingPage({
     );
   }
 
-  async function load() {
-    const daily = dailyLoad(await getTimedRows(athlete.id));
-    const { weekStart } = await loadSettings();
-    const thisWeek = weekStartOf(today, weekStart);
-    const days = [...daily.keys()].sort();
-    // From the first timed week, twelve back at most, through the plan's last one, six ahead at most.
-    const first = weekStartOf(days[0] ?? today, weekStart);
-    const last = weekStartOf(days.at(-1) ?? today, weekStart);
-    const from = first < addDays(thisWeek, -7 * 11) ? addDays(thisWeek, -7 * 11) : first;
-    const to = last > addDays(thisWeek, 7 * 6) ? addDays(thisWeek, 7 * 6) : last < thisWeek ? thisWeek : last;
-    const weeks = [];
-    for (let w = from; w <= to; w = addDays(w, 7)) weeks.push(weekLoad(daily, w));
-    return <LoadView weeks={weeks} current={weekLoad(daily, thisWeek)} ratio={acwr(daily, today)} />;
-  }
-
   let body: React.ReactNode;
   if (view === "schedule") {
     // Every session with something in it, where it now falls, and whether it was done.
@@ -157,8 +137,6 @@ export default async function TrackingPage({
     );
   } else if (view === "wellness") {
     body = await wellness();
-  } else if (view === "load") {
-    body = await load();
   } else if (!blockData) {
     body = (
       <div className="mx-auto mt-16 max-w-[720px] text-center">
@@ -220,8 +198,6 @@ export default async function TrackingPage({
         hasLink={athlete.accessToken !== null}
         unreviewed={unreviewed}
         scheduleNews={news}
-        hasLoad={hasLoad}
-        fighter={athlete.sport === "FIGHTER"}
       >
         {body}
       </TrackingShell>
