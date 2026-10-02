@@ -17,7 +17,22 @@ import {
   trainingFlags,
   type FlagAction,
 } from "@/lib/overview";
-import { getActiveInjuries, getBodyweights, getCheckins, getNextMeets, getOverview, getRecentCheckins, getRecentPrs, getTrainingWindow, getUnreviewed } from "@/lib/queries";
+import {
+  chatSummary,
+  getActiveInjuries,
+  getBodyweights,
+  getCheckins,
+  getNextMeets,
+  getOverview,
+  getRecentCheckins,
+  getRecentPrs,
+  getTrainingWindow,
+  getUnreviewed,
+  scheduleNews,
+} from "@/lib/queries";
+import { OverviewTabs } from "@/components/OverviewTabs";
+import type { OverviewTab } from "@/lib/overview-tabs";
+import { ChatPane, SchedulePane } from "@/app/overview/panes";
 import { injuryLabel } from "@/lib/injuries";
 import { latestReadiness } from "@/lib/checkins";
 import { formatEffort } from "@/lib/setlog";
@@ -48,13 +63,49 @@ const CATEGORY: Record<FlagAction, IssueCategory> = {
   weight: "weight",
 };
 
-export default async function OverviewPage() {
+export default async function OverviewPage({ searchParams }: { searchParams: Promise<{ tab?: string; athlete?: string }> }) {
   await loadSettings();
+  const params = await searchParams;
+  const tab: OverviewTab = params.tab === "schedule" || params.tab === "chat" ? params.tab : "athletes";
   const now = new Date();
   const today = ymdOf(calendarToday());
   const settings = activeSettings();
   const { coach, athletes, targetsByBlock, linked } = await getOverview(now);
   const ids = athletes.map((a) => a.id);
+  const [chats, waiting] = await Promise.all([chatSummary(ids), scheduleNews(ids, today)]);
+  const sum = (counts: Iterable<number>) => [...counts].reduce((a, b) => a + b, 0);
+  const news = { athletes: 0, schedule: sum(waiting.values()), chat: sum([...chats.values()].map((c) => c.unread)) };
+
+  const frame = (body: React.ReactNode) => (
+    <div className="flex h-screen">
+      <Sidebar athletes={athletes} coachUsername={coach.username} coachName={coach.name} section="overview" />
+
+      <main className="min-w-0 flex-1 overflow-auto">
+        <div className="mx-auto w-full max-w-[1400px] px-6 py-7">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h1 className="text-[22px] font-semibold tracking-tight">{t("Overview")}</h1>
+              <p className="mt-1 text-[12px] text-muted">
+                {now.toLocaleDateString(LOCALE[settings.language], {
+                  weekday: "long",
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                })}
+              </p>
+            </div>
+            <RefreshButton />
+          </div>
+          <OverviewTabs tab={tab} news={news} />
+          {body}
+        </div>
+      </main>
+    </div>
+  );
+
+  const who = athletes.map((a) => ({ id: a.id, name: a.name, hasLink: linked.has(a.id) }));
+  if (tab === "chat") return frame(<ChatPane athletes={who} picked={params.athlete} chats={chats} />);
+  if (tab === "schedule") return frame(<SchedulePane athletes={who} picked={params.athlete} news={waiting} today={today} />);
 
   const weekStart = weekStartOf(today, settings.weekStart);
   const week = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -224,39 +275,16 @@ export default async function OverviewPage() {
     };
   });
 
-  return (
-    <div className="flex h-screen">
-      <Sidebar athletes={athletes} coachUsername={coach.username} coachName={coach.name} section="overview" />
-
-      <main className="min-w-0 flex-1 overflow-auto">
-        <div className="mx-auto w-full max-w-[1400px] px-6 py-7">
-          <div className="flex items-end justify-between gap-3">
-            <div>
-              <h1 className="text-[22px] font-semibold tracking-tight">{t("Overview")}</h1>
-              <p className="mt-1 text-[12px] text-muted">
-                {now.toLocaleDateString(LOCALE[settings.language], {
-                  weekday: "long",
-                  day: "numeric",
-                  month: "long",
-                  year: "numeric",
-                })}
-              </p>
-            </div>
-            <RefreshButton />
-          </div>
-
-          <OverviewBoard
-            rows={rows}
-            week={week.map((ymd) => ({
-              ymd,
-              day: weekdayShort((settings.weekStart + week.indexOf(ymd)) % 7),
-              today: ymd === today,
-            }))}
-            activity={<Activity prs={prItems} checkins={checkinItems} />}
-          />
-        </div>
-      </main>
-    </div>
+  return frame(
+    <OverviewBoard
+      rows={rows}
+      week={week.map((ymd) => ({
+        ymd,
+        day: weekdayShort((settings.weekStart + week.indexOf(ymd)) % 7),
+        today: ymd === today,
+      }))}
+      activity={<Activity prs={prItems} checkins={checkinItems} />}
+    />
   );
 }
 

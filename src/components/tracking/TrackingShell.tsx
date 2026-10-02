@@ -9,13 +9,12 @@ import { t } from "@/lib/i18n";
 import { SHELL_MAX_WIDTH } from "@/lib/layout";
 import { setTrackingPref, usePref } from "@/lib/prefs";
 
-export type TrackingView = "review" | "progress" | "wellness" | "schedule";
+export type TrackingView = "review" | "progress" | "wellness";
 
 export const VIEWS: { id: TrackingView; label: string; icon: string }[] = [
   { id: "review", label: "Review", icon: "M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" },
   { id: "progress", label: "Progress", icon: "M3 17l6-6 4 4 8-8M14 7h7v7" },
   { id: "wellness", label: "Wellness", icon: "M3 12h4l3-8 4 16 3-8h4" },
-  { id: "schedule", label: "Schedule", icon: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" },
 ];
 
 /** How often Tracking fetches what athletes logged while it is open and on screen. */
@@ -36,7 +35,6 @@ export function TrackingShell({
   programName,
   hasLink,
   unreviewed,
-  scheduleNews = 0,
   children,
 }: {
   view: TrackingView;
@@ -49,8 +47,6 @@ export function TrackingShell({
   hasLink: boolean;
   /** Sessions of this phase waiting to be reviewed, for the Review tab's badge. */
   unreviewed: number;
-  /** Moved sessions not yet seen and meetings waiting on the coach, for the Schedule tab's badge. */
-  scheduleNews?: number;
   children: ReactNode;
 }) {
   const router = useRouter();
@@ -288,14 +284,6 @@ export function TrackingShell({
                     className="rounded-full bg-accent-soft px-1.5 text-[10px] font-semibold tabular-nums text-accent"
                   >
                     {unreviewed}
-                  </span>
-                )}
-                {v.id === "schedule" && scheduleNews > 0 && (
-                  <span
-                    title={t("Moved sessions and meetings waiting on you")}
-                    className="rounded-full bg-accent-soft px-1.5 text-[10px] font-semibold tabular-nums text-accent"
-                  >
-                    {scheduleNews}
                   </span>
                 )}
               </Link>

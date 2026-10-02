@@ -105,7 +105,7 @@ export async function notifyNotes(notes: NewNote[]): Promise<void> {
   });
   const unread = await prisma.coachMessage.groupBy({
     by: ["athleteId"],
-    where: { athleteId: { in: athleteIds }, deletedAt: null, readAt: null },
+    where: { athleteId: { in: athleteIds }, sender: "coach", deletedAt: null, readAt: null },
     _count: { _all: true },
   });
   const badge = new Map(unread.map((u) => [u.athleteId, u._count._all]));

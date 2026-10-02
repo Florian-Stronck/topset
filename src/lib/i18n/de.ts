@@ -1266,7 +1266,6 @@ const dict: Record<string, string> = {
   "You": "Du",
   "read": "gelesen",
   "not read yet": "noch nicht gelesen",
-  "Feedback for the athlete — shows in their inbox": "Feedback für den Athleten — erscheint in seinem Posteingang",
   "Ctrl+Enter": "Strg+Enter",
   "Send and mark reviewed": "Senden und als angesehen markieren",
   "Stop refreshing on its own": "Nicht mehr von selbst aktualisieren",
@@ -1298,10 +1297,7 @@ const dict: Record<string, string> = {
   "No sessions with RPE logged in the last {n} days.": "Keine Einheiten mit eingetragener RPE in den letzten {n} Tagen.",
   "Only low-readiness days": "Nur Tage mit niedriger Readiness",
   "New": "Neu",
-  "Inbox": "Posteingang",
   "{n} unread": "{n} ungelesen",
-  "What your coach said about your sessions.": "Was dein Trainer zu deinen Einheiten gesagt hat.",
-  "Nothing yet. When your coach reviews a session and leaves a note, it shows up here.": "Noch nichts. Wenn dein Trainer eine Einheit ansieht und eine Notiz hinterlässt, erscheint sie hier.",
   "FROM YOUR COACH": "VON DEINEM TRAINER",
   "COACH": "TRAINER",
   "No low-readiness days in the last {n} days.": "Keine Tage mit niedriger Readiness in den letzten {n} Tagen.",
@@ -1678,6 +1674,28 @@ const dict: Record<string, string> = {
   "Your name and logo on every PDF and print, the paper size, and which export comes first.": "Dein Name und Logo auf jedem PDF und Ausdruck, das Papierformat und welcher Export zuerst kommt.",
   "You're set": "Alles bereit",
   "<k>Ctrl</k>+<k>K</k> finds every action and <k>Alt</k>+<k>/</k> lists the shortcuts. This tour is under <b>Tutorial</b> at the bottom of the sidebar.": "<k>Strg</k>+<k>K</k> findet jede Aktion und <k>Alt</k>+<k>/</k> zeigt die Tastenkürzel. Diese Tour findest du unter <b>Tutorial</b> unten in der Seitenleiste.",
+
+  // The athlete chat.
+  "Chat": "Chat",
+  "Talk with your coach.": "Schreib mit deinem Trainer.",
+  "Nothing yet. Write to your coach, or wait for their notes on your sessions.": "Noch nichts. Schreib deinem Trainer oder warte auf Notizen zu deinen Einheiten.",
+  "Write a message…": "Nachricht schreiben…",
+  "Read": "Gelesen",
+  "Sent": "Gesendet",
+  "Messages from the athlete waiting on you": "Nachrichten vom Athleten, die auf dich warten",
+  "Write to {name}": "An {name} schreiben",
+  "Write to the athlete": "Dem Athleten schreiben",
+  "No messages yet. Write to {name}, or leave feedback on a session in Review.": "Noch keine Nachrichten. Schreib {name} oder hinterlasse unter „Ansehen“ Feedback zu einer Einheit.",
+  "Feedback for the athlete — shows in their chat": "Feedback für den Athleten — erscheint in seinem Chat",
+
+  // Overview: Schedule and Chat for every athlete.
+  "All athletes": "Alle Athleten",
+  "Open": "Öffnen",
+  "No messages yet.": "Noch keine Nachrichten.",
+  "WAITING ON YOU": "WARTET AUF DICH",
+  "Nothing waiting on you.": "Nichts wartet auf dich.",
+  "{name} moved {session} to {date}": "{name} hat {session} auf {date} verschoben",
+  "{name} asked to meet {date} {time}": "{name} möchte sich am {date} um {time} treffen",
 };
 
 export default dict;

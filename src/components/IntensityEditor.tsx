@@ -43,7 +43,7 @@ export function IntensityEditor({
   const range = value.intensityType === "RANGE";
 
   return (
-    <div className="flex h-full w-full min-w-0 items-center gap-1 pl-1 pr-2">
+    <div className="flex h-full w-full min-w-0 items-center justify-center gap-1 px-1">
       <button
         ref={ref}
         type="button"
@@ -73,7 +73,7 @@ export function IntensityEditor({
         </>
       )}
 
-      {value.rampStep !== null && <span className="ml-auto text-[11px] text-muted-2">+{value.rampStep}</span>}
+      {value.rampStep !== null && <span className="text-[11px] text-muted-2">+{value.rampStep}</span>}
 
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={196}>
         <div>

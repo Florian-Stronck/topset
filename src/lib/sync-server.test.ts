@@ -178,6 +178,31 @@ test("a push says which notes the athlete should hear about: new or reworded, no
   assert.deepEqual(news.notes, []);
 });
 
+test("chat messages from the athlete never notify the athlete, and keep their sender", async () => {
+  const msg = {
+    id: "c1", athleteId: "a1", sender: "athlete", day: "2026-09-24", dayId: null, rowId: null, body: "Knee felt off today.", readAt: null,
+    createdAt: "2026-09-24T18:00:00.000+00:00", updatedAt: "2026-09-24T18:00:00.000+00:00", deletedAt: null,
+  };
+  await client.execute({
+    sql: `INSERT INTO "CoachMessage" ("id", "athleteId", "sender", "day", "body", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    args: [msg.id, msg.athleteId, msg.sender, msg.day, msg.body, msg.createdAt, msg.updatedAt],
+  });
+  // The coach reads it on the desktop, which sends it back: nothing for the athlete's phone.
+  const news = pushNews();
+  const read = { ...msg, readAt: "2026-09-24T19:00:00.000+00:00", updatedAt: "2026-09-24T19:00:00.000+00:00" };
+  assert.equal(await applyPush(client, "me", { tables: {}, athlete: [], merged: { CoachMessage: [read] } }, news), null);
+  assert.deepEqual(news.notes, []);
+  // An older desktop app sends no sender: the message stays the athlete's.
+  const old = { ...read, sender: undefined, updatedAt: "2026-09-24T19:05:00.000+00:00" };
+  assert.equal(await applyPush(client, "me", { tables: {}, athlete: [], merged: { CoachMessage: [old] } }), null);
+  const rs = await client.execute(`SELECT "sender" FROM "CoachMessage" WHERE "id" = 'c1'`);
+  assert.equal(rs.rows[0].sender, "athlete");
+  assert.equal(
+    await applyPush(client, "me", { tables: {}, athlete: [], merged: { CoachMessage: [{ ...msg, id: "c2", sender: "someone" }] } }),
+    "A CoachMessage row is missing something.",
+  );
+});
+
 test("a push names the athletes whose plan really changed", async () => {
   const rs = await client.execute(`SELECT * FROM "Day" WHERE "id" = 'd1'`);
   const dayRow = Object.fromEntries(rs.columns.map((c, i) => [c, rs.rows[0][i]])) as { id: string } & Record<string, unknown>;

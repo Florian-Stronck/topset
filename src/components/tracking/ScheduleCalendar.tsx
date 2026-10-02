@@ -15,6 +15,8 @@ export type CalendarSession = {
   status: "done" | "missed" | "plan";
   /** Where the plan put it, when the athlete moved it here. */
   movedFrom: string | null;
+  /** Whose it is, on the calendar of every athlete. */
+  who?: string;
 };
 
 const STATUS_CHIP: Record<CalendarSession["status"], string> = {
@@ -37,14 +39,15 @@ export function ScheduleCalendar({
   today: string;
   sessions: CalendarSession[];
   moves: MoveView[];
-  meetings: MeetingData[];
+  meetings: (MeetingData & { who?: string })[];
 }) {
   const { settings } = useSettings();
   const current = today.slice(0, 7);
   const [month, setMonth] = useState(current);
   const weeks = monthGrid(month, settings.weekStart);
   const marks = dayMarks(moves, meetings);
-  const byDay = new Map(sessions.map((s) => [s.ymd, s]));
+  const byDay = new Map<string, CalendarSession[]>();
+  for (const s of sessions) byDay.set(s.ymd, [...(byDay.get(s.ymd) ?? []), s]);
   const meetingsOn = (ymd: string) => meetings.filter((m) => m.day === ymd && (m.status === "PROPOSED" || m.status === "ACCEPTED"));
   const title = new Date(`${month}-15T12:00:00Z`).toLocaleDateString(LOCALE[settings.language], { month: "long", year: "numeric", timeZone: "UTC" });
 
@@ -78,7 +81,7 @@ export function ScheduleCalendar({
         </div>
         <div className="grid grid-cols-7">
           {weeks.flat().map(({ ymd, inMonth }, i) => {
-            const s = byDay.get(ymd);
+            const daySessions = byDay.get(ymd) ?? [];
             const mark = marks.get(ymd);
             const isToday = ymd === today;
             return (
@@ -91,19 +94,22 @@ export function ScheduleCalendar({
                 <div className={`text-[11px] tabular-nums ${isToday ? "inline-grid size-5 place-items-center rounded-full bg-accent font-semibold text-white" : "text-muted"}`}>
                   {Number(ymd.slice(8))}
                 </div>
-                {s && (
-                  <div
-                    title={s.movedFrom ? t("The athlete moved this session from {date}", { date: formatDate(s.movedFrom) }) : s.label}
-                    className={`truncate rounded px-1.5 py-0.5 text-[11px] font-medium ${
-                      s.movedFrom ? "bg-cal-moved/15 text-cal-moved ring-1 ring-cal-moved/60" : STATUS_CHIP[s.status]
-                    }`}
-                  >
-                    {s.movedFrom && "↪ "}
-                    {s.label}
+                {daySessions.map((s, k) => (
+                  <div key={k}>
+                    <div
+                      title={s.movedFrom ? t("The athlete moved this session from {date}", { date: formatDate(s.movedFrom) }) : s.label}
+                      className={`truncate rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                        s.movedFrom ? "bg-cal-moved/15 text-cal-moved ring-1 ring-cal-moved/60" : STATUS_CHIP[s.status]
+                      }`}
+                    >
+                      {s.movedFrom && "↪ "}
+                      {s.who && `${s.who} · `}
+                      {s.label}
+                    </div>
+                    {s.movedFrom && <div className="truncate text-[10px] text-cal-moved">{t("from {date}", { date: formatDate(s.movedFrom) })}</div>}
                   </div>
-                )}
-                {s?.movedFrom && <div className="truncate text-[10px] text-cal-moved">{t("from {date}", { date: formatDate(s.movedFrom) })}</div>}
-                {mark?.movedTo && !s && (
+                ))}
+                {mark?.movedTo && daySessions.length === 0 && (
                   <div className="truncate rounded border border-dashed border-cal-moved px-1.5 py-0.5 text-[11px] text-cal-moved">
                     {t("moved to {date}", { date: formatDate(mark.movedTo) })}
                   </div>
@@ -116,6 +122,7 @@ export function ScheduleCalendar({
                       m.status === "ACCEPTED" ? "bg-cal-meeting text-white" : "bg-cal-meeting/15 text-cal-meeting ring-1 ring-cal-meeting/60"
                     }`}
                   >
+                    {m.who && `${m.who} · `}
                     {m.time} {t("Meeting")}
                     {m.status === "PROPOSED" && ` · ${t("proposed")}`}
                   </div>

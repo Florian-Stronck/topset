@@ -113,6 +113,8 @@ export function Sidebar({
       go("go-athletes", "The roster", "/athletes", "athletes list"),
       go("go-programming", "Programming", withAthlete("/programming"), "program grid sheet"),
       go("go-tracking", "Tracking", withAthlete("/tracking"), "logged rpe e1rm compliance"),
+      go("go-schedule", "Schedule", "/overview?tab=schedule", "meetings moved sessions calendar"),
+      go("go-chat", "Chat", `/overview?tab=chat${activeAthleteId ? `&athlete=${activeAthleteId}` : ""}`, "messages inbox athlete"),
       go("go-competition", "Competition", withAthlete("/competition"), "meet attempts openers total"),
       go("go-settings", "Settings", "/settings", "preferences options"),
       {

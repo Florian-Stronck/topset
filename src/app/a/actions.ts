@@ -2,7 +2,8 @@
 
 import crypto from "node:crypto";
 import { revalidatePath } from "next/cache";
-import { getAthleteByToken, rowForToken } from "@/lib/athlete-queries";
+import { getAthleteByToken, rowForToken, type InboxMessage } from "@/lib/athlete-queries";
+import { athleteToday } from "@/lib/athlete-today";
 import {
   CLIP_TYPES,
   cleanSetIndex,
@@ -29,6 +30,7 @@ import {
 } from "@/lib/checkins";
 import { cleanAmount, isEmpty, nutritionId } from "@/lib/nutrition";
 import { cleanInjury, injuryData, type InjuryData, type InjuryInput } from "@/lib/injuries";
+import { cleanBody } from "@/lib/messages";
 import { prisma } from "@/lib/prisma";
 import { PUSH_KINDS, pushServiceEndpoint, type PushPrefs } from "@/lib/push-kinds";
 import { rowActuals } from "@/lib/setlog";
@@ -239,12 +241,23 @@ export async function saveCheckinAnswer(token: string, questionId: string, day: 
   return value;
 }
 
-/** The athlete opened their coach's notes: these ones, or every one still unread. */
+/** The athlete writes to their coach in the chat. */
+export async function sendChat(token: string, body: string): Promise<InboxMessage> {
+  const athlete = await getAthleteByToken(token);
+  if (!athlete) throw new Error("Not found.");
+  const row = await prisma.coachMessage.create({
+    data: { athleteId: athlete.id, sender: "athlete", day: await athleteToday(), body: cleanBody(body) },
+  });
+  await changed(token);
+  return { id: row.id, sender: "athlete", day: row.day, label: null, body: row.body, read: false, createdAt: row.createdAt.toISOString() };
+}
+
+/** The athlete opened their coach's messages: these ones, or every one still unread. */
 export async function markRead(token: string, ids?: string[]) {
   const athlete = await getAthleteByToken(token);
   if (!athlete) throw new Error("Not found.");
   const { count } = await prisma.coachMessage.updateMany({
-    where: { athleteId: athlete.id, deletedAt: null, readAt: null, ...(ids ? { id: { in: ids } } : {}) },
+    where: { athleteId: athlete.id, sender: "coach", deletedAt: null, readAt: null, ...(ids ? { id: { in: ids } } : {}) },
     data: { readAt: new Date() },
   });
   if (count > 0) await changed(token);

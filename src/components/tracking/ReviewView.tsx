@@ -236,7 +236,7 @@ export function ReviewView({
             answers,
             readiness,
             unreviewed,
-            messages: messages.filter((m) => m.dayId === day.id || (m.dayId === null && m.day === ymd)),
+            messages: messages.filter((m) => m.sender === "coach" && (m.dayId === day.id || (m.dayId === null && m.day === ymd))),
             facts: { status, unreviewed, kept: kept.length, readiness: readiness.score },
           };
         }),
@@ -1030,7 +1030,7 @@ function Feedback({
               setDraft("");
             }
           }}
-          placeholder={t("Feedback for the athlete — shows in their inbox")}
+          placeholder={t("Feedback for the athlete — shows in their chat")}
           className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-[12px] outline-none placeholder:text-muted-2 focus:border-accent"
         />
         <button

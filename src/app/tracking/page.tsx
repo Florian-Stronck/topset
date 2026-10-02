@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
 import { ProgressView } from "@/components/tracking/ProgressView";
 import { ReviewView } from "@/components/tracking/ReviewView";
-import { ScheduleView } from "@/components/tracking/ScheduleView";
 import { TrackingShell, type TrackingView } from "@/components/tracking/TrackingShell";
 import { InjuryPanel } from "@/components/InjuryPanel";
 import { deleteCoachInjury, saveCoachInjury } from "@/app/tracking/actions";
@@ -18,19 +17,16 @@ import {
   getBodyweights,
   getCoach,
   getCheckins,
-  getMeetings,
   getMessages,
   getMoves,
   getNextMeets,
   getNutrition,
   getTargetSpans,
   getWorkspace,
-  scheduleNews,
   injuriesFor,
   toBlockData,
 } from "@/lib/queries";
-import { addDays, sessionsOf } from "@/lib/schedule";
-import type { CalendarSession } from "@/components/tracking/ScheduleCalendar";
+import { addDays } from "@/lib/schedule";
 import { previousLogs, REVIEW_FILTERS, sessionDrift, unreviewedDays, type ReviewFilter } from "@/lib/tracking";
 import type { BlockData } from "@/lib/types";
 import { loadSettings } from "@/lib/coach-settings";
@@ -53,10 +49,12 @@ export default async function TrackingPage({
   if (coach.athletes.length === 0) redirect("/athletes");
 
   const view: TrackingView =
-    params.view === "progress" || params.view === "wellness" || params.view === "schedule" ? params.view : "review";
+    params.view === "progress" || params.view === "wellness" ? params.view : "review";
   const show = REVIEW_FILTERS.includes(params.show as ReviewFilter) ? (params.show as ReviewFilter) : null;
 
   const athlete = coach.athletes.find((a) => a.id === params.athlete) ?? coach.athletes[0];
+  // Schedule and the chat moved to the Overview, for every athlete at once.
+  if (params.view === "schedule" || params.view === "chat") redirect(`/overview?tab=${params.view}&athlete=${athlete.id}`);
   const at = coach.athletes.indexOf(athlete);
   const neighbour = (i: number) => {
     const a = coach.athletes[(i + coach.athletes.length) % coach.athletes.length];
@@ -64,11 +62,10 @@ export default async function TrackingPage({
   };
   const now = new Date();
   const today = ymdOf(calendarToday());
-  const [{ programs, program, phase }, phases, checkinMap, news, moves] = await Promise.all([
+  const [{ programs, program, phase }, phases, checkinMap, moves] = await Promise.all([
     getWorkspace(athlete.id, undefined, params.block),
     getAllPhasesForAthlete(athlete.id),
     getCheckins([athlete.id]),
-    scheduleNews(athlete.id, today),
     getMoves(athlete.id),
   ]);
   const checkins = checkinMap.get(athlete.id) ?? { questions: [], answers: [], photos: [] };
@@ -115,27 +112,7 @@ export default async function TrackingPage({
   }
 
   let body: React.ReactNode;
-  if (view === "schedule") {
-    // Every session with something in it, where it now falls, and whether it was done.
-    type Phase = (typeof phases)[number];
-    const calendar: CalendarSession[] = sessionsOf<Phase["weeks"][number]["days"][number], Phase>(phases, moveMap)
-      .filter((s) => s.day.rows.some((r) => r.exercise.trim() !== ""))
-      .map((s) => ({
-        ymd: s.ymd,
-        label: s.day.label,
-        movedFrom: s.movedFrom ?? null,
-        status: s.day.rows.some((r) => r.actualWeight !== null) ? "done" : s.ymd < today ? "missed" : "plan",
-      }));
-    body = (
-      <ScheduleView
-        athlete={{ id: athlete.id, name: athlete.name }}
-        today={today}
-        moves={moves}
-        meetings={await getMeetings(athlete.id)}
-        calendar={calendar}
-      />
-    );
-  } else if (view === "wellness") {
+  if (view === "wellness") {
     body = await wellness();
   } else if (!blockData) {
     body = (
@@ -197,7 +174,6 @@ export default async function TrackingPage({
         programName={program?.name ?? ""}
         hasLink={athlete.accessToken !== null}
         unreviewed={unreviewed}
-        scheduleNews={news}
       >
         {body}
       </TrackingShell>

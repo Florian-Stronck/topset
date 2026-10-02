@@ -1266,7 +1266,6 @@ const dict: Record<string, string> = {
   "You": "Du",
   "read": "gelies",
   "not read yet": "nach net gelies",
-  "Feedback for the athlete — shows in their inbox": "Feedback fir den Athlet — erschéngt a senger Inbox",
   "Ctrl+Enter": "Ctrl+Enter",
   "Send and mark reviewed": "Schécken an als gekuckt markéieren",
   "Stop refreshing on its own": "Net méi eleng aktualiséieren",
@@ -1298,10 +1297,7 @@ const dict: Record<string, string> = {
   "No sessions with RPE logged in the last {n} days.": "Keng Trainingen mat agedroener RPE an de leschten {n} Deeg.",
   "Only low-readiness days": "Just Deeg mat niddreger Bereetschaft",
   "New": "Nei",
-  "Inbox": "Inbox",
   "{n} unread": "{n} net gelies",
-  "What your coach said about your sessions.": "Wat däin Trainer zu dengen Trainingen gesot huet.",
-  "Nothing yet. When your coach reviews a session and leaves a note, it shows up here.": "Nach näischt. Wann däin Trainer en Training kuckt an eng Notiz hannerléisst, erschéngt se hei.",
   "FROM YOUR COACH": "VUN DENGEM TRAINER",
   "COACH": "TRAINER",
   "No low-readiness days in the last {n} days.": "Keng Deeg mat niddreger Bereetschaft an de leschten {n} Deeg.",
@@ -1678,6 +1674,28 @@ const dict: Record<string, string> = {
   "Your name and logo on every PDF and print, the paper size, and which export comes first.": "Ären Numm a Logo op all PDF an Ausdrock, d'Pabeierformat a wéi en Export als éischt kënnt.",
   "You're set": "Dir sidd prett",
   "<k>Ctrl</k>+<k>K</k> finds every action and <k>Alt</k>+<k>/</k> lists the shortcuts. This tour is under <b>Tutorial</b> at the bottom of the sidebar.": "<k>Ctrl</k>+<k>K</k> fënnt all Aktioun an <k>Alt</k>+<k>/</k> weist d'Tastekierzelen. Dës Tour fannt Dir ënner <b>Tutorial</b> ënnen an der Säiteleescht.",
+
+  // The athlete chat.
+  "Chat": "Chat",
+  "Talk with your coach.": "Schreif mat dengem Trainer.",
+  "Nothing yet. Write to your coach, or wait for their notes on your sessions.": "Nach näischt. Schreif dengem Trainer, oder waart op Notizen zu dengen Trainingen.",
+  "Write a message…": "Eng Message schreiwen…",
+  "Read": "Gelies",
+  "Sent": "Geschéckt",
+  "Messages from the athlete waiting on you": "Messagen vum Athlet, déi op dech waarden",
+  "Write to {name}": "{name} schreiwen",
+  "Write to the athlete": "Dem Athlet schreiwen",
+  "No messages yet. Write to {name}, or leave feedback on a session in Review.": "Nach keng Messagen. Schreift {name}, oder loosst ënner „Ukucken“ e Feedback zu engem Training.",
+  "Feedback for the athlete — shows in their chat": "Feedback fir den Athlet — erschéngt a sengem Chat",
+
+  // Overview: Schedule and Chat for every athlete.
+  "All athletes": "All Athleten",
+  "Open": "Opmaachen",
+  "No messages yet.": "Nach keng Messagen.",
+  "WAITING ON YOU": "WAART OP DECH",
+  "Nothing waiting on you.": "Näischt waart op dech.",
+  "{name} moved {session} to {date}": "{name} huet {session} op {date} verréckelt",
+  "{name} asked to meet {date} {time}": "{name} wëll sech den {date} um {time} treffen",
 };
 
 export default dict;

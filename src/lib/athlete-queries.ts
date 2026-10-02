@@ -318,9 +318,10 @@ async function targetSpans(athleteId: string): Promise<TargetSpan[]> {
   return phases.map((p) => targetSpan({ ...p, weeks: p._count.weeks })).filter((s): s is TargetSpan => s !== null);
 }
 
-/** A note from the coach as the athlete app shows it, with the session it is about. */
+/** A chat message as the athlete app shows it, with the session it is about. */
 export type InboxMessage = {
   id: string;
+  sender: "coach" | "athlete";
   day: string;
   /** The session's name, when its day still exists. */
   label: string | null;
@@ -329,11 +330,14 @@ export type InboxMessage = {
   createdAt: string;
 };
 
-/** The coach's notes to this athlete, newest first — all of them, or those about some days. */
+/**
+ * The whole chat with the coach, oldest first — or, for some days, just the coach's notes
+ * about those sessions, newest first.
+ */
 export async function inboxFor(athleteId: string, days?: string[]): Promise<InboxMessage[]> {
   const rows = await prisma.coachMessage.findMany({
-    where: { athleteId, deletedAt: null, ...(days ? { day: { in: days } } : {}) },
-    orderBy: [{ day: "desc" }, { createdAt: "desc" }],
+    where: { athleteId, deletedAt: null, ...(days ? { day: { in: days }, sender: "coach" } : {}) },
+    orderBy: days ? [{ day: "desc" }, { createdAt: "desc" }] : { createdAt: "asc" },
   });
   const dayIds = [...new Set(rows.map((r) => r.dayId).filter((id): id is string => id !== null))];
   const labels = new Map(
@@ -341,6 +345,7 @@ export async function inboxFor(athleteId: string, days?: string[]): Promise<Inbo
   );
   return rows.map((r) => ({
     id: r.id,
+    sender: r.sender === "athlete" ? "athlete" : "coach",
     day: r.day,
     label: r.dayId ? (labels.get(r.dayId) ?? null) : null,
     body: r.body,
@@ -349,10 +354,10 @@ export async function inboxFor(athleteId: string, days?: string[]): Promise<Inbo
   }));
 }
 
-/** How many of the coach's notes the athlete hasn't opened yet, and meetings waiting on their answer. */
+/** How many of the coach's messages the athlete hasn't opened yet, and meetings waiting on their answer. */
 export async function unreadCount(athleteId: string, today?: string): Promise<number> {
   const [notes, meetings] = await Promise.all([
-    prisma.coachMessage.count({ where: { athleteId, deletedAt: null, readAt: null } }),
+    prisma.coachMessage.count({ where: { athleteId, sender: "coach", deletedAt: null, readAt: null } }),
     prisma.meeting.count({
       where: { athleteId, deletedAt: null, status: "PROPOSED", proposedBy: "coach", ...(today ? { day: { gte: today } } : {}) },
     }),

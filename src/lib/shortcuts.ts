@@ -103,11 +103,14 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "overview-running", group: "Overview", title: "Show only athletes running today" },
   { id: "overview-attention", group: "Overview", title: "Jump to needs attention" },
   { id: "overview-search", group: "Overview", title: "Search athletes" },
+  { id: "overview-tab-athletes", group: "Overview", title: "Athletes" },
+  { id: "overview-tab-schedule", group: "Overview", title: "Schedule" },
+  { id: "overview-tab-chat", group: "Overview", title: "Chat" },
 
   { id: "view-review", group: "Tracking view", title: "Review", keys: ["alt+1"] },
   { id: "view-progress", group: "Tracking view", title: "Progress", keys: ["alt+2"] },
   { id: "view-wellness", group: "Tracking view", title: "Wellness", keys: ["alt+3"] },
-  { id: "view-load", group: "Tracking view", title: "Load", keys: ["alt+4"] },
+  { id: "chat-compose", group: "Tracking", title: "Write to the athlete" },
   { id: "track-autosync", group: "Tracking view", title: "Refresh on its own: on / off" },
   { id: "track-link", group: "Tracking", title: "Athlete check-in link…" },
 
@@ -240,6 +243,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "go-athletes", group: "Go", title: "The roster" },
   { id: "go-programming", group: "Go", title: "Programming" },
   { id: "go-tracking", group: "Go", title: "Tracking" },
+  { id: "go-schedule", group: "Go", title: "Schedule", keys: ["alt+4"] },
+  { id: "go-chat", group: "Go", title: "Chat", keys: ["alt+5"] },
   { id: "go-competition", group: "Go", title: "Competition" },
   { id: "go-settings", group: "Go", title: "Settings" },
 

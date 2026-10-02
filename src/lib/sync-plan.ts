@@ -37,8 +37,8 @@ export const MERGED_COLUMNS: Record<string, readonly string[]> = {
   NutritionLog: ["id", "athleteId", "day", "kcal", "protein", "carbs", "fat", "source", "createdAt", "updatedAt", "deletedAt"],
   // Photos on check-in answers: like videos, only the athlete app writes them.
   CheckinPhoto: ["id", "athleteId", "questionId", "day", "contentType", "size", "storageKey", "uploadedAt", "createdAt", "updatedAt", "deletedAt"],
-  // The coach writes the text, the athlete app when it was read.
-  CoachMessage: ["id", "athleteId", "day", "dayId", "rowId", "body", "readAt", "createdAt", "updatedAt", "deletedAt"],
+  // The chat: whoever sent it writes the text, the other side when it was read.
+  CoachMessage: ["id", "athleteId", "sender", "day", "dayId", "rowId", "body", "readAt", "createdAt", "updatedAt", "deletedAt"],
   // The athlete moves a session; the coach marks it seen or puts it back.
   SessionMove: ["id", "athleteId", "dayId", "fromDay", "day", "reason", "seenAt", "createdAt", "updatedAt", "deletedAt"],
   // Either side proposes a meeting, the other answers it.
@@ -92,7 +92,10 @@ export function validMergedRow(table: string, row: Row): boolean {
   if (table === "CheckinAnswer") {
     return typeof row.questionId === "string" && row.questionId !== "" && (row.value === null || row.value === undefined || typeof row.value === "string");
   }
-  if (table === "CoachMessage") return typeof row.body === "string";
+  if (table === "CoachMessage") {
+    // An older desktop app sends no sender: everything it has is the coach's.
+    return typeof row.body === "string" && (row.sender === undefined || row.sender === "coach" || row.sender === "athlete");
+  }
   // Named by its session, so it must be the athlete's own move of it.
   if (table === "SessionMove") {
     return (

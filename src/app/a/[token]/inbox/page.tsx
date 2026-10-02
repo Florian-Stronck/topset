@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { CoachNotes } from "@/components/athlete/CoachNotes";
+import { Chat } from "@/components/athlete/Chat";
 import { Meetings } from "@/components/athlete/Meetings";
 import { NotifyBell } from "@/components/athlete/Notifications";
 import { getAthleteByToken, inboxFor, meetingsFor } from "@/lib/athlete-queries";
@@ -10,8 +10,8 @@ import { vapidPublicKey } from "@/lib/push";
 
 export const dynamic = "force-dynamic";
 
-/** Meetings with the coach, then every note they wrote about the athlete's sessions, newest first. */
-export default async function AthleteInbox({ params }: { params: Promise<{ token: string }> }) {
+/** Meetings with the coach, then the chat: their notes on sessions and messages either way. */
+export default async function AthleteChat({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const athlete = await getAthleteByToken(token);
   if (!athlete) notFound();
@@ -23,21 +23,14 @@ export default async function AthleteInbox({ params }: { params: Promise<{ token
     <div>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-[20px] font-semibold tracking-tight">{t("Inbox")}</h1>
-          <p className="mt-1 text-[13px] text-muted">{t("What your coach said about your sessions.")}</p>
+          <h1 className="text-[20px] font-semibold tracking-tight">{t("Chat")}</h1>
+          <p className="mt-1 text-[13px] text-muted">{t("Talk with your coach.")}</p>
         </div>
         {vapidKey && <NotifyBell token={token} vapidKey={vapidKey} />}
       </div>
       <div className="mt-5">
         <Meetings token={token} meetings={meetings} today={today} />
-        <h2 className="mb-2 text-[11px] tracking-[0.16em] text-muted-2">{t("NOTES")}</h2>
-        {messages.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-border px-4 py-8 text-center text-[13px] text-muted">
-            {t("Nothing yet. When your coach reviews a session and leaves a note, it shows up here.")}
-          </p>
-        ) : (
-          <CoachNotes token={token} messages={messages} linkToSession />
-        )}
+        <Chat token={token} messages={messages} />
       </div>
     </div>
   );

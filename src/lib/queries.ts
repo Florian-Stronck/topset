@@ -501,19 +501,23 @@ export async function getCheckins(athleteIds: string[], from?: string): Promise<
   return out;
 }
 
-/** A note from the coach about one session, as Tracking and the athlete's inbox show it. */
+/** A chat message — the coach's note about a session, or either side writing — as Tracking shows it. */
 export type MessageData = {
   id: string;
+  sender: "coach" | "athlete";
   day: string;
   dayId: string | null;
   rowId: string | null;
   body: string;
   readAt: string | null;
   createdAt: string;
+  /** The session's name, when it is about one that still exists (the chat's tag). */
+  label?: string | null;
 };
 
 export function messageData(row: {
   id: string;
+  sender: string;
   day: string;
   dayId: string | null;
   rowId: string | null;
@@ -523,6 +527,7 @@ export function messageData(row: {
 }): MessageData {
   return {
     id: row.id,
+    sender: row.sender === "athlete" ? "athlete" : "coach",
     day: row.day,
     dayId: row.dayId,
     rowId: row.rowId,
@@ -532,13 +537,43 @@ export function messageData(row: {
   };
 }
 
-/** Every note the coach sent an athlete that is still standing, oldest first. */
+/** The whole chat with an athlete that is still standing, oldest first, session notes named. */
 export async function getMessages(athleteId: string): Promise<MessageData[]> {
   const rows = await prisma.coachMessage.findMany({
     where: { athleteId, deletedAt: null },
     orderBy: { createdAt: "asc" },
   });
-  return rows.map(messageData);
+  const dayIds = [...new Set(rows.map((r) => r.dayId).filter((id): id is string => id !== null))];
+  const labels = new Map(
+    dayIds.length ? (await prisma.day.findMany({ where: { id: { in: dayIds } }, select: { id: true, label: true } })).map((d) => [d.id, d.label]) : [],
+  );
+  return rows.map((r) => ({ ...messageData(r), label: r.dayId ? (labels.get(r.dayId) ?? null) : null }));
+}
+
+/** Each chat at a glance: the athlete's messages the coach hasn't read, and the last message. */
+export type ChatSummary = { unread: number; last: { body: string; sender: "coach" | "athlete"; createdAt: string } | null };
+
+export async function chatSummary(athleteIds: string[]): Promise<Map<string, ChatSummary>> {
+  const [unread, rows] = await Promise.all([
+    prisma.coachMessage.groupBy({
+      by: ["athleteId"],
+      where: { athleteId: { in: athleteIds }, sender: "athlete", deletedAt: null, readAt: null },
+      _count: { _all: true },
+    }),
+    // ponytail: reads every message to find the newest per athlete; a per-athlete query if chats grow long.
+    prisma.coachMessage.findMany({
+      where: { athleteId: { in: athleteIds }, deletedAt: null },
+      orderBy: { createdAt: "desc" },
+      select: { athleteId: true, body: true, sender: true, createdAt: true },
+    }),
+  ]);
+  const out = new Map<string, ChatSummary>(athleteIds.map((id) => [id, { unread: 0, last: null }]));
+  for (const g of unread) out.get(g.athleteId)!.unread = g._count._all;
+  for (const r of rows) {
+    const c = out.get(r.athleteId)!;
+    if (!c.last) c.last = { body: r.body, sender: r.sender === "athlete" ? "athlete" : "coach", createdAt: r.createdAt.toISOString() };
+  }
+  return out;
 }
 
 /**
@@ -650,12 +685,14 @@ export async function getActiveInjuries(athleteIds: string[], today: string): Pr
   return out;
 }
 
-/** A session the athlete moved, as Tracking lists it: with its name and where it sits in the plan. */
-export type MoveView = MoveData & { label: string | null; phase: string | null; week: number | null };
+/** A session the athlete moved, as Schedule lists it: with its name and where it sits in the plan. */
+export type MoveView = MoveData & { athleteId: string; label: string | null; phase: string | null; week: number | null };
 
-/** The athlete's moved sessions still standing, newest move first. */
-export async function getMoves(athleteId: string): Promise<MoveView[]> {
-  const rows = await prisma.sessionMove.findMany({ where: { athleteId, deletedAt: null }, orderBy: { updatedAt: "desc" } });
+const forAthletes = (ids: string | string[]) => (typeof ids === "string" ? ids : { in: ids });
+
+/** The moved sessions still standing, of one athlete or several, newest move first. */
+export async function getMoves(athleteIds: string | string[]): Promise<MoveView[]> {
+  const rows = await prisma.sessionMove.findMany({ where: { athleteId: forAthletes(athleteIds), deletedAt: null }, orderBy: { updatedAt: "desc" } });
   const days = rows.length
     ? await prisma.day.findMany({
         where: { id: { in: rows.map((r) => r.dayId) } },
@@ -665,7 +702,7 @@ export async function getMoves(athleteId: string): Promise<MoveView[]> {
   const byId = new Map(days.map((d) => [d.id, d]));
   return rows.map((r) => {
     const d = byId.get(r.dayId);
-    return { ...moveData(r), label: d?.label ?? null, phase: d?.week.block.phase ?? null, week: d?.week.order ?? null };
+    return { ...moveData(r), athleteId: r.athleteId, label: d?.label ?? null, phase: d?.week.block.phase ?? null, week: d?.week.order ?? null };
   });
 }
 
@@ -678,17 +715,23 @@ export async function getMoveMap(athleteIds: string[]): Promise<Map<string, stri
   return movesMap(rows);
 }
 
-/** Every meeting with the athlete that is still standing, soonest first. */
-export async function getMeetings(athleteId: string): Promise<MeetingData[]> {
-  const rows = await prisma.meeting.findMany({ where: { athleteId, deletedAt: null } });
-  return rows.map(meetingData).sort(byWhen);
+/** Every meeting still standing, with one athlete or several, soonest first. */
+export async function getMeetings(athleteIds: string | string[]): Promise<(MeetingData & { athleteId: string })[]> {
+  const rows = await prisma.meeting.findMany({ where: { athleteId: forAthletes(athleteIds), deletedAt: null } });
+  return rows.map((r) => ({ ...meetingData(r), athleteId: r.athleteId })).sort(byWhen);
 }
 
-/** What the Schedule tab has for the coach: moves not yet seen, and meetings still to answer. */
-export async function scheduleNews(athleteId: string, today: string): Promise<number> {
+/** What Schedule has for the coach, per athlete: moves not yet seen, and meetings still to answer. */
+export async function scheduleNews(athleteIds: string[], today: string): Promise<Map<string, number>> {
   const [moves, meetings] = await Promise.all([
-    prisma.sessionMove.count({ where: { athleteId, deletedAt: null, seenAt: null } }),
-    prisma.meeting.count({ where: { athleteId, deletedAt: null, status: "PROPOSED", proposedBy: "athlete", day: { gte: today } } }),
+    prisma.sessionMove.groupBy({ by: ["athleteId"], where: { athleteId: { in: athleteIds }, deletedAt: null, seenAt: null }, _count: { _all: true } }),
+    prisma.meeting.groupBy({
+      by: ["athleteId"],
+      where: { athleteId: { in: athleteIds }, deletedAt: null, status: "PROPOSED", proposedBy: "athlete", day: { gte: today } },
+      _count: { _all: true },
+    }),
   ]);
-  return moves + meetings;
+  const out = new Map<string, number>();
+  for (const g of [...moves, ...meetings]) out.set(g.athleteId, (out.get(g.athleteId) ?? 0) + g._count._all);
+  return out;
 }

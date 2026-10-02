@@ -2376,7 +2376,7 @@ function SubHeader({ cols }: { cols: WeekCol[] }) {
       {cols.map((col, k) => (
         <HeadCell
           key={col}
-          className={`${col === "intensity" ? "justify-end" : col === "notes" || col === "video" ? "!justify-start" : ""} ${
+          className={`${col === "notes" || col === "video" ? "!justify-start" : ""} ${
             k === cols.length - 1 ? "border-r border-border" : ""
           }`}
         >

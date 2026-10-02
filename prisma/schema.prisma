@@ -421,14 +421,16 @@ model CheckinAnswer {
   @@index([athleteId, day])
 }
 
-/// A note from the coach to the athlete about one session, read in the athlete app's inbox.
-/// Both sides write it — the coach the text, the athlete when they read it — so it syncs
-/// like weigh-ins: the newer edit wins, deletes are tombstones.
+/// One message in the chat between coach and athlete: a note about a session, or anything
+/// either of them wrote. Both sides write it — the sender the text, the other side when
+/// they read it — so it syncs like weigh-ins: the newer edit wins, deletes are tombstones.
 model CoachMessage {
   id        String    @id @default(cuid())
   athleteId String
   athlete   Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
-  /// The session it is about, `YYYY-MM-DD` on the athlete's calendar.
+  /// Who wrote it: "coach" or "athlete".
+  sender    String    @default("coach")
+  /// The session it is about, or the day it was written, `YYYY-MM-DD` on the athlete's calendar.
   day       String
   /// The session's Day, when it still exists; a plain id so a deleted phase leaves the note.
   dayId     String?

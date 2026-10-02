@@ -543,6 +543,8 @@ export async function applyPush(
     const isMeeting = table === "Meeting";
     /** A note's text as the server had it, to tell a reworded note from a re-sent one. */
     const bodies = new Map<string, unknown>();
+    /** Who wrote each message already here, for a row from an app that doesn't send it. */
+    const senders = new Map<string, unknown>();
     /** A meeting as the server had it, to tell what the coach changed. */
     const before = new Map<string, Row>();
     for (const row of list) {
@@ -557,17 +559,21 @@ export async function applyPush(
       const chunk = ids.slice(i, i + 500);
       const hit = await rows(
         client,
-        `SELECT "id", "updatedAt"${isNote ? `, "body"` : ""}${isMeeting ? `, "day", "time", "minutes", "timeZone", "place", "proposedBy", "status", "deletedAt"` : ""} FROM ${quote(table)} WHERE "id" IN (${chunk.map(() => "?").join(", ")})`,
+        `SELECT "id", "updatedAt"${isNote ? `, "body", "sender"` : ""}${isMeeting ? `, "day", "time", "minutes", "timeZone", "place", "proposedBy", "status", "deletedAt"` : ""} FROM ${quote(table)} WHERE "id" IN (${chunk.map(() => "?").join(", ")})`,
         chunk,
       );
       for (const r of hit) {
         if (!mine.has(String(r.id))) return `${table} ${r.id} belongs to someone else.`;
         held.set(String(r.id), stampOf(r.updatedAt));
-        if (isNote) bodies.set(String(r.id), r.body);
+        if (isNote) {
+          bodies.set(String(r.id), r.body);
+          senders.set(String(r.id), r.sender);
+        }
         if (isMeeting) before.set(String(r.id), r as Row);
       }
     }
     const fresh = newerRows(list, held);
+    if (isNote) for (const r of fresh) r.sender ??= senders.get(String(r.id)) ?? "coach";
     if (isMeeting) {
       for (const r of fresh) {
         const news = meetingNews(before.get(String(r.id)), r);
@@ -576,7 +582,7 @@ export async function applyPush(
     }
     if (isNote) {
       for (const r of fresh) {
-        if (r.deletedAt || r.readAt) continue;
+        if (r.deletedAt || r.readAt || r.sender === "athlete") continue;
         if (held.has(String(r.id)) && bodies.get(String(r.id)) === r.body) continue;
         notes.push({ id: String(r.id), athleteId: String(r.athleteId), day: String(r.day), body: String(r.body) });
       }

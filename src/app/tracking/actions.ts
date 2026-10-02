@@ -7,6 +7,7 @@ import { cleanInjury, injuryData, type InjuryData, type InjuryInput } from "@/li
 import { cleanAmount, isEmpty, nutritionEntry, nutritionId, type NutritionEntry } from "@/lib/nutrition";
 import { today as calendarToday, ymdOf } from "@/lib/dates";
 import { cleanMeeting, meetingData, waitingOn, type MeetingData, type MeetingInput } from "@/lib/meetings";
+import { cleanBody } from "@/lib/messages";
 import { prisma } from "@/lib/prisma";
 import { messageData, type MessageData } from "@/lib/queries";
 import { assertCoach } from "@/lib/role";
@@ -59,18 +60,10 @@ export async function saveNutrition(athleteId: string, day: string, values: Part
 }
 
 /*
- * Session review: marking a session looked at, and notes for the athlete about it. A note
- * lands in the athlete app's inbox; like weigh-ins it syncs row by row, deletes as tombstones.
+ * Session review and the chat: marking a session looked at, notes for the athlete about it,
+ * and messages either way. All of it lands in the athlete app's chat; like weigh-ins it syncs
+ * row by row, deletes as tombstones.
  */
-
-const MAX_MESSAGE = 4000;
-
-function cleanBody(body: string): string {
-  const text = body.trim();
-  if (text === "") throw new Error("Write something first.");
-  if (text.length > MAX_MESSAGE) throw new Error("That's too long for one note.");
-  return text;
-}
 
 /** Marks sessions reviewed now, or takes the mark off again. */
 export async function markReviewed(dayIds: string[], reviewed: boolean): Promise<string | null> {
@@ -101,17 +94,32 @@ export async function sendMessage(
   return { message: messageData(row), reviewedAt: now.toISOString() };
 }
 
-/** Rewording a note shows it as new in the athlete's inbox again. */
+/** A message in the chat, about no session in particular. */
+export async function sendChatMessage(athleteId: string, body: string): Promise<MessageData> {
+  assertCoach();
+  const row = await prisma.coachMessage.create({ data: { athleteId, day: ymdOf(calendarToday()), body: cleanBody(body) } });
+  refresh();
+  return messageData(row);
+}
+
+/** The coach opened the chat: the athlete's messages count as read. */
+export async function markChatRead(athleteId: string) {
+  assertCoach();
+  await prisma.coachMessage.updateMany({ where: { athleteId, sender: "athlete", deletedAt: null, readAt: null }, data: { readAt: new Date() } });
+  refresh();
+}
+
+/** Rewording a note shows it as new in the athlete's chat again. Only the coach's own. */
 export async function editMessage(id: string, body: string): Promise<MessageData> {
   assertCoach();
-  const row = await prisma.coachMessage.update({ where: { id }, data: { body: cleanBody(body), readAt: null } });
+  const row = await prisma.coachMessage.update({ where: { id, sender: "coach" }, data: { body: cleanBody(body), readAt: null } });
   refresh();
   return messageData(row);
 }
 
 export async function deleteMessage(id: string) {
   assertCoach();
-  await prisma.coachMessage.updateMany({ where: { id, deletedAt: null }, data: { deletedAt: new Date() } });
+  await prisma.coachMessage.updateMany({ where: { id, sender: "coach", deletedAt: null }, data: { deletedAt: new Date() } });
   refresh();
 }
 
