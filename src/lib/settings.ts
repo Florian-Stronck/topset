@@ -17,7 +17,7 @@ export type DateFormat = "dd/mm/yyyy" | "d-mmm" | "dd/mm" | "mm/dd";
 export type StartScreen = "overview" | "programming" | "last";
 export type Language = "en" | "de" | "fr" | "lb";
 export type ExportKind = "xlsx" | "pdf" | "print" | "csv" | "repwise" | "repwise-tsv";
-export type ProgField = "SETS" | "REPS" | "INTENSITY";
+export type ProgField = "SETS" | "REPS" | "INTENSITY" | "DURATION" | "LOAD";
 
 export type ProgressionPreset = {
   label: string;
@@ -80,6 +80,8 @@ export type CoachSettings = {
   restName: string;
   tiers: Record<Tier, { label: string; show: boolean }>;
   targets: string[];
+  /** The % of the competition max a variation is trained off, unless the athlete says otherwise. */
+  variationPercent: number;
   progressionPresets: ProgressionPreset[];
   /** An edit in one week is made in every other unlocked week of the phase too. */
   syncWeeks: boolean;
@@ -156,10 +158,13 @@ export const DEFAULTS: CoachSettings = {
     ACCESSORY: { label: "Accessory", show: true },
   },
   targets: ["Squat", "Bench", "Deadlift", "General", "Quadriceps", "Hamstrings", "Glutes", "Back", "Chest", "Shoulders", "Arms", "Core"],
+  variationPercent: 90,
   progressionPresets: [
     { label: "+1 rep / week", field: "REPS", op: "ADD", amount: 1, everyWeeks: 1, startWeek: 2, endWeek: null },
     { label: "+0.5 RPE / week", field: "INTENSITY", op: "ADD", amount: 0.5, everyWeeks: 1, startWeek: 2, endWeek: null },
     { label: "+2.5 / week", field: "INTENSITY", op: "ADD", amount: 2.5, everyWeeks: 1, startWeek: 2, endWeek: null },
+    { label: "+2.5 kg / week", field: "LOAD", op: "ADD", amount: 2.5, everyWeeks: 1, startWeek: 2, endWeek: null },
+    { label: "+15 s / week", field: "DURATION", op: "ADD", amount: 15, everyWeeks: 1, startWeek: 2, endWeek: null },
     { label: "+1 set every 2 weeks", field: "SETS", op: "ADD", amount: 1, everyWeeks: 2, startWeek: 2, endWeek: null },
     { label: "Deload: −40% sets, last week", field: "SETS", op: "MULTIPLY", amount: 0.6, everyWeeks: 1, startWeek: 4, endWeek: 4 },
   ],
@@ -225,6 +230,7 @@ const ATHLETE_KEYS = [
   "defaultUnit", "roundKg", "roundLb", "e1rmFormula", "rpeTable", "decimals",
   "weekStart", "snapStart", "trainingDays", "dateFormat", "language",
   "restName", "dayNaming", "tiers", "phaseNames", "pr", "totalLifts", "attemptShare",
+  "variationPercent",
 ] as const satisfies readonly (keyof CoachSettings)[];
 
 export function forAthlete(settings: CoachSettings): CoachSettings {

@@ -18,12 +18,12 @@ export const VIEWS: { id: TrackingView; label: string; icon: string }[] = [
 ];
 
 /** How often Tracking fetches what athletes logged while it is open and on screen. */
-const AUTO_REFRESH_MS = 60_000;
+const AUTO_REFRESH_MS = 10_000;
 
 /**
  * Tracking's frame, whichever view is open: the athlete and phase pickers, the three
  * views as tabs, and what can be done from any of them. Fetches new athlete logs on its
- * own every minute while the window is in front.
+ * own every few seconds while the window is in front.
  */
 export function TrackingShell({
   view,
@@ -126,7 +126,7 @@ export function TrackingShell({
       {
         id: "track-autosync",
         group: "Tracking view",
-        title: autoSync ? t("Stop refreshing on its own") : t("Refresh on its own every minute"),
+        title: autoSync ? t("Stop refreshing on its own") : t("Refresh on its own"),
         keywords: "auto sync reload",
         run: () => setTrackingPref({ autoSync: !autoSync }),
       },
@@ -206,13 +206,13 @@ export function TrackingShell({
             <button
               type="button"
               onClick={refresh}
-              title={autoSync ? t("Refreshes on its own every minute. Click to refresh now.") : t("Load what the athlete logged since this page opened")}
+              title={autoSync ? t("Refreshes on its own. Click to refresh now.") : t("Load what the athlete logged since this page opened")}
               className="flex items-center gap-1.5 rounded-full px-2 py-1.5 text-[11px] text-muted-2 hover:text-accent"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5" />
               </svg>
-              {ago === null ? (autoSync ? t("Refreshes every minute") : t("Refresh")) : ago < 1 ? t("Updated just now") : t("Updated {n} min ago", { n: ago })}
+              {ago === null ? (autoSync ? t("Refreshes on its own") : t("Refresh")) : ago < 1 ? t("Updated just now") : t("Updated {n} min ago", { n: ago })}
             </button>
             {programs.length > 0 && block && (
               <div className="flex items-center rounded-full border border-border bg-surface px-3 py-1.5">

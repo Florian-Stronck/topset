@@ -2,7 +2,7 @@
 
 import crypto from "node:crypto";
 import { revalidatePath } from "next/cache";
-import { getAthleteByToken, rowForToken, type InboxMessage } from "@/lib/athlete-queries";
+import { getAthleteByToken, inboxFor, rowForToken, type InboxMessage } from "@/lib/athlete-queries";
 import { athleteToday } from "@/lib/athlete-today";
 import {
   CLIP_TYPES,
@@ -32,6 +32,7 @@ import { cleanAmount, isEmpty, nutritionId } from "@/lib/nutrition";
 import { cleanInjury, injuryData, type InjuryData, type InjuryInput } from "@/lib/injuries";
 import { cleanBody } from "@/lib/messages";
 import { prisma } from "@/lib/prisma";
+import { isAthleteHost } from "@/lib/role";
 import { PUSH_KINDS, pushServiceEndpoint, type PushPrefs } from "@/lib/push-kinds";
 import { rowActuals } from "@/lib/setlog";
 import { deleteObject, objectSize, objectStart, presign, storageConfig } from "@/lib/storage";
@@ -97,8 +98,12 @@ async function changed(token: string) {
     where: { OR: [{ athletes: { some: { accessToken: token } } }, { teams: { some: { team: { athletes: { some: { accessToken: token } } } } } }] },
     data: { athleteVersion: { increment: 1 } },
   });
-  revalidatePath("/tracking");
-  revalidatePath("/overview");
+  // Coach screens only exist on the desktop app. On the athlete host this would only throw
+  // away the phone's router cache and re-render the whole page after every set.
+  if (!isAthleteHost()) {
+    revalidatePath("/tracking");
+    revalidatePath("/overview");
+  }
 }
 
 export async function logSet(token: string, rowId: string, setIndex: number, patch: SetPatch) {
@@ -239,6 +244,13 @@ export async function saveCheckinAnswer(token: string, questionId: string, day: 
   }
   await changed(token);
   return value;
+}
+
+/** The open chat's whole list, fetched every couple of seconds instead of the page. */
+export async function chatMessages(token: string): Promise<InboxMessage[]> {
+  const athlete = await getAthleteByToken(token);
+  if (!athlete) throw new Error("This link isn't valid.");
+  return inboxFor(athlete.id);
 }
 
 /** The athlete writes to their coach in the chat. */
@@ -574,6 +586,8 @@ export async function saveInjury(token: string, input: InjuryInput): Promise<Inj
     row = await prisma.injury.create({ data: { ...data, athleteId: athlete.id, source: "athlete" } });
   }
   await changed(token);
+  // The Tools tab is cached on the phone (`staleTimes`); a rare write can afford the re-render.
+  revalidatePath("/a", "layout");
   return injuryData(row);
 }
 
@@ -586,4 +600,5 @@ export async function deleteInjury(token: string, id: string) {
     data: { deletedAt: new Date() },
   });
   if (count > 0) await changed(token);
+  revalidatePath("/a", "layout");
 }

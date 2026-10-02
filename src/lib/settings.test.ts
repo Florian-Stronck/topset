@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { estimate1RM, percentOf1RM, roundToIncrement } from "@/lib/intensity";
+import { estimate1RM, oneRepMaxFor, percentOf1RM, roundToIncrement } from "@/lib/intensity";
 import { DEFAULTS, mergeSettings, parseSettings, setActiveSettings } from "@/lib/settings";
 
 describe("parseSettings", () => {
@@ -60,4 +60,14 @@ describe("the RPE chart", () => {
   test("nothing past where the chart reaches", () => {
     assert.equal(percentOf1RM(12, 6), null);
   });
+});
+
+test("variation drop-off: the exercise's own, else the athlete's, else the coach's", () => {
+  const maxes = { squat1RM: 200, bench1RM: null, dead1RM: null, unit: "KG" as const };
+  assert.equal(oneRepMaxFor("Squat", "VARIATION", maxes, "Paused Squat"), 180);
+  assert.equal(oneRepMaxFor("Squat", "VARIATION", { ...maxes, variationPct: 80 }, "Paused Squat"), 160);
+  const own = { ...maxes, variationPct: 80, variationPcts: '{"paused squat": 85}' };
+  assert.equal(oneRepMaxFor("Squat", "VARIATION", own, "Paused Squat"), 170);
+  assert.equal(oneRepMaxFor("Squat", "VARIATION", own, "Pin Squat"), 160);
+  assert.equal(oneRepMaxFor("Squat", "PRIMARY", own, "Squat"), 200);
 });

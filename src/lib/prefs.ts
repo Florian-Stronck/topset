@@ -56,7 +56,7 @@ export type TrackingPrefs = {
   showUpcoming: boolean;
   /** Coach notes, tempo and rest under each exercise. */
   showCues: boolean;
-  /** Fetch what athletes logged every minute while Tracking is open. */
+  /** Fetch what athletes logged every few seconds while Tracking is open. */
   autoSync: boolean;
   chartBasis: "estimated" | "prescribed";
   chartRange: "phase" | "program" | "12w" | "all";

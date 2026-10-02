@@ -28,7 +28,7 @@ export const getAthleteByToken = cache(async (token: string) => {
   return prisma.athlete.findUnique({
     // A coach the admin turned off takes their athletes' links with them.
     where: { accessToken: token, coach: { disabledAt: null } },
-    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true },
+    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true },
   });
 });
 
@@ -39,7 +39,7 @@ export const getAthleteByViewToken = cache(async (token: string) => {
   if (!plausibleToken(token)) return null;
   return prisma.athlete.findUnique({
     where: { viewToken: token, coach: { disabledAt: null } },
-    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true },
+    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true },
   });
 });
 
@@ -184,10 +184,10 @@ export async function getAthleteCalendar(athlete: TokenAthlete): Promise<{ phase
 }
 
 /** The sessions the athlete moved and hasn't moved back. */
-export async function movesFor(athleteId: string): Promise<MoveData[]> {
+export const movesFor = cache(async (athleteId: string): Promise<MoveData[]> => {
   const rows = await prisma.sessionMove.findMany({ where: { athleteId, deletedAt: null }, orderBy: { day: "asc" } });
   return rows.map(moveData);
-}
+});
 
 /** Every meeting on file that is still standing, soonest first. */
 export async function meetingsFor(athleteId: string): Promise<MeetingData[]> {
@@ -199,33 +199,41 @@ export async function meetingsFor(athleteId: string): Promise<MeetingData[]> {
 export async function sessionsInFull(athlete: TokenAthlete, sessions: ScheduledSession[]): Promise<AthleteSession[]> {
   if (sessions.length === 0) return [];
   const byDay = new Map<string, DayRow[]>();
-  const rows = await rowsOf(sessions.map((s) => s.day.id));
+  // The athlete's clips are read alongside the rows, not after them: one round trip, not two.
+  const [rows, videos] = await Promise.all([rowsOf(sessions.map((s) => s.day.id)), videosOf(athlete.id)]);
   for (const row of rows) {
     byDay.set(row.dayId, [...(byDay.get(row.dayId) ?? []), row]);
   }
-  const clips = await clipsOf(athlete.id, rows.map((r) => r.id));
+  const clips = clipsOf(videos, new Set(rows.map((r) => r.id)));
   return sessions.map((s) => toSession(s, byDay.get(s.day.id) ?? [], athlete, clips));
 }
 
 /** How long a link to play a video works: long enough for a session at the gym. */
 const PLAY_LINK_SECONDS = 6 * 60 * 60;
 
-/**
- * The videos still in storage for these rows, each with a link to play it, per row; null
- * when the server has no bucket. Links are signed here, with no call to storage.
- */
-async function clipsOf(athleteId: string, rowIds: string[]): Promise<Map<string, ClipView[]> | null> {
-  const config = storageConfig();
-  if (!config) return null;
-  const out = new Map<string, ClipView[]>();
-  if (rowIds.length === 0) return out;
-  const keep = retentionDays();
-  const since = new Date(Date.now() - keep * 86_400_000);
-  const rows = await prisma.athleteVideo.findMany({
-    where: { athleteId, rowId: { in: rowIds }, deletedAt: null, uploadedAt: { gt: since } },
+/** The athlete's videos still in storage; null when the server has no bucket. */
+async function videosOf(athleteId: string) {
+  if (!storageConfig()) return null;
+  const since = new Date(Date.now() - retentionDays() * 86_400_000);
+  return prisma.athleteVideo.findMany({
+    where: { athleteId, deletedAt: null, uploadedAt: { gt: since } },
     orderBy: { uploadedAt: "asc" },
   });
-  for (const v of rows) {
+}
+
+type Video = NonNullable<Awaited<ReturnType<typeof videosOf>>>[number];
+
+/**
+ * The videos among these, each with a link to play it, per row; null when the server has
+ * no bucket. Links are signed here, with no call to storage.
+ */
+function clipsOf(videos: Video[] | null, rowIds: Set<string>): Map<string, ClipView[]> | null {
+  const config = storageConfig();
+  if (!config || !videos) return null;
+  const out = new Map<string, ClipView[]>();
+  const keep = retentionDays();
+  for (const v of videos) {
+    if (!rowIds.has(v.rowId)) continue;
     const uploaded = v.uploadedAt ?? v.createdAt;
     const view: ClipView = {
       id: v.id,
@@ -282,12 +290,14 @@ export async function checkinOn(athleteId: string, day: string): Promise<DayChec
   const questions = rows.map(questionData).filter((q) => asksOn(q, day));
   if (questions.length === 0) return { questions, answers: [], photos: [], photosOn: config !== null, target: null };
   const where = questions.map((q) => ({ questionId: q.id, day: answerDay(q, day) }));
-  const [answers, nutrition, photos] = await Promise.all([
+  const asksNutrition = questions.some((q) => nutrientOf(q));
+  const [answers, nutrition, photos, spans] = await Promise.all([
     prisma.checkinAnswer.findMany({ where: { deletedAt: null, OR: where }, select: { id: true, questionId: true, day: true, value: true } }),
     prisma.nutritionLog.findMany({ where: { id: { in: questions.map((q) => nutritionId(athleteId, answerDay(q, day))) }, deletedAt: null } }),
     config && questions.some((q) => q.config.photo)
       ? prisma.checkinPhoto.findMany({ where: { athleteId, deletedAt: null, uploadedAt: { not: null }, OR: where }, orderBy: { createdAt: "asc" } })
       : [],
+    asksNutrition ? targetSpans(athleteId) : [],
   ]);
   for (const q of questions) {
     const n = nutrientOf(q);
@@ -305,7 +315,7 @@ export async function checkinOn(athleteId: string, day: string): Promise<DayChec
       url: presign(config!, { method: "GET", key: p.storageKey, expiresIn: PLAY_LINK_SECONDS }),
     })),
     photosOn: config !== null,
-    target: questions.some((q) => nutrientOf(q)) ? targetOn(await targetSpans(athleteId), day) : null,
+    target: asksNutrition ? targetOn(spans, day) : null,
   };
 }
 

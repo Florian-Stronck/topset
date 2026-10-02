@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { athleteTraining, phaseSpan, trainingFlags, type WindowSession } from "@/lib/overview";
+import { athleteTraining, checkinStatus, phaseSpan, trainingFlags, type WindowSession } from "@/lib/overview";
 import type { ComplianceRow } from "@/lib/compliance";
 
 const row = (over: Partial<ComplianceRow> = {}): ComplianceRow => ({
@@ -116,4 +116,14 @@ test("low readiness in the last week is flagged, with the answers behind it", ()
     readiness: { day: "2026-09-10", score: 1, low: [], notes: [] },
   });
   assert.equal(old.length, 0);
+});
+
+test("check-in status: missing link first, then the two-week line", () => {
+  const now = new Date(2026, 9, 20, 12);
+  const at = (d: number) => new Date(2026, 9, d, 9);
+  assert.equal(checkinStatus(at(20), { hasLink: false, linksOn: true, now }).tone, "miss");
+  assert.equal(checkinStatus(null, { hasLink: true, linksOn: true, now }).tone, "miss");
+  assert.equal(checkinStatus(at(18), { hasLink: false, linksOn: false, now }).tone, "ok");
+  assert.equal(checkinStatus(at(10), { hasLink: true, linksOn: true, now }).tone, "warn");
+  assert.equal(checkinStatus(at(1), { hasLink: true, linksOn: true, now }).tone, "miss");
 });

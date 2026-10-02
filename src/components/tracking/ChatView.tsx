@@ -2,12 +2,16 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { syncChat } from "@/app/sync-actions";
 import { deleteMessage, editMessage, markChatRead, sendChatMessage } from "@/app/tracking/actions";
 import { shortDate } from "@/lib/athlete-format";
 import { useCommands, type Command } from "@/lib/commands";
 import { formatMoment } from "@/lib/dates";
 import { t } from "@/lib/i18n";
 import type { MessageData } from "@/lib/queries";
+
+/** How often an open chat on screen fetches new messages from the server. */
+const POLL_MS = 2_000;
 
 /**
  * The chat with one athlete: their messages on the left, the coach's on the right — session
@@ -33,7 +37,7 @@ export function ChatView({
   const [pending, startTransition] = useTransition();
   const end = useRef<HTMLDivElement>(null);
 
-  // A refresh (the minute's sync) brings the server's list.
+  // A refresh (the chat's own sync) brings the server's list.
   if (synced !== initial) {
     setSynced(initial);
     setMessages(initial);
@@ -42,6 +46,18 @@ export function ChatView({
   useEffect(() => {
     if (unread > 0) void markChatRead(athlete.id).then(() => router.refresh());
   }, [athlete.id, unread, router]);
+
+  useEffect(() => {
+    let busy = false;
+    const timer = setInterval(() => {
+      if (busy || document.visibilityState !== "visible") return;
+      busy = true;
+      void syncChat()
+        .then((news) => news && router.refresh())
+        .finally(() => (busy = false));
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [router]);
 
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });

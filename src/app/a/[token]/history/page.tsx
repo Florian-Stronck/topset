@@ -61,11 +61,8 @@ export default async function AthleteHistory({
     meetingsOn.set(m.day, [...(meetingsOn.get(m.day) ?? []), m]);
   }
   // The whole grid, so the days showing from either side of the month are coloured too.
-  const shown = await sessionsInFull(
-    athlete,
-    schedule.filter((s) => s.ymd >= first && s.ymd <= last),
-  );
-  const notes = await inboxFor(athlete.id, shown.map((s) => s.ymd));
+  const inGrid = schedule.filter((s) => s.ymd >= first && s.ymd <= last);
+  const [shown, notes] = await Promise.all([sessionsInFull(athlete, inGrid), inboxFor(athlete.id, inGrid.map((s) => s.ymd))]);
   const sessionOn = new Map(shown.map((s) => [s.ymd, s]));
   const meetsOn = new Map<string, AthleteMeet[]>();
   for (const m of meets) if (m.ymd >= first && m.ymd <= last) meetsOn.set(m.ymd, [...(meetsOn.get(m.ymd) ?? []), m]);

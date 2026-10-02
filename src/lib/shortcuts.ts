@@ -21,7 +21,8 @@ export function hotkey(e: KeyboardEvent | React.KeyboardEvent): string {
   // digits come off the physical key instead.
   const letter = /^Key([A-Z])$/.exec(e.code);
   const digit = /^Digit([0-9])$/.exec(e.code);
-  const key = e.key === " " ? "space" : e.key.toLowerCase();
+  // Picking a datalist or autofill suggestion sends a keydown with no key at all.
+  const key = e.key === " " ? "space" : (e.key ?? "").toLowerCase();
   parts.push(letter ? letter[1].toLowerCase() : digit ? digit[1] : key);
 
   return parts.join("+");

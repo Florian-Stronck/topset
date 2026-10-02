@@ -16,7 +16,7 @@ const TABS: { id: OverviewTab; label: string; icon: string }[] = [
 ];
 
 /** How often Schedule and Chat fetch what came in from phones while open and on screen. */
-const AUTO_REFRESH_MS = 60_000;
+const AUTO_REFRESH_MS = 10_000;
 
 /**
  * The Overview's three views as tabs: the roster board, and Schedule and Chat for every

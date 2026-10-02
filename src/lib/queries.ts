@@ -196,6 +196,8 @@ export async function getOverview(today: Date) {
     squat1RM: athlete.squat1RM,
     bench1RM: athlete.bench1RM,
     dead1RM: athlete.dead1RM,
+    variationPct: athlete.variationPct,
+    variationPcts: athlete.variationPcts,
     blocks: athlete.blocks.map((block) => {
       const first = block.weeks[0];
       return {
@@ -286,13 +288,37 @@ export async function getRoster() {
         select: {
           id: true,
           name: true,
-          phases: { orderBy: { order: "asc" }, select: { id: true, phase: true, _count: { select: { weeks: true } } } },
+          phases: { orderBy: { order: "asc" }, select: { id: true, phase: true, startDate: true, _count: { select: { weeks: true } } } },
         },
       },
     },
   });
 
-  return { coach, athletes };
+  // The last time each athlete answered a check-in or logged a set, whichever is later.
+  const answered = await prisma.checkinAnswer.groupBy({
+    by: ["athleteId"],
+    where: { deletedAt: null },
+    _max: { updatedAt: true },
+  });
+  // ponytail: one query per athlete; a raw GROUP BY over the joins if rosters get big.
+  const logged = await Promise.all(
+    athletes.map((a) =>
+      prisma.setLog.findFirst({
+        where: { row: { day: { week: { block: { athleteId: a.id } } } } },
+        orderBy: { loggedAt: "desc" },
+        select: { loggedAt: true },
+      }),
+    ),
+  );
+  const lastCheckin = new Map<string, Date>();
+  for (const a of answered) if (a._max.updatedAt) lastCheckin.set(a.athleteId, a._max.updatedAt);
+  athletes.forEach((a, i) => {
+    const at = logged[i]?.loggedAt;
+    const was = lastCheckin.get(a.id);
+    if (at && (!was || at > was)) lastCheckin.set(a.id, at);
+  });
+
+  return { coach, athletes, lastCheckin };
 }
 
 export type RosterAthlete = Awaited<ReturnType<typeof getRoster>>["athletes"][number];

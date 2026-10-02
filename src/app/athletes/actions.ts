@@ -7,6 +7,7 @@ import { applyAllProgressions } from "@/app/programming/actions";
 import { loadSettings } from "@/lib/coach-settings";
 import { snapStart } from "@/lib/dates";
 import { prisma } from "@/lib/prisma";
+import { parseVariationPcts } from "@/lib/intensity";
 import { t } from "@/lib/i18n";
 import { COLORS, formatDays, KINDS, parseConfig, type CheckinCadence, type CheckinConfig, type CheckinKind, bodyweightQuestionId } from "@/lib/checkins";
 import { CHECKIN_ICONS } from "@/components/CheckinIcon";
@@ -196,10 +197,22 @@ export async function updateAthleteProfile(
     squat1RM?: number | null;
     bench1RM?: number | null;
     dead1RM?: number | null;
+    /** % of the competition max; null goes back to the coach's default. */
+    variationPct?: number | null;
+    /** JSON, {"Paused Squat": 85}; null clears every per-exercise drop-off. */
+    variationPcts?: string | null;
+    /** The coach's own notes; empty clears them. */
+    notes?: string | null;
   },
 ) {
   assertCoach();
   const data = { ...patch };
+  if (data.notes !== undefined) data.notes = data.notes?.trim().slice(0, 5000) || null;
+  if (data.variationPct != null && !(data.variationPct > 0 && data.variationPct <= 200)) delete data.variationPct;
+  if (data.variationPcts != null) {
+    const own = parseVariationPcts(data.variationPcts);
+    data.variationPcts = Object.keys(own).length > 0 ? JSON.stringify(own) : null;
+  }
   if (data.name !== undefined) {
     const name = data.name.trim();
     if (!name) delete data.name;

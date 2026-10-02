@@ -80,6 +80,10 @@ export type AthleteData = {
   squat1RM: number | null;
   bench1RM: number | null;
   dead1RM: number | null;
+  /** The % of the competition max variations are trained off; null uses the coach's. */
+  variationPct: number | null;
+  /** Per-exercise drop-offs as JSON — see `parseVariationPcts`. */
+  variationPcts: string | null;
 };
 
 export const WEEKDAYS = [

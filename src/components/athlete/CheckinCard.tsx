@@ -2,7 +2,15 @@
 
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { Unit } from "@prisma/client";
-import { deleteBodyweight, deletePhoto, finishPhoto, logBodyweight, saveCheckinAnswer, startPhoto } from "@/app/a/actions";
+import * as actions from "@/app/a/actions";
+import { synced } from "@/components/athlete/WriteSync";
+
+const { startPhoto } = actions;
+const deleteBodyweight = synced(actions.deleteBodyweight);
+const deletePhoto = synced(actions.deletePhoto);
+const finishPhoto = synced(actions.finishPhoto);
+const logBodyweight = synced(actions.logBodyweight);
+const saveCheckinAnswer = synced(actions.saveCheckinAnswer);
 import { CheckinIcon } from "@/components/CheckinIcon";
 import type { DayCheckin } from "@/lib/athlete-queries";
 import {

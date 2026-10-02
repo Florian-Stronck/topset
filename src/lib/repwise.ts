@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { maxesOf, percentOf1RM, resolveDay } from "@/lib/intensity";
+import { maxesOf, percentOf1RM, resolveDay, variationPercent } from "@/lib/intensity";
 import type { BlockWithDays, RowWithRules } from "@/lib/queries";
 import { noFormula } from "@/lib/export";
 
@@ -106,7 +106,7 @@ export function toRepwiseSheets(block: BlockWithDays): RepwiseSheet[] {
         const annotation = [
           note,
           target === null ? "" : `target ${target} ${unit}`,
-          row.tier === "VARIATION" ? "variation — trained off 90% of the comp max" : "",
+          row.tier === "VARIATION" ? `variation — trained off ${variationPercent(row.exercise, maxes)}% of the comp max` : "",
           cell.coachNotes ?? "",
         ]
           .filter(Boolean)

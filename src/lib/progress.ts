@@ -236,7 +236,7 @@ export function intensityZones(block: PhaseBlock, athlete: AthleteData, lift: Li
     const parts: Record<string, number> = Object.fromEntries(ZONES.map((z) => [z.key, 0]));
     for (const row of rowsOfWeek(week)) {
       if (lift !== "all" && liftOf(row.target) !== lift) continue;
-      const max = oneRepMaxFor(row.target, row.tier, maxes);
+      const max = oneRepMaxFor(row.target, row.tier, maxes, row.exercise);
       if (max === null || max <= 0) continue;
       const logged = (row.logs ?? []).filter((l) => l.done && l.weight !== null).map((l) => l.weight as number);
       const weights =

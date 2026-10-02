@@ -4,7 +4,7 @@ import { complianceByWeek, intensityZones, liftWeekTable, rowTonnage, rpeByWeek,
 import type { SetLogData } from "@/lib/setlog";
 import type { AthleteData, BlockData, RowData } from "@/lib/types";
 
-const athlete: AthleteData = { id: "a", name: "Ann", unit: "KG", squat1RM: 200, bench1RM: 120, dead1RM: 240 };
+const athlete: AthleteData = { id: "a", name: "Ann", unit: "KG", squat1RM: 200, bench1RM: 120, dead1RM: 240, variationPct: null, variationPcts: null };
 
 const log = (setIndex: number, weight: number, reps: number, done = true): SetLogData => ({
   id: `l${setIndex}`,

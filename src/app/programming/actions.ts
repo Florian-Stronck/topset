@@ -17,7 +17,7 @@ import {
   maxFor,
   planned,
 } from "@/lib/competition";
-import { maxesOf } from "@/lib/intensity";
+import { maxesOf, resolveDay } from "@/lib/intensity";
 import { parseProgramFile } from "@/lib/program-file";
 import { project, type Rule } from "@/lib/progression";
 
@@ -677,7 +677,12 @@ async function progressionWrites(blockId: string, headIds?: string[]) {
   const block = await prisma.block.findUniqueOrThrow({
     where: { id: blockId },
     select: {
-      athlete: { select: { unit: true } },
+      squat1RM: true,
+      bench1RM: true,
+      dead1RM: true,
+      athlete: {
+        select: { unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true },
+      },
       weeks: {
         select: {
           order: true,
@@ -689,6 +694,22 @@ async function progressionWrites(blockId: string, headIds?: string[]) {
   });
 
   const unit = block.athlete.unit;
+  // A weight rule on a row written as RPE or % starts from what week 1 works out to.
+  const needsWeight = (row: { load: number | null; intensityType: IntensityType; rules: Rule[] }) =>
+    row.load === null &&
+    row.intensityType !== "WEIGHT" &&
+    row.intensityType !== "RANGE" &&
+    row.rules.some((r) => r.enabled && r.field === "LOAD");
+  const startWeights = new Map<string, number | null>();
+  if (block.weeks.some((w) => w.days.some((d) => d.rows.some(needsWeight)))) {
+    await loadSettings();
+    const maxes = maxesOf(block, block.athlete);
+    for (const day of block.weeks.flatMap((w) => w.days)) {
+      if (!day.rows.some(needsWeight)) continue;
+      const resolved = resolveDay(day.rows, maxes);
+      for (const row of day.rows) if (needsWeight(row)) startWeights.set(row.id, resolved.get(row.id)?.weight ?? null);
+    }
+  }
   const rows = block.weeks.flatMap((week) =>
     week.days.flatMap((day) => day.rows.map((row) => ({ ...row, week: week.order, locked: week.locked }))),
   );
@@ -714,7 +735,8 @@ async function progressionWrites(blockId: string, headIds?: string[]) {
       if (next.locked) continue;
       // Rules count weeks from the head's own week, so a chain starting in week 2 still
       // fires on its second link.
-      const data = { ...shape, ...project(head, head.rules, next.week - head.week + 1, unit) };
+      const base = startWeights.has(head.id) ? { ...head, load: startWeights.get(head.id) ?? null } : head;
+      const data = { ...shape, ...project(base, head.rules, next.week - head.week + 1, unit) };
       // A week already holding what the rules say needs no write.
       const row = next as unknown as Record<string, unknown>;
       if (Object.entries(data).every(([k, v]) => row[k] === v)) continue;
@@ -1492,6 +1514,7 @@ const RULED: Record<ProgField, readonly (typeof PLAN_FIELDS)[number][]> = {
   REPS: ["reps", "repsMax"],
   INTENSITY: ["intensityType", "intensity", "intensityMax", "rampStep", "load"],
   DURATION: ["duration"],
+  LOAD: ["load", "intensity", "intensityMax"],
 };
 
 /**

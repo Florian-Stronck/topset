@@ -11,7 +11,7 @@ export function AthleteNav({ token, unread = 0 }: { token: string; unread?: numb
   const tabs = [
     { href: base, label: t("Today"), icon: "M4 6h16M4 12h16M4 18h10" },
     { href: `${base}/history`, label: t("History"), icon: "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" },
-    { href: `${base}/inbox`, label: t("Chat"), icon: "M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z" },
+    { href: `${base}/inbox`, label: t("Chat"), icon: "M6 3h12a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-7l-3.5 3.5a.6.6 0 0 1-1-.4V17H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3Z" },
     { href: `${base}/tools`, label: t("Tools"), icon: "M4 20h16M7 16V8M12 16V4M17 16v-6" },
   ];
 
@@ -29,13 +29,13 @@ export function AthleteNav({ token, unread = 0 }: { token: string; unread?: numb
               }`}
             >
               <span className="relative">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill={tab.href.endsWith("/inbox") ? "currentColor" : "none"} stroke={tab.href.endsWith("/inbox") ? "none" : "currentColor"} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <path d={tab.icon} />
                 </svg>
                 {tab.href.endsWith("/inbox") && unread > 0 && !active && (
                   <span
                     aria-label={t("{n} unread", { n: unread })}
-                    className="absolute -right-2 -top-1 grid min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-4 text-white"
+                    className="absolute -right-3 -top-2 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-accent px-1 text-[10px] font-bold leading-none text-white ring-2 ring-surface"
                   >
                     {unread}
                   </span>

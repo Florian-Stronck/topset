@@ -15,8 +15,48 @@ const FIELDS: { value: ProgField; label: string }[] = [
   { value: "REPS", label: "Reps" },
   { value: "SETS", label: "Sets" },
   { value: "INTENSITY", label: "Intensity" },
+  { value: "LOAD", label: "Weight" },
   { value: "DURATION", label: "Time (seconds)" },
 ];
+
+/** What an amount on this field counts in, beside its box. */
+function unitOf(field: ProgField, op: ProgOp, intensityType: IntensityType): string {
+  if (op === "MULTIPLY") return "×";
+  if (field === "SETS") return t("sets");
+  if (field === "REPS") return t("reps");
+  if (field === "DURATION") return "s";
+  if (field === "LOAD") return "kg";
+  if (intensityType === "PERCENT") return "%";
+  if (intensityType === "WEIGHT" || intensityType === "RANGE") return "kg";
+  return intensityType === "RIR" ? "RIR" : "RPE";
+}
+
+type Sign = "ADD" | "SUB" | "MULTIPLY";
+
+/** − is stored as + with a negative amount; the box shows the size, the menu the sign. */
+function signOf(op: ProgOp, amount: number): Sign {
+  return op === "MULTIPLY" ? "MULTIPLY" : amount < 0 ? "SUB" : "ADD";
+}
+
+function fromSign(sign: Sign, size: number): { op: ProgOp; amount: number } {
+  if (sign === "MULTIPLY") return { op: "MULTIPLY", amount: Math.abs(size) };
+  return { op: "ADD", amount: sign === "SUB" ? -Math.abs(size) : Math.abs(size) };
+}
+
+function SignOptions() {
+  return (
+    <>
+      <option value="ADD">+</option>
+      <option value="SUB">−</option>
+      <option value="MULTIPLY">×</option>
+    </>
+  );
+}
+
+function stepOf(field: ProgField, op: ProgOp): string {
+  if (op === "MULTIPLY") return "0.05";
+  return field === "SETS" || field === "REPS" ? "1" : field === "DURATION" ? "5" : "0.5";
+}
 
 /** Adds a rule as an undoable edit. */
 async function addTracked(history: History, rowId: string, rule: Parameters<typeof addRule>[1]) {
@@ -74,7 +114,7 @@ export function ProgressionRules({
         )}
       </button>
 
-      <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={320}>
+      <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={360}>
         <div>
           <div className="flex items-center justify-between">
             <span className="text-[11px] tracking-[0.14em] text-muted-2">{t("PROGRESSION")}</span>
@@ -115,7 +155,7 @@ export function ProgressionRules({
             ))}
           </div>
 
-          <CustomRule rowId={rowId} weeks={weeks} />
+          <CustomRule rowId={rowId} weeks={weeks} intensityType={intensityType} />
         </div>
       </Popover>
     </div>
@@ -137,29 +177,61 @@ function RuleRow({
 
   /** One change to the rule, undoable; a number box saving as it is typed folds into one step. */
   function patch<K extends keyof Rule>(field: K, next: Rule[K]) {
-    const was = rule[field];
-    if (next === was) return;
+    patchMany({ [field]: next } as Partial<Rule>);
+  }
+
+  /** One change to the rule, undoable; a number box saving as it is typed folds into one step. */
+  function patchMany(next: Partial<Rule>) {
+    const keys = Object.keys(next) as (keyof Rule)[];
+    if (keys.every((k) => next[k] === rule[k])) return;
+    const was = Object.fromEntries(keys.map((k) => [k, rule[k]])) as Partial<Rule>;
     startTransition(() => {
-      void updateRule(rule.id, { [field]: next });
+      void updateRule(rule.id, next);
     });
     history.push({
       label: "rule",
-      undo: () => updateRule(rule.id, { [field]: was }),
-      redo: () => updateRule(rule.id, { [field]: next }),
-      key: `rule:${rule.id}:${field}`,
+      undo: () => updateRule(rule.id, was),
+      redo: () => updateRule(rule.id, next),
+      key: `rule:${rule.id}:${keys.join(",")}`,
     });
   }
 
+  const control = "rounded border border-border bg-surface-2 px-1 py-0.5 text-[11px] outline-none";
+
   return (
-    <div className="rounded border border-border bg-surface p-1.5">
+    <div className={`rounded border border-border bg-surface p-1.5 ${rule.enabled ? "" : "opacity-60"}`}>
       <div className="flex items-center gap-1.5">
         <input
           type="checkbox"
           checked={rule.enabled}
+          title={rule.enabled ? t("Turn off") : t("Turn on")}
           onChange={(e) => patch("enabled", e.target.checked)}
           className="accent-[var(--accent)]"
         />
-        <span className={`flex-1 text-[11px] ${rule.enabled ? "" : "text-muted-2 line-through"}`}>
+        <select value={rule.field} onChange={(e) => patch("field", e.target.value as ProgField)} className={control}>
+          {FIELDS.map((f) => (
+            <option key={f.value} value={f.value}>
+              {t(f.label)}
+            </option>
+          ))}
+        </select>
+        <select
+          value={signOf(rule.op, rule.amount)}
+          onChange={(e) => patchMany(fromSign(e.target.value as Sign, rule.amount))}
+          className={control}
+        >
+          <SignOptions />
+        </select>
+        <RuleNumber
+          key={`${rule.field}:${signOf(rule.op, rule.amount)}`}
+          min={0}
+          step={stepOf(rule.field, rule.op)}
+          value={Math.abs(rule.amount)}
+          className={num}
+          onCommit={(v) => v !== "" && patch("amount", fromSign(signOf(rule.op, rule.amount), Number(v)).amount)}
+        />
+        <span className="text-[11px] text-muted-2">{unitOf(rule.field, rule.op, intensityType)}</span>
+        <span className={`ml-auto truncate text-[11px] ${rule.enabled ? "text-accent" : "text-muted-2 line-through"}`}>
           {describeRule(rule, intensityType)}
         </span>
         <button
@@ -171,20 +243,13 @@ function RuleRow({
               history.push({ label: "remove rule", undo: () => restoreRule(gone), redo: () => deleteRule(gone.id) });
             })
           }
-          className="px-1 text-[12px] text-accent"
+          className="px-1 text-[12px] text-muted-2 hover:text-accent"
         >
           ×
         </button>
       </div>
 
-      <div className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-2">
-        <span>{t("by")}</span>
-        <RuleNumber
-          step="0.5"
-          value={rule.amount}
-          className={num}
-          onCommit={(v) => v !== "" && patch("amount", Number(v))}
-        />
+      <div className="mt-1.5 flex items-center gap-1 pl-5 text-[11px] text-muted-2">
         <span>{t("every")}</span>
         <RuleNumber
           min={1}
@@ -192,7 +257,9 @@ function RuleRow({
           className={num}
           onCommit={(v) => patch("everyWeeks", Math.max(1, Number(v)))}
         />
-        <span>{t("wk, from")}</span>
+        <span>{t("wk")}</span>
+        <span className="mx-1 text-border">·</span>
+        <span>{t("weeks")}</span>
         <RuleNumber
           min={2}
           max={weeks}
@@ -200,7 +267,7 @@ function RuleRow({
           className={num}
           onCommit={(v) => patch("startWeek", Math.max(2, Number(v)))}
         />
-        <span>{t("to")}</span>
+        <span>→</span>
         <RuleNumber
           min={2}
           max={weeks}
@@ -214,12 +281,12 @@ function RuleRow({
   );
 }
 
-function CustomRule({ rowId, weeks }: { rowId: string; weeks: number }) {
+function CustomRule({ rowId, weeks, intensityType }: { rowId: string; weeks: number; intensityType: IntensityType }) {
   const [, startTransition] = useTransition();
   const history = useHistory();
-  const [draft, setDraft] = useState<{ field: ProgField; op: ProgOp; amount: number }>({
+  const [draft, setDraft] = useState<{ field: ProgField; sign: Sign; amount: number }>({
     field: "REPS",
-    op: "ADD",
+    sign: "ADD",
     amount: 1,
   });
 
@@ -239,26 +306,28 @@ function CustomRule({ rowId, weeks }: { rowId: string; weeks: number }) {
         ))}
       </select>
       <select
-        value={draft.op}
-        onChange={(e) => setDraft({ ...draft, op: e.target.value as ProgOp })}
+        value={draft.sign}
+        onChange={(e) => setDraft({ ...draft, sign: e.target.value as Sign })}
         className={control}
       >
-        <option value="ADD">+</option>
-        <option value="MULTIPLY">×</option>
+        <SignOptions />
       </select>
       <input
         type="number"
-        step="0.5"
+        min={0}
+        step={stepOf(draft.field, draft.sign === "MULTIPLY" ? "MULTIPLY" : "ADD")}
         value={draft.amount}
         onChange={(e) => setDraft({ ...draft, amount: Number(e.target.value) })}
-        className={`${control} w-[64px]`}
+        className={`${control} w-[56px]`}
       />
+      <span className="text-[11px] text-muted-2">{unitOf(draft.field, draft.sign === "MULTIPLY" ? "MULTIPLY" : "ADD", intensityType)}</span>
       <button
         type="button"
         onClick={() =>
           startTransition(() =>
             addTracked(history, rowId, {
-              ...draft,
+              field: draft.field,
+              ...fromSign(draft.sign, draft.amount),
               everyWeeks: 1,
               startWeek: Math.min(2, weeks),
               endWeek: null,

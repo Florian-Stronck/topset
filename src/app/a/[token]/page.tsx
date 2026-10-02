@@ -1,10 +1,9 @@
 import { notFound } from "next/navigation";
 import { CheckinDay, type StripDay } from "@/components/athlete/CheckinDay";
 import { CheckinCard } from "@/components/athlete/CheckinCard";
-import { CoachNotes } from "@/components/athlete/CoachNotes";
 import { Meetings } from "@/components/athlete/Meetings";
 import { SwipeDays } from "@/components/athlete/SwipeDays";
-import { checkinOn, getAthleteByToken, getAthleteCalendar, inboxFor, meetingsFor, recentBodyweight, sessionsInFull, type ScheduledSession, type SchedulePhase } from "@/lib/athlete-queries";
+import { checkinOn, getAthleteByToken, getAthleteCalendar, meetingsFor, recentBodyweight, sessionsInFull, type ScheduledSession, type SchedulePhase } from "@/lib/athlete-queries";
 import { longDate, shortDate, weekdayLetter, weekdayShort } from "@/lib/athlete-format";
 import { athleteToday } from "@/lib/athlete-today";
 import { loadSettings } from "@/lib/coach-settings";
@@ -41,11 +40,10 @@ export default async function AthleteToday({
   const today = await athleteToday();
   const day = d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : today;
   // A day still to come shows what it will ask, to be answered on the day.
-  const [{ phases, sessions }, bodyweight, checkin, notes, meetings] = await Promise.all([
+  const [{ phases, sessions }, bodyweight, checkin, meetings] = await Promise.all([
     getAthleteCalendar(athlete),
     recentBodyweight(athlete.id),
     checkinOn(athlete.id, day),
-    inboxFor(athlete.id, [day]),
     meetingsFor(athlete.id),
   ]);
   const meetingsToday = meetings.filter((m) => m.day === day);
@@ -111,12 +109,6 @@ export default async function AthleteToday({
   return (
     <SwipeDays {...swipe}>
       <Meetings token={token} meetings={meetingsToday} today={today} compact />
-      {notes.length > 0 && (
-        <section className="mb-4">
-          <h2 className="mb-2 text-[11px] tracking-[0.16em] text-muted-2">{t("FROM YOUR COACH")}</h2>
-          <CoachNotes token={token} messages={notes} compact />
-        </section>
-      )}
       <CheckinDay
         key={day}
         token={token}

@@ -4,6 +4,9 @@ const nextConfig: NextConfig = {
   // Packaged into an Electron app: the build has to carry its own server and
   // dependencies rather than expect a node_modules tree beside it.
   output: "standalone",
+  // A tab the athlete just visited answers from the phone for 30 s instead of a server
+  // round trip. Writes drop it (`WriteSync`); the coach app's actions revalidate their pages.
+  experimental: { staleTimes: { dynamic: 30 } },
   // Native modules — they must be required at runtime, not bundled.
   serverExternalPackages: [
     "better-sqlite3",

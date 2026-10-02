@@ -1,7 +1,13 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { deleteClip, finishClip, setClipSet, startClip } from "@/app/a/actions";
+import * as actions from "@/app/a/actions";
+import { synced } from "@/components/athlete/WriteSync";
+
+const { startClip } = actions;
+const deleteClip = synced(actions.deleteClip);
+const finishClip = synced(actions.finishClip);
+const setClipSet = synced(actions.setClipSet);
 import { MAX_CLIPS_PER_ROW, type ClipView } from "@/lib/athlete-videos";
 import { plural, t } from "@/lib/i18n";
 import { shrinkVideo } from "@/lib/shrink-video";

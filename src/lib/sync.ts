@@ -940,6 +940,26 @@ export async function syncNow(): Promise<{ lastSync: number | null; error: strin
   return syncStatus();
 }
 
+/**
+ * An open chat, every couple of seconds: athlete news down and the coach's waiting message
+ * up, without the plan and teams. Says whether anything new came down.
+ */
+export async function syncChat(): Promise<boolean> {
+  const s = state();
+  const config = readConfig();
+  if (!config || !syncEnabled() || !s.sent) return false;
+  return s.queue.run(async () => {
+    const before = s.athleteVersion;
+    try {
+      await pull(config);
+      await push(config, false);
+    } catch {
+      return false;
+    }
+    return s.athleteVersion !== before;
+  });
+}
+
 /** Sync everything: the next push makes the server match this computer, deletes and all. */
 export function resetSync(): void {
   const s = state();

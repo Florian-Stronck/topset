@@ -59,17 +59,8 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
   }
 
   return (
-    <div className="mt-3">
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] tracking-[0.14em] text-muted-2" title={t("What the athlete app asks before training.")}>
-          {t("CHECK-IN")}
-        </span>
-        {order.length === 0 && <span className="text-[11px] text-muted-2">{t("nothing asked")}</span>}
-        <Link href={`/tracking?athlete=${athleteId}&view=wellness#checkins`} className="ml-auto text-[11px] text-muted hover:text-accent">
-          {t("See answers")} →
-        </Link>
-      </div>
-      <div className="mt-1.5 flex flex-wrap gap-1.5">
+    <div title={t("What the athlete app asks before training.")}>
+      <div className="flex flex-wrap items-center gap-1.5">
         {order.map((q) => (
           <button
             key={q.id}
@@ -108,6 +99,9 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
         >
           + {t("Add question")}
         </button>
+        <Link href={`/tracking?athlete=${athleteId}&view=wellness#checkins`} className="ml-auto text-[11px] text-muted hover:text-accent">
+          {t("See answers")} →
+        </Link>
       </div>
 
       {editing && (

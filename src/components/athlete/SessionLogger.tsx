@@ -2,7 +2,14 @@
 
 import type { Unit } from "@prisma/client";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { logSet, logSets, removeSet, saveAthleteNotes, type SetPatch } from "@/app/a/actions";
+import * as actions from "@/app/a/actions";
+import type { SetPatch } from "@/app/a/actions";
+import { synced } from "@/components/athlete/WriteSync";
+
+const logSet = synced(actions.logSet);
+const logSets = synced(actions.logSets);
+const removeSet = synced(actions.removeSet);
+const saveAthleteNotes = synced(actions.saveAthleteNotes);
 import { Check } from "@/components/athlete/icons";
 import { RowClips } from "@/components/athlete/RowClips";
 import { beep, openAudio } from "@/components/athlete/beep";

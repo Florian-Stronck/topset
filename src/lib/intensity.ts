@@ -94,6 +94,10 @@ export type AthleteMaxes = {
   bench1RM: number | null;
   dead1RM: number | null;
   unit: Unit;
+  /** The athlete's variation drop-off, `Athlete.variationPct`; null uses the coach's. */
+  variationPct?: number | null;
+  /** Per-exercise drop-offs as JSON, `Athlete.variationPcts`. */
+  variationPcts?: string | null;
 };
 
 /**
@@ -110,11 +114,42 @@ export function maxesOf(
     bench1RM: block.bench1RM ?? athlete.bench1RM,
     dead1RM: block.dead1RM ?? athlete.dead1RM,
     unit: athlete.unit,
+    variationPct: athlete.variationPct,
+    variationPcts: athlete.variationPcts,
   };
 }
 
-/** A variation is trained off a lower max than the competition lift. */
-export const VARIATION_FACTOR = 0.9;
+/** `Athlete.variationPcts` read back; anything unreadable counts as none. */
+export function parseVariationPcts(json: string | null | undefined): Record<string, number> {
+  if (!json) return {};
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!parsed || typeof parsed !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, v]) => typeof v === "number" && v > 0 && v <= 200),
+    ) as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+
+const pctCache = new Map<string, Record<string, number>>();
+
+/**
+ * The % of the competition max a variation is trained off: this exercise's own for the
+ * athlete, else the athlete's, else the coach's default.
+ */
+export function variationPercent(exercise: string, maxes: AthleteMaxes): number {
+  const json = maxes.variationPcts ?? "";
+  let byExercise = pctCache.get(json);
+  if (!byExercise) {
+    byExercise = parseVariationPcts(json);
+    pctCache.set(json, byExercise);
+  }
+  const key = exercise.trim().toLowerCase();
+  const own = Object.entries(byExercise).find(([name]) => name.trim().toLowerCase() === key)?.[1];
+  return own ?? maxes.variationPct ?? activeSettings().variationPercent;
+}
 
 type Lift = "squat" | "bench" | "dead";
 
@@ -131,7 +166,7 @@ export function liftOf(target: string): Lift | null {
 }
 
 // Only main-lift rows get a calculated weight; accessories show the raw prescription.
-export function oneRepMaxFor(target: string, tier: Tier, maxes: AthleteMaxes): number | null {
+export function oneRepMaxFor(target: string, tier: Tier, maxes: AthleteMaxes, exercise = ""): number | null {
   if (tier === "ACCESSORY") return null;
 
   const lift = liftOf(target);
@@ -141,7 +176,7 @@ export function oneRepMaxFor(target: string, tier: Tier, maxes: AthleteMaxes): n
     lift === "squat" ? maxes.squat1RM : lift === "bench" ? maxes.bench1RM : maxes.dead1RM;
   if (max === null) return null;
 
-  return tier === "VARIATION" ? max * VARIATION_FACTOR : max;
+  return tier === "VARIATION" ? (max * variationPercent(exercise, maxes)) / 100 : max;
 }
 
 export type CellPrescription = {
@@ -265,6 +300,7 @@ type ResolvableRow = CellPrescription & {
   id: string;
   tier: Tier;
   target: string;
+  exercise?: string;
 };
 
 /**
@@ -280,7 +316,7 @@ export function resolveDay(
   let topSet: number | null = null;
 
   for (const row of rows) {
-    const oneRM = oneRepMaxFor(row.target, row.tier, maxes);
+    const oneRM = oneRepMaxFor(row.target, row.tier, maxes, row.exercise);
     const result = resolveIntensity(row, oneRM, maxes.unit, topSet);
     resolved.set(row.id, result);
 

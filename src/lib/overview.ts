@@ -343,3 +343,21 @@ export function trainingFlags(
 
   return flags;
 }
+
+export type CheckinStatus = { tone: "ok" | "warn" | "miss"; label: string };
+
+/**
+ * How recently an athlete checked in, as the roster's dot: the same two-week line and the
+ * same missing-link rule the Overview flags by, so the two never tell different stories.
+ */
+export function checkinStatus(
+  lastCheckin: Date | string | null,
+  { hasLink, linksOn, now = new Date() }: { hasLink: boolean; linksOn: boolean; now?: Date },
+): CheckinStatus {
+  if (linksOn && !hasLink) return { tone: "miss", label: t("No check-in link yet") };
+  if (lastCheckin === null) return { tone: "miss", label: t("Never checked in") };
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((day(now) - day(new Date(lastCheckin))) / DAY_MS);
+  const label = days <= 0 ? t("Checked in today") : t("Checked in {ago}", { ago: t("{n}d ago", { n: days }) });
+  return { tone: days > 14 ? "miss" : days > 3 ? "warn" : "ok", label };
+}

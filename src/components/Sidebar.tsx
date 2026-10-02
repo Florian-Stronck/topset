@@ -62,7 +62,7 @@ const NAV = [
 /** Switching athlete keeps you on the screen you are on. */
 const SECTION_HREF: Record<string, string> = {
   overview: "/programming",
-  athletes: "/programming",
+  athletes: "/athletes",
   programming: "/programming",
   tracking: "/tracking",
   competition: "/competition",

@@ -83,6 +83,12 @@ model Athlete {
   squat1RM Float?
   bench1RM Float?
   dead1RM  Float?
+  /// The % of the competition max a variation is trained off; null uses the coach's default.
+  variationPct  Float?
+  /// Per-exercise drop-offs as JSON, {"Paused Squat": 85}; beats `variationPct`.
+  variationPcts String?
+  /// The coach's own notes on the athlete — goals, history; never shown to the athlete.
+  notes         String?
   /// Secret for the athlete's check-in link. Null until the coach hands one out; a new one
   /// replaces the old, so a lost phone is one click away from locked out.
   accessToken String? @unique
@@ -562,6 +568,8 @@ enum ProgField {
   REPS
   INTENSITY
   DURATION
+  /// The typed weight (`load`), or a weight intensity when there is none.
+  LOAD
 }
 
 enum ProgOp {

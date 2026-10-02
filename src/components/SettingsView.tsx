@@ -324,6 +324,20 @@ function Programming({ settings, update }: Props) {
         <TagList values={settings.targets} onChange={(v) => update({ targets: v })} placeholder={t("Add a target")} />
       </Row>
       <Row
+        label="Variations are trained at"
+        hint="Their % of the competition max, for every athlete who has no drop-off of their own. Set an athlete's, and any exercise's, on their roster card."
+      >
+        <NumberField
+          value={settings.variationPercent}
+          min={1}
+          max={200}
+          step={0.5}
+          onCommit={(v) => update({ variationPercent: v ?? 90 })}
+          width={60}
+          suffix="%"
+        />
+      </Row>
+      <Row
         label="Target colours"
         hint="Rows for a coloured target are tinted and badged with it on the sheet, on this computer."
         stacked
@@ -1848,6 +1862,8 @@ function PresetEditor({ presets, onChange }: { presets: ProgressionPreset[]; onC
       ["INTENSITY", t("Intensity")],
       ["REPS", t("Reps")],
       ["SETS", t("Sets")],
+      ["LOAD", t("Weight")],
+      ["DURATION", t("Time (seconds)")],
     ],
     [],
   );

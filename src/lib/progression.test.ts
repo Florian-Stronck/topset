@@ -66,7 +66,17 @@ describe("project", () => {
       intensity: 100,
       intensityMax: null,
       duration: null,
+      load: null,
     });
+  });
+
+  test("a weight rule moves the typed weight, else a weight intensity", () => {
+    const r = rule({ field: "LOAD", amount: 2.5 });
+    const rpe: BaseValues = { ...base, intensity: 8, intensityType: "RPE", load: 100 };
+    assert.equal(project(rpe, [r], 3, "KG").load, 105);
+    assert.equal(project(rpe, [r], 3, "KG").intensity, 8);
+    assert.equal(project(base, [r], 3, "KG").intensity, 105);
+    assert.equal(project({ ...rpe, load: null }, [r], 3, "KG").load, null);
   });
 
   test("adds reps each week", () => {

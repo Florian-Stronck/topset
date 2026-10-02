@@ -102,7 +102,7 @@ const INTENSITY_TYPES: IntensityType[] = [
   "RANGE",
   "BACKOFF",
 ];
-const FIELDS: ProgField[] = ["SETS", "REPS", "INTENSITY", "DURATION"];
+const FIELDS: ProgField[] = ["SETS", "REPS", "INTENSITY", "DURATION", "LOAD"];
 const OPS: ProgOp[] = ["ADD", "MULTIPLY"];
 
 type SourcePhase = {

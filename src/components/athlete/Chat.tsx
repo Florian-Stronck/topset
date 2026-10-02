@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { markRead, sendChat } from "@/app/a/actions";
+import { chatMessages, markRead, sendChat } from "@/app/a/actions";
 import { shortDate } from "@/lib/athlete-format";
 import type { InboxMessage } from "@/lib/athlete-queries";
 import { t } from "@/lib/i18n";
 
 /** How often the open chat looks for new messages while it's on screen. */
-const POLL_MS = 20_000;
+const POLL_MS = 2_000;
 
 /**
  * The chat with the coach: theirs on the left — session notes tagged with the session and
@@ -37,15 +37,21 @@ export function Chat({ token, messages: initial }: { token: string; messages: In
 
   // New coach messages that arrive while it's open count as read too.
   useEffect(() => {
-    if (initial.some((m) => m.sender === "coach" && !m.read && !fresh.has(m.id))) void markRead(token);
-  }, [initial, fresh, token]);
+    if (messages.some((m) => m.sender === "coach" && !m.read && !fresh.has(m.id))) void markRead(token);
+  }, [messages, fresh, token]);
 
+  // Just the messages, not the whole page: one small request while the chat is on screen.
   useEffect(() => {
+    let busy = false;
     const timer = setInterval(() => {
-      if (document.visibilityState === "visible") router.refresh();
+      if (busy || document.visibilityState !== "visible") return;
+      busy = true;
+      void chatMessages(token)
+        .then(setMessages, () => {})
+        .finally(() => (busy = false));
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [router]);
+  }, [token]);
 
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
