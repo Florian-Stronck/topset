@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { describeGap, formatDate, mondayOf, phaseGaps, snapStart, weekdayOf, weekStartOf } from "@/lib/dates";
+import { describeGap, formatDate, mondayOf, overlapsSettled, phaseGaps, phaseOverlaps, programOverlaps, snapStart, weekdayOf, weekStartOf } from "@/lib/dates";
 import { DEFAULTS, setActiveSettings } from "@/lib/settings";
 
 describe("mondayOf", () => {
@@ -101,5 +101,67 @@ describe("weekdayOf and formatDate", () => {
     setActiveSettings({ ...DEFAULTS, dateFormat: "mm/dd" });
     assert.equal(formatDate("2026-09-21T00:00:00.000Z"), "09/21");
     setActiveSettings(DEFAULTS);
+  });
+});
+
+describe("phaseOverlaps", () => {
+  const ids = (pairs: { earlier: string; later: string }[]) => [...new Set(pairs.flatMap((o) => [o.earlier, o.later]))].sort();
+  const today = new Date("2026-10-05T00:00:00Z");
+
+  test("two programs running the same weeks both count", () => {
+    const got = phaseOverlaps(
+      [
+        { programId: "a", startDate: "2026-09-28", weeks: 4 },
+        { programId: "b", startDate: "2026-10-12", weeks: 4 },
+        { programId: "c", startDate: "2027-01-04", weeks: 4 },
+      ],
+      today,
+    );
+    assert.deepEqual(ids(got), ["a", "b"]);
+  });
+
+  test("back to back, or two phases of one program, is no overlap", () => {
+    const got = phaseOverlaps(
+      [
+        { programId: "a", startDate: "2026-09-28", weeks: 2 },
+        { programId: "a", startDate: "2026-10-05", weeks: 2 },
+        { programId: "b", startDate: "2026-10-19", weeks: 2 },
+      ],
+      today,
+    );
+    assert.equal(got.length, 0);
+  });
+
+  test("an overlap that is over is left out", () => {
+    const got = phaseOverlaps(
+      [
+        { programId: "a", startDate: "2026-08-03", weeks: 4 },
+        { programId: "b", startDate: "2026-08-17", weeks: 4 },
+      ],
+      today,
+    );
+    assert.equal(got.length, 0);
+  });
+});
+
+describe("programOverlaps", () => {
+  test("names the later program and how far it reaches back", () => {
+    const got = programOverlaps(
+      [
+        { id: "peak", phases: [{ startDate: "2026-10-19", weeks: 3 }] },
+        { id: "main", phases: [{ startDate: "2026-09-28", weeks: 2 }, { startDate: "2026-10-12", weeks: 2 }] },
+      ],
+      new Date("2026-10-05T00:00:00Z"),
+    );
+    // main runs to 26 Oct; peak starts 19 Oct — a week in.
+    assert.deepEqual(got, [{ earlier: "main", later: "peak", days: -7 }]);
+  });
+
+  test("settled only once the active program is in every pair", () => {
+    const pairs = [{ earlier: "a", later: "b", days: -7 }, { earlier: "a", later: "c", days: -14 }];
+    assert.equal(overlapsSettled(pairs, "a"), true);
+    assert.equal(overlapsSettled(pairs, "b"), false);
+    assert.equal(overlapsSettled(pairs, null), false);
+    assert.equal(overlapsSettled([], null), true);
   });
 });

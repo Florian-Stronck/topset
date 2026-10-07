@@ -103,7 +103,7 @@ export default async function OverviewPage({ searchParams }: { searchParams: Pro
     </div>
   );
 
-  const who = athletes.map((a) => ({ id: a.id, name: a.name, hasLink: linked.has(a.id) }));
+  const who = athletes.map((a) => ({ id: a.id, name: a.name, hasLink: linked.has(a.id), activeProgramId: a.activeProgramId }));
   if (tab === "chat") return frame(<ChatPane athletes={who} picked={params.athlete} chats={chats} />);
   if (tab === "schedule") return frame(<SchedulePane athletes={who} picked={params.athlete} news={waiting} today={today} />);
 
@@ -128,7 +128,7 @@ export default async function OverviewPage({ searchParams }: { searchParams: Pro
 
   const rows: BoardRow[] = athletes.map((athlete) => {
     const unit = athlete.unit === "LB" ? "lb" : "kg";
-    const block = currentBlock(athlete.blocks, now);
+    const block = currentBlock(athlete.blocks, now, athlete.activeProgramId);
     const window = block ? blockWindow(block, now) : null;
     const training = athleteTraining(sessions.get(athlete.id) ?? [], athlete.blocks.map(phaseSpan), week, today);
     const daily = dailyWeights(weights.get(athlete.id) ?? []);

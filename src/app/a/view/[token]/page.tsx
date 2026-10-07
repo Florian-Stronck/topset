@@ -1,3 +1,4 @@
+import { parseRpeTable } from "@/lib/intensity";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -143,7 +144,7 @@ export default async function ViewerPage({
   }
 
   return (
-    <SettingsProvider settings={forAthlete(settings)}>
+    <SettingsProvider settings={forAthlete(settings, parseRpeTable(athlete.rpeTable))}>
       <main style={{ maxWidth: SHELL_MAX_WIDTH }} className="mx-auto w-full px-4 py-7 sm:px-6">
         <h1 className="text-[22px] font-semibold tracking-tight">{athlete.name}</h1>
         <div className="mt-1 text-[12px] text-muted">{t("Read-only Tracking, shared by their coach.")}</div>

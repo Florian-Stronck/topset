@@ -2,7 +2,7 @@ import type { BodyweightSummary } from "@/lib/bodyweight";
 import { LOW_READINESS, type ReadinessDay } from "@/lib/checkins";
 import { completionPct, dayStatus, daySets, DRIFT_MIN_ROWS, DRIFT_WARN, rpeDrift, type ComplianceRow, type DayStatus } from "@/lib/compliance";
 import { liftOf } from "@/lib/intensity";
-import { formatDate, ymdOf } from "@/lib/dates";
+import { formatDate, overlapsSettled, phaseOverlaps, ymdOf } from "@/lib/dates";
 import { addDays } from "@/lib/schedule";
 import { activeSettings } from "@/lib/settings";
 import { t } from "@/lib/i18n";
@@ -33,6 +33,8 @@ export type AthleteSummary = {
   squat1RM: number | null;
   bench1RM: number | null;
   dead1RM: number | null;
+  /** The program picked to win where two overlap; null lets the later start win. */
+  activeProgramId?: string | null;
   blocks: BlockSummary[];
 };
 
@@ -65,10 +67,14 @@ export function blockWindow(block: { startDate: Date; weeks: number }, today: Da
   return { start, end, status, week, daysLeft };
 }
 
-/** The block an athlete is training right now, else the next one, else the last one. */
-export function currentBlock(blocks: BlockSummary[], today: Date): BlockSummary | null {
+/**
+ * The block an athlete is training right now — one of the active program's, where
+ * programs overlap — else the next one, else the last one.
+ */
+export function currentBlock(blocks: BlockSummary[], today: Date, activeProgramId?: string | null): BlockSummary | null {
   if (blocks.length === 0) return null;
-  const active = blocks.find((b) => blockWindow(b, today).status === "active");
+  const running = blocks.filter((b) => blockWindow(b, today).status === "active");
+  const active = running.find((b) => b.programId === activeProgramId) ?? running[0];
   if (active) return active;
 
   const upcoming = blocks
@@ -108,7 +114,11 @@ export function flagsFor(
     return [{ text: t("No program yet"), action: "program", urgent: true }];
   }
 
-  const block = currentBlock(athlete.blocks, today);
+  if (!overlapsSettled(phaseOverlaps(athlete.blocks, today), athlete.activeProgramId)) {
+    flags.push({ text: t("Programs overlap — pick the one to train"), action: "program", urgent: true });
+  }
+
+  const block = currentBlock(athlete.blocks, today, athlete.activeProgramId);
   if (!block) return flags;
 
   const window = blockWindow(block, today);

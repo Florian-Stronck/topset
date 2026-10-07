@@ -2,14 +2,16 @@ import type { IntensityType, Tier, Unit } from "@prisma/client";
 import { activeSettings, type RpeTable } from "@/lib/settings";
 import { t } from "@/lib/i18n";
 
-let curveCache: { table: RpeTable; curve: [number, number][] } | null = null;
+// Per chart, since an athlete's own and the coach's are read side by side.
+const curves = new WeakMap<RpeTable, [number, number][]>();
 
 /**
  * The chart as one curve over reps to failure (reps done + reps in reserve): every cell
  * is a point on it, and cells that land on the same point are averaged.
  */
 function rtfCurve(table: RpeTable): [number, number][] {
-  if (curveCache?.table === table) return curveCache.curve;
+  const cached = curves.get(table);
+  if (cached) return cached;
   const points = new Map<number, number[]>();
   table.rpe.forEach((rpe, r) =>
     table.reps.forEach((reps, c) => {
@@ -22,30 +24,139 @@ function rtfCurve(table: RpeTable): [number, number][] {
   const curve = [...points]
     .map(([rtf, pcts]) => [rtf, pcts.reduce((a, b) => a + b, 0) / pcts.length] as [number, number])
     .sort((a, b) => a[0] - b[0]);
-  curveCache = { table, curve };
+  curves.set(table, curve);
   return curve;
 }
 
-/**
- * %1RM for a set of `reps` at `rpe`, off the coach's RPE chart. A cell on the chart is
- * used as written; anything between or beyond its rows and columns is read from the same
- * chart by reps to failure, as long as the chart reaches that far.
- */
-export function percentOf1RM(reps: number, rpe: number): number | null {
-  const table = activeSettings().rpeTable;
-  const r = table.rpe.indexOf(rpe);
-  const c = table.reps.indexOf(reps);
-  const cell = r >= 0 && c >= 0 ? table.pct[r]?.[c] : undefined;
-  if (typeof cell === "number" && Number.isFinite(cell)) return cell;
-
+/** The chart's curve read at any reps to failure inside its range; null outside it. */
+export function curveAt(table: RpeTable, rtf: number): number | null {
   const curve = rtfCurve(table);
-  const rtf = reps + (10 - rpe);
   if (curve.length === 0 || rtf < curve[0][0] || rtf > curve[curve.length - 1][0]) return null;
   const hi = curve.findIndex(([x]) => x >= rtf);
   const [x1, y1] = curve[hi];
   if (x1 === rtf || hi === 0) return y1;
   const [x0, y0] = curve[hi - 1];
   return y0 + ((y1 - y0) * (rtf - x0)) / (x1 - x0);
+}
+
+export type CurveHandle = { x: number; y: number };
+
+/** Every reps to failure a chart covers, lowest to highest. */
+function rtfRange(table: RpeTable): [number, number] {
+  const rtfs = table.rpe.flatMap((rpe) => table.reps.map((reps) => reps + (10 - rpe)));
+  return [Math.min(...rtfs), Math.max(...rtfs)];
+}
+
+/** Where the handles sit along the curve: dense at the heavy end, where a % matters most. */
+const HANDLE_SPOTS = [0, 1 / 12, 3 / 12, 5 / 12, 8 / 12, 1];
+
+/** A chart as a few draggable points on its curve, for shaping it by hand. */
+export function curveHandles(table: RpeTable): CurveHandle[] {
+  const [lo, hi] = rtfRange(table);
+  return HANDLE_SPOTS.map((f) => {
+    const x = lo + (hi - lo) * f;
+    return { x, y: curveAt(table, x) ?? 100 };
+  });
+}
+
+/**
+ * A smooth line through the handles that never overshoots them (monotone cubic,
+ * Fritsch–Carlson), so a steeper handle can't make a lighter set read heavier.
+ */
+export function smoothCurve(points: CurveHandle[]): (x: number) => number {
+  const n = points.length;
+  const d: number[] = [];
+  for (let i = 0; i < n - 1; i++) d.push((points[i + 1].y - points[i].y) / (points[i + 1].x - points[i].x));
+  const m = points.map((_, i) => (i === 0 ? d[0] : i === n - 1 ? d[n - 2] : d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2));
+  for (let i = 0; i < n - 1; i++) {
+    if (d[i] === 0) {
+      m[i] = m[i + 1] = 0;
+      continue;
+    }
+    const a = m[i] / d[i];
+    const b = m[i + 1] / d[i];
+    const s = a * a + b * b;
+    if (s > 9) {
+      m[i] = (3 / Math.sqrt(s)) * a * d[i];
+      m[i + 1] = (3 / Math.sqrt(s)) * b * d[i];
+    }
+  }
+  return (x) => {
+    let i = 0;
+    while (i < n - 2 && x > points[i + 1].x) i++;
+    const h = points[i + 1].x - points[i].x;
+    const t = (x - points[i].x) / h;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return (
+      (2 * t3 - 3 * t2 + 1) * points[i].y +
+      (t3 - 2 * t2 + t) * h * m[i] +
+      (-2 * t3 + 3 * t2) * points[i + 1].y +
+      (t3 - t2) * h * m[i + 1]
+    );
+  };
+}
+
+/**
+ * The chart after its curve was reshaped: each cell moves by as much as the curve moved at
+ * its reps to failure, to half a percent. Parts of the curve left alone, and cells typed in
+ * by hand there, stay exactly as they were.
+ */
+export function tableFromCurve(table: RpeTable, handles: CurveHandle[], from: CurveHandle[] = curveHandles(table)): RpeTable {
+  const after = smoothCurve(handles);
+  const before = smoothCurve(from);
+  return {
+    ...table,
+    pct: table.pct.map((row, r) =>
+      row.map((pct, c) => {
+        const rtf = table.reps[c] + (10 - table.rpe[r]);
+        const moved = after(rtf) - before(rtf);
+        return Math.abs(moved) < 0.01 ? pct : Math.min(100, Math.round((pct + moved) * 2) / 2);
+      }),
+    ),
+  };
+}
+
+const parsedTables = new Map<string, RpeTable | null>();
+
+/**
+ * `Athlete.rpeTable` read back: the athlete's own chart, or null to use the coach's.
+ * Anything malformed counts as none, so a bad value can never break a program.
+ */
+export function parseRpeTable(json: string | null | undefined): RpeTable | null {
+  if (!json) return null;
+  if (parsedTables.has(json)) return parsedTables.get(json)!;
+  let table: RpeTable | null = null;
+  try {
+    const v = JSON.parse(json);
+    const nums = (a: unknown) => Array.isArray(a) && a.every((n) => typeof n === "number" && Number.isFinite(n));
+    if (
+      nums(v?.rpe) && nums(v?.reps) && Array.isArray(v?.pct) && v.pct.length === v.rpe.length &&
+      v.pct.every((row: unknown) => nums(row) && (row as number[]).length === v.reps.length)
+    ) {
+      table = { rpe: v.rpe, reps: v.reps, pct: v.pct };
+    }
+  } catch {}
+  parsedTables.set(json, table);
+  return table;
+}
+
+/** The chart a set is read off: the athlete's own if they have one, else the coach's. */
+export function rpeTableFor(athlete: { rpeTable?: string | null } | null | undefined): RpeTable {
+  return parseRpeTable(athlete?.rpeTable) ?? activeSettings().rpeTable;
+}
+
+/**
+ * %1RM for a set of `reps` at `rpe`, off an RPE chart — the coach's unless one is given.
+ * A cell on the chart is used as written; anything between or beyond its rows and columns
+ * is read from the same chart by reps to failure, as long as the chart reaches that far.
+ */
+export function percentOf1RM(reps: number, rpe: number, table: RpeTable = activeSettings().rpeTable): number | null {
+  const r = table.rpe.indexOf(rpe);
+  const c = table.reps.indexOf(reps);
+  const cell = r >= 0 && c >= 0 ? table.pct[r]?.[c] : undefined;
+  if (typeof cell === "number" && Number.isFinite(cell)) return cell;
+  return curveAt(table, reps + (10 - rpe));
 }
 
 /** A percentage or RPE as the coach wants to read it: their decimals, no trailing zeros. */
@@ -63,13 +174,14 @@ export function estimate1RM(
   reps: number | null,
   rpe: number | null,
   unit: Unit,
+  table?: RpeTable,
 ): number | null {
   if (reps === null) return null;
   const formula = activeSettings().e1rmFormula;
 
   if (formula === "rpe") {
     if (rpe === null) return null;
-    const pct = percentOf1RM(reps, rpe);
+    const pct = percentOf1RM(reps, rpe, table);
     if (pct === null || pct <= 0) return null;
     return roundToIncrement((weight * 100) / pct, unit);
   }
@@ -98,6 +210,8 @@ export type AthleteMaxes = {
   variationPct?: number | null;
   /** Per-exercise drop-offs as JSON, `Athlete.variationPcts`. */
   variationPcts?: string | null;
+  /** The athlete's own RPE chart as JSON, `Athlete.rpeTable`; null uses the coach's. */
+  rpeTable?: string | null;
 };
 
 /**
@@ -116,6 +230,7 @@ export function maxesOf(
     unit: athlete.unit,
     variationPct: athlete.variationPct,
     variationPcts: athlete.variationPcts,
+    rpeTable: athlete.rpeTable,
   };
 }
 
@@ -243,10 +358,11 @@ export function resolveIntensity(
   oneRM: number | null,
   unit: Unit,
   topSet: number | null = null,
+  table?: RpeTable,
 ): ResolvedIntensity {
   const base =
     cell.load == null
-      ? resolveBase(cell, oneRM, unit, topSet)
+      ? resolveBase(cell, oneRM, unit, topSet, table)
       : { label: `${cell.load} ${unit === "LB" ? "lb" : "kg"}`, weight: cell.load };
   const step = cell.rampStep ?? null;
   if (step === null || base.weight === null) return { ...base, ramp: [] };
@@ -265,6 +381,7 @@ function resolveBase(
   oneRM: number | null,
   unit: Unit,
   topSet: number | null,
+  table?: RpeTable,
 ): Omit<ResolvedIntensity, "ramp"> {
   const { intensityType: type, intensity, intensityMax, reps } = cell;
   if (intensity === null) return { label: "—", weight: null };
@@ -289,7 +406,7 @@ function resolveBase(
   const raw = type === "RIR" ? `RIR ${fmt(intensity)}` : `RPE ${fmt(intensity)}`;
   if (!oneRM || reps === null) return { label: raw, weight: null };
 
-  const pct = percentOf1RM(reps, rpe);
+  const pct = percentOf1RM(reps, rpe, table);
   if (pct === null) return { label: raw, weight: null };
 
   const w = roundToIncrement((oneRM * pct) / 100, unit);
@@ -314,10 +431,11 @@ export function resolveDay(
 ): Map<string, ResolvedIntensity> {
   const resolved = new Map<string, ResolvedIntensity>();
   let topSet: number | null = null;
+  const table = rpeTableFor(maxes);
 
   for (const row of rows) {
     const oneRM = oneRepMaxFor(row.target, row.tier, maxes, row.exercise);
-    const result = resolveIntensity(row, oneRM, maxes.unit, topSet);
+    const result = resolveIntensity(row, oneRM, maxes.unit, topSet, table);
     resolved.set(row.id, result);
 
     if (row.intensityType !== "BACKOFF" && result.weight !== null) topSet = result.weight;

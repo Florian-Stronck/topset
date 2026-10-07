@@ -1,15 +1,16 @@
 import type { Client, InStatement, InValue } from "@libsql/client";
-import { athleteChain, checkPush, ownedIdsSql, SCOPE, SCOPED_TABLES, type PushTables } from "@/lib/coach-scope";
+import { athleteChain, checkPush, ownedIdsSql, SCOPE, SCOPED_TABLES, withoutReadOnly, type PushTables } from "@/lib/coach-scope";
+import { isRole, type Role } from "@/lib/roles";
 import { meetingNews, type MeetingNews } from "@/lib/meetings";
-import { ATHLETE_COLUMNS, MERGED_COLUMNS, MERGED_TABLES, PULL_ONLY_TABLES, PULLED_COLUMNS, newerRows, quote, stampOf, syncedColumns, upsertSql, validMergedRow, type Row } from "@/lib/sync-plan";
+import { ATHLETE_COLUMNS, MERGED_COLUMNS, MERGED_TABLES, PULL_ONLY_TABLES, newerRows, quote, stampOf, syncedColumns, upsertSql, validMergedRow, type Row } from "@/lib/sync-plan";
 
 /**
  * The Topset server's side of sync: what a signed-in coach may read, and applying what their
  * desktop app sends up. Every query is scoped to that coach (see `coach-scope.ts`).
  *
- * `shared` (from desktop apps new enough for teams) widens what is read to athletes on the
- * coach's teams. Older apps get only the coach's own, as before: they would trip over a
- * teammate's athletes, whose coach they don't have.
+ * `shared` (from desktop apps new enough for shares) widens what is read to athletes other
+ * coaches shared with this one. Older apps get only the coach's own, as before: they would
+ * trip over another coach's athletes, and couldn't tell which they may change.
  */
 
 const ROWS_PER_STATEMENT = 100;
@@ -39,12 +40,12 @@ function columnsOf(client: Client, table: string): Promise<string[]> {
   return cols;
 }
 
-/** The ids the coach owns (or with `shared`, may edit), per table: every table, or just the ones named. */
+/** The ids the coach owns (or with `shared`, may see or has that role on), per table: every table, or just the ones named. */
 export async function ownedIds(
   client: Client,
   coachId: string,
   only: readonly string[] = SCOPED_TABLES,
-  shared = false,
+  shared: boolean | Role = false,
 ): Promise<Map<string, Set<string>>> {
   const out = new Map<string, Set<string>>();
   for (const table of SCOPED_TABLES.filter((t) => only.includes(t))) {
@@ -114,7 +115,7 @@ export type PlanData = {
 };
 
 /**
- * What the coach's other computers, and their teammates, changed in the coach's plans since
+ * What the coach's other computers, and coaches sharing their athletes, changed in the coach's plans since
  * `since`: the rows as they are now, and the ones that are gone. A row whose last change
  * came from this computer (`sessionId`) is left out, since it already has it.
  */
@@ -126,7 +127,7 @@ export async function planData(
   limit = PLAN_PAGE,
   shared = false,
 ): Promise<PlanData> {
-  // By athlete, so a teammate's edit to a shared athlete counts; entries without one are
+  // By athlete, so another coach's edit to a shared athlete counts; entries without one are
   // the coach's own profile, or from before the log named athletes.
   const log = await rows(
     client,
@@ -204,7 +205,7 @@ export async function athleteData(client: Client, coachId: string, since?: numbe
 
 /**
  * Tells the desktop app of `coachId`, and of every coach who may see these athletes, that
- * something new was logged (see `athleteData`): the athletes' owners, and their teams.
+ * something new was logged (see `athleteData`): the athletes' owners, and whoever they're shared with.
  */
 export function bumpAthleteVersion(coachId: string, athleteIds: string[]): InStatement {
   const ids = athleteIds.map(() => "?").join(", ");
@@ -212,43 +213,41 @@ export function bumpAthleteVersion(coachId: string, athleteIds: string[]): InSta
     sql:
       `UPDATE "Coach" SET "athleteVersion" = "athleteVersion" + 1 WHERE "id" = ? ` +
       `OR "id" IN (SELECT "coachId" FROM "Athlete" WHERE "id" IN (${ids})) ` +
-      `OR "id" IN (SELECT m."coachId" FROM "TeamMember" m JOIN "Athlete" a ON a."teamId" = m."teamId" WHERE a."id" IN (${ids}))`,
+      `OR "id" IN (SELECT "coachId" FROM "AthleteShare" WHERE "athleteId" IN (${ids}))`,
     args: [coachId, ...athleteIds, ...athleteIds],
   };
 }
 
 export type AccessData = {
-  /** The teams the coach is on, and who is on them. */
-  teams: { id: string; name: string }[];
-  members: { teamId: string; coachId: string }[];
-  /** Teammates, and the owners of athletes shared with the coach: names only. */
+  /** The owners of athletes shared with the coach, and the coaches theirs are shared with: names only. */
   coaches: { id: string; name: string }[];
-  /** Every athlete the coach may see, with the team it's shared through. */
-  athletes: { id: string; teamId: string | null }[];
+  /** Every athlete the coach may see, with what they may do: "own" for their own. */
+  athletes: { id: string; role: Role | "own" }[];
+  /** Who the coach's own athletes are shared with. */
+  shares: { athleteId: string; coachId: string; role: Role }[];
 };
 
-/** What a desktop app needs to keep its copy of the coach's teams and roster right. */
+/** What a desktop app needs to keep its copy of the coach's roster and shares right. */
 export async function accessData(client: Client, coachId: string): Promise<AccessData> {
-  const teams = await rows(
+  const athletes = await rows(
     client,
-    `SELECT t."id", t."name" FROM "Team" t JOIN "TeamMember" m ON m."teamId" = t."id" WHERE m."coachId" = ? ORDER BY t."name"`,
+    `SELECT a."id", a."coachId", s."role" FROM "Athlete" a LEFT JOIN "AthleteShare" s ON s."athleteId" = a."id" AND s."coachId" = ? ` +
+      `WHERE a."id" IN (${ownedIdsSql("Athlete", true)})`,
+    [coachId, coachId],
+  );
+  const shares = await rows(
+    client,
+    `SELECT s."athleteId", s."coachId", s."role" FROM "AthleteShare" s JOIN "Athlete" a ON a."id" = s."athleteId" WHERE a."coachId" = ?`,
     [coachId],
   );
-  const members = await rows(
-    client,
-    `SELECT "teamId", "coachId" FROM "TeamMember" WHERE "teamId" IN (SELECT "teamId" FROM "TeamMember" WHERE "coachId" = ?)`,
-    [coachId],
-  );
-  const athletes = await rows(client, `SELECT "id", "teamId", "coachId" FROM "Athlete" WHERE "id" IN (${ownedIdsSql("Athlete", true)})`, [coachId]);
-  const others = [...new Set([...members, ...athletes].map((r) => String(r.coachId)))].filter((id) => id !== coachId);
+  const others = [...new Set([...athletes, ...shares].map((r) => String(r.coachId)))].filter((id) => id !== coachId);
   const coaches = others.length
     ? await rows(client, `SELECT "id", "name" FROM "Coach" WHERE "id" IN (${others.map(() => "?").join(", ")})`, others)
     : [];
   return {
-    teams: teams.map((t) => ({ id: String(t.id), name: String(t.name) })),
-    members: members.map((m) => ({ teamId: String(m.teamId), coachId: String(m.coachId) })),
     coaches: coaches.map((c) => ({ id: String(c.id), name: String(c.name) })),
-    athletes: athletes.map((a) => ({ id: String(a.id), teamId: a.teamId === null ? null : String(a.teamId) })),
+    athletes: athletes.map((a) => ({ id: String(a.id), role: a.coachId === coachId ? "own" : isRole(a.role) ? a.role : "view" })),
+    shares: shares.filter((r) => isRole(r.role)).map((r) => ({ athleteId: String(r.athleteId), coachId: String(r.coachId), role: r.role as Role })),
   };
 }
 
@@ -437,9 +436,15 @@ export async function applyPush(
     if (table === "CheckinAnswer") needed.add("CheckinQuestion");
     if (table === "SessionMove") needed.add("Day");
   }
-  // Teammates' athletes included, whichever app this is: an older one never sends them.
-  const owned = await ownedIds(client, coachId, [...needed], true);
-  const tables = await withoutVanished(client, sent, owned);
+  // Athletes shared to edit count as the coach's own, whichever app this is: an older one
+  // never sends them. What is shared only to view or review is dropped from the push, bar
+  // the Reviewed mark (see `withoutReadOnly`); notes come in below, with review enough.
+  const owned = await ownedIds(client, coachId, [...needed], "edit");
+  const visible = await ownedIds(client, coachId, [...needed], true);
+  const readOnly = new Map([...visible].map(([table, ids]) => [table, new Set([...ids].filter((id) => !owned.get(table)?.has(id)))]));
+  const review = await ownedIds(client, coachId, ["Day", "Athlete", "CoachMessage"].filter((t) => needed.has(t)), "review");
+  const { tables: writable, reviews } = withoutReadOnly(sent, readOnly, review.get("Day"));
+  const tables = await withoutVanished(client, writable, owned);
 
   // Ids sent up that exist but aren't this coach's: someone else's rows.
   const taken = new Set<string>();
@@ -453,7 +458,7 @@ export async function applyPush(
     }
   }
 
-  // Whose the teammates' athletes in this push are.
+  // Whose the shared athletes in this push are.
   const owners = new Map<string, string>();
   const touched = [...(tables.Athlete?.upsert ?? []).map((r) => String(r.id)), ...(tables.Athlete?.remove ?? [])].filter((id) =>
     owned.get("Athlete")?.has(id),
@@ -486,8 +491,7 @@ export async function applyPush(
     const upsert = tables[table]?.upsert ?? [];
     if (upsert.length === 0) continue;
     const known = syncedColumns(table, await columnsOf(client, table));
-    // Set on the server only; a push that carries them anyway doesn't get to change them.
-    const sent = Object.keys(upsert[0]).filter((c) => !PULLED_COLUMNS[table]?.includes(c));
+    const sent = Object.keys(upsert[0]);
     const unknown = sent.filter((c) => !known.includes(c));
     if (unknown.length) return `${table} has no ${unknown.join(", ")} column here — update the server first.`;
     for (const row of upsert) {
@@ -512,8 +516,14 @@ export async function applyPush(
     }
   }
 
+  for (const { id, reviewedAt } of reviews) {
+    if (!plain(reviewedAt)) return "Day.reviewedAt isn't a plain value.";
+    stmts.push({ sql: `UPDATE "Day" SET "reviewedAt" = ? WHERE "id" = ?`, args: [reviewedAt as InValue, id] });
+  }
+
   const athleteCols = ATHLETE_COLUMNS.ExerciseRow;
   for (const edit of payload.athlete ?? []) {
+    if (readOnly.get("ExerciseRow")?.has(edit.id)) continue;
     if (!owned.get("ExerciseRow")?.has(edit.id)) return "That row isn't yours.";
     const values = athleteCols.map((c) => edit.values[c] ?? null);
     if (!values.every(plain)) return "Logged values must be plain.";
@@ -536,10 +546,15 @@ export async function applyPush(
   const days = new Set([...(owned.get("Day") ?? []), ...(tables.Day?.upsert ?? []).map((r) => String(r.id))]);
   const notes: NewNote[] = [];
   const meetings: NewMeeting[] = [];
-  for (const [table, list] of merged) {
+  for (const [table, all] of merged) {
     const cols = [...MERGED_COLUMNS[table]];
-    const mine = owned.get(table) ?? new Set<string>();
     const isNote = table === "CoachMessage";
+    // Notes need only review; anything else under an athlete the coach can't edit is dropped.
+    const mine = isNote ? (review.get(table) ?? new Set<string>()) : (owned.get(table) ?? new Set<string>());
+    const list = all.filter(
+      (r) => !readOnly.get("Athlete")?.has(String(r.athleteId)) || (isNote && review.get("Athlete")?.has(String(r.athleteId))),
+    );
+    if (list.length === 0) continue;
     const isMeeting = table === "Meeting";
     /** A note's text as the server had it, to tell a reworded note from a re-sent one. */
     const bodies = new Map<string, unknown>();
@@ -549,7 +564,7 @@ export async function applyPush(
     const before = new Map<string, Row>();
     for (const row of list) {
       if (!validMergedRow(table, row)) return `A ${table} row is missing something.`;
-      if (!athletes.has(String(row.athleteId))) return "That athlete isn't yours.";
+      if (!athletes.has(String(row.athleteId)) && !(isNote && review.get("Athlete")?.has(String(row.athleteId)))) return "That athlete isn't yours.";
       if (table === "CheckinAnswer" && !questions.has(String(row.questionId))) return "That question isn't yours.";
       if (table === "SessionMove" && !days.has(String(row.dayId))) return "That session isn't yours.";
     }
@@ -598,7 +613,7 @@ export async function applyPush(
 
   if (stmts.length === 0) return null;
 
-  // In the log for the coach's other computers and their teammates, marked as this one's,
+  // In the log for the coach's other computers and the coaches sharing the athlete, marked as this one's,
   // with the athlete each row is under: looked up as the push goes in, so a removed row is
   // logged before it goes and an added one once it's there.
   const logOf = (table: string, ids: string[]): InStatement[] => {
@@ -629,6 +644,7 @@ export async function applyPush(
     removals.push(...logOf(table, change.remove));
     stmts.push(...logOf(table, change.upsert.map((r) => String(r.id))));
   }
+  stmts.push(...logOf("Day", reviews.map((r) => r.id)));
   stmts.unshift(...removals);
 
   // Whose plans this changes: removed rows are traced while they still exist, the rest once in.
@@ -637,7 +653,7 @@ export async function applyPush(
   for (const [table, ids] of plan.removed) for (const id of await athletesOf(client, table, ids)) plans.add(id);
 
   // The coach's own edits to athlete data are news to any other computer they use, and to
-  // their teammates'.
+  // the other coaches of those athletes.
   if ((payload.athlete ?? []).length > 0 || merged.length > 0) {
     const edited = new Set(merged.flatMap(([, list]) => list.map((r) => String(r.athleteId))));
     for (const id of await athletesOf(client, "ExerciseRow", (payload.athlete ?? []).map((e) => e.id))) edited.add(id);
@@ -653,6 +669,7 @@ export async function applyPush(
       if (!parent) continue;
       stmts.push(`DELETE FROM ${quote(table)} WHERE ${quote(parent.column)} NOT IN (SELECT "id" FROM ${quote(parent.table)})`);
     }
+    for (const table of ["AthleteShare", "ShareCode"]) stmts.push(`DELETE FROM ${quote(table)} WHERE "athleteId" NOT IN (SELECT "id" FROM "Athlete")`);
   }
 
   await client.migrate(stmts);
@@ -666,7 +683,7 @@ export async function applyPush(
 /**
  * Erases a coach and everything that hangs off them — athletes, programs, what their
  * athletes logged — and their sign-ins, so the username is free again. Only athletes they
- * own: a teammate's athlete on a team with them stays. One transaction,
+ * own: athletes others shared with them stay, and only the shares go. One transaction,
  * children first; the ids are picked while the parents they're found through still exist.
  */
 export async function deleteCoach(client: Client, coachId: string): Promise<void> {
@@ -682,7 +699,8 @@ export async function deleteCoach(client: Client, coachId: string): Promise<void
     stmts.push({ sql: `DELETE FROM ${quote(table)} WHERE "id" IN (${ownedIdsSql(table)})`, args: [coachId] });
   }
   stmts.push({ sql: `DELETE FROM "CoachSession" WHERE "coachId" = ?`, args: [coachId] });
-  stmts.push({ sql: `DELETE FROM "TeamMember" WHERE "coachId" = ?`, args: [coachId] });
+  stmts.push({ sql: `DELETE FROM "AthleteShare" WHERE "coachId" = ? OR "athleteId" NOT IN (SELECT "id" FROM "Athlete")`, args: [coachId] });
+  stmts.push({ sql: `DELETE FROM "ShareCode" WHERE "athleteId" NOT IN (SELECT "id" FROM "Athlete")`, args: [] });
   stmts.push({ sql: `DELETE FROM "Coach" WHERE "id" = ?`, args: [coachId] });
   await client.migrate(stmts);
 }

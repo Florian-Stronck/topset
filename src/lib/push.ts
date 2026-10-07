@@ -85,7 +85,7 @@ async function coachVoice(coachId: string): Promise<{ name: string; lang: Langua
 
 // --- the coach's notes ----------------------------------------------------------------------
 
-/** The voice of each athlete's own coach: on a team, whoever wrote, it's the one they know. */
+/** The voice of each athlete's own coach: shared or not, whoever wrote, it's the one they know. */
 function voices() {
   const known = new Map<string, Promise<Awaited<ReturnType<typeof coachVoice>>>>();
   return (coachId: string) => {
@@ -268,7 +268,7 @@ export async function dailyNotices(now = new Date()): Promise<{ sent: number }> 
   for (const [athleteId, theirs] of byAthlete) {
     const athlete = await prisma.athlete.findUnique({
       where: { id: athleteId },
-      select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true, accessToken: true },
+      select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true, rpeTable: true, activeProgramId: true, accessToken: true },
     });
     if (!athlete?.accessToken) continue;
     const token = athlete.accessToken;

@@ -35,6 +35,9 @@ export function Popover({
   // render (a link that opens one) must not appear before the page it belongs to.
   const hydrated = useSyncExternalStore(noop, () => true, () => false);
   const panelRef = useRef<HTMLDivElement>(null);
+  // A popover opened from inside this one is portalled outside its DOM, but React events
+  // still bubble up the component tree: a press in it marks this one, which then stays open.
+  const pressedInside = useRef(false);
 
   useIsomorphicLayoutEffect(() => {
     if (!open) return;
@@ -71,7 +74,9 @@ export function Popover({
     if (!open) return;
     function onDown(e: MouseEvent) {
       const target = e.target as Node;
-      if (panelRef.current?.contains(target) || anchorRef.current?.contains(target)) return;
+      const nested = pressedInside.current;
+      pressedInside.current = false;
+      if (nested || panelRef.current?.contains(target) || anchorRef.current?.contains(target)) return;
       onClose();
     }
     function onKey(e: KeyboardEvent) {
@@ -90,6 +95,9 @@ export function Popover({
   return createPortal(
     <div
       ref={panelRef}
+      onMouseDown={() => {
+        pressedInside.current = true;
+      }}
       style={{ position: "fixed", top: pos?.top ?? -9999, left: pos?.left ?? -9999, width, maxHeight: pos?.maxHeight }}
       className="z-[100] overflow-y-auto overscroll-contain rounded-lg border border-border bg-surface-2 p-3 shadow-xl shadow-black/60"
     >

@@ -161,6 +161,10 @@ export default async function TrackingPage({
     );
   }
 
+  // Shared to view: nothing changes. To review: the Review view's marks and notes do, the
+  // rest stays as it is. Progress has nothing to change, so its charts keep their hover.
+  const lock = view !== "progress" && (athlete.share.role === "view" || (athlete.share.role === "review" && view === "wellness"));
+
   return (
     <div className="flex h-screen">
       <Sidebar athletes={coach.athletes} activeAthleteId={athlete.id} coachUsername={coach.username} coachName={coach.name} section="tracking" keep={view === "review" ? undefined : `view=${view}`} />
@@ -175,7 +179,20 @@ export default async function TrackingPage({
         hasLink={athlete.accessToken !== null}
         unreviewed={unreviewed}
       >
-        {body}
+        {lock ? (
+          <>
+            <p className="mx-6 mt-3 w-fit rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-[12px] text-muted">
+              {athlete.share.role === "review"
+                ? t("Shared with you to review: mark sessions reviewed and write to them in Review.")
+                : t("Shared with you to look at: nothing can be changed here.")}
+            </p>
+            <div inert className="contents">
+              {body}
+            </div>
+          </>
+        ) : (
+          body
+        )}
       </TrackingShell>
     </div>
   );

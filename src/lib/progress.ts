@@ -1,6 +1,6 @@
 import type { IntensityType, Tier } from "@prisma/client";
 import { dayStatus, daySets, prescribedRpe, rpeDrift } from "@/lib/compliance";
-import { estimate1RM, liftOf, maxesOf, oneRepMaxFor, resolveDay } from "@/lib/intensity";
+import { estimate1RM, rpeTableFor, liftOf, maxesOf, oneRepMaxFor, resolveDay } from "@/lib/intensity";
 import { NO_MOVES, sessionDate } from "@/lib/schedule";
 import { topSetOf } from "@/lib/tracking";
 import type { AthleteData, BlockData, RowData } from "@/lib/types";
@@ -110,7 +110,7 @@ export function liftProgress(
               ? (resolved?.get(row.id)?.weight ?? null)
               : row.actualWeight === null
                 ? null
-                : estimate1RM(row.actualWeight, row.reps, row.performedRpe, athlete.unit);
+                : estimate1RM(row.actualWeight, row.reps, row.performedRpe, athlete.unit, rpeTableFor(athlete));
 
           if (value === null) continue;
           if (best[lift] === undefined || value > best[lift]) best[lift] = value;
@@ -277,7 +277,7 @@ export function liftWeekTable(block: PhaseBlock, athlete: AthleteData, lift: Lif
       if (row.tier !== "PRIMARY") continue;
       const set = topSetOf(row);
       if (!set) continue;
-      const estimate = estimate1RM(set.weight, set.reps, set.rpe, athlete.unit);
+      const estimate = estimate1RM(set.weight, set.reps, set.rpe, athlete.unit, rpeTableFor(athlete));
       if (estimate !== null && (e1rm === null || estimate > e1rm)) e1rm = estimate;
       if (!top || set.weight > top.weight) top = set;
     }

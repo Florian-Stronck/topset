@@ -9,6 +9,8 @@ type ScheduledDay = { id: string; index: number; rest: boolean };
 type ScheduledWeek<D extends ScheduledDay> = { order: number; days: D[] };
 type ScheduledBlock<D extends ScheduledDay> = {
   id: string;
+  /** Only needed when an active program is picked. */
+  programId?: string;
   startDate: Date | string;
   weeks: ScheduledWeek<D>[];
 };
@@ -53,19 +55,22 @@ export function dateOfDay(startDate: Date | string, week: number, dayIndex: numb
 
 /**
  * Every training day of every phase, in date order. Where two phases overlap on a date,
- * the one that started later wins — it is the plan the coach wrote most recently. `moves`
+ * a phase of the `active` program wins; otherwise the one that started later — it is the
+ * plan the coach wrote most recently. `moves`
  * maps a session to the date the athlete moved it to; a moved session wins its new date
  * over anything the plan puts there, since the athlete chose it knowing what was there.
  */
 export function sessionsOf<D extends ScheduledDay, B extends ScheduledBlock<D>>(
   blocks: B[],
   moves: ReadonlyMap<string, string> = new Map(),
+  active?: string | null,
 ): Session<B, D>[] {
+  // Compared as strings: "1" (active program) beats "0", then the later start date.
   type Held = Session<B, D> & { start: string };
   const byDate = new Map<string, Held>();
   const moved: Held[] = [];
   for (const block of blocks) {
-    const start = ymdOf(block.startDate);
+    const start = (active && block.programId === active ? "1" : "0") + ymdOf(block.startDate);
     for (const week of block.weeks) {
       for (const day of week.days) {
         if (day.rest) continue;

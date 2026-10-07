@@ -45,6 +45,12 @@ describe("sessionsOf", () => {
     assert.equal(sessionOn(s, "2026-09-30")?.day.id, "d");
   });
 
+  test("the active program wins the shared date, however late it started", () => {
+    const peak = { id: "peak", programId: "other", startDate: "2026-09-28T00:00:00Z", weeks: [{ order: 1, days: [day("p", 0)] }] };
+    const s = sessionsOf([peak, { ...base, programId: "main" }], undefined, "main");
+    assert.equal(sessionOn(s, "2026-09-28")?.day.id, "c");
+  });
+
   test("finds today, the next and the previous session", () => {
     const s = sessionsOf([base]);
     assert.equal(sessionOn(s, "2026-09-22"), null);

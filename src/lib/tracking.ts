@@ -2,7 +2,7 @@ import type { Tier } from "@prisma/client";
 import { LOW_READINESS, readinessOf, scaleScore, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
 import { daySets, rpeDrift, type DayStatus, type OffPlan } from "@/lib/compliance";
 import { keyOf, type ExerciseHistory, type ExerciseLog, type HistoryBlock } from "@/lib/exercise-history";
-import { estimate1RM, liftOf } from "@/lib/intensity";
+import { estimate1RM, rpeTableFor, liftOf } from "@/lib/intensity";
 import { addDays, NO_MOVES, sessionDate } from "@/lib/schedule";
 import { rpeOf } from "@/lib/setlog";
 import type { AthleteData, BlockData, DayData, RowData } from "@/lib/types";
@@ -114,7 +114,7 @@ export function bestEstimates(block: BlockData, athlete: AthleteData): LiftBest[
         if (!lift) continue;
 
         if (row.actualWeight === null || row.reps === null) continue;
-        const e1rm = estimate1RM(row.actualWeight, row.reps, row.performedRpe, athlete.unit);
+        const e1rm = estimate1RM(row.actualWeight, row.reps, row.performedRpe, athlete.unit, rpeTableFor(athlete));
         if (e1rm === null) continue;
 
         const current = best.get(lift);

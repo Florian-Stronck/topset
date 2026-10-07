@@ -113,6 +113,8 @@ export type CoachSettings = {
   // Tracking and competition
   totalLifts: MeetLift[];
   attemptShare: { 1: number; 2: number; 3: number };
+  /** What a meet total is scored by, across bodyweights. */
+  meetScore: "dots" | "gl";
   pr: { basis: "e1rm" | "weight"; highlight: boolean };
   needsProgramWeeks: number;
 
@@ -190,6 +192,7 @@ export const DEFAULTS: CoachSettings = {
 
   totalLifts: ["SQUAT", "BENCH", "DEADLIFT"],
   attemptShare: { 1: 0.9, 2: 0.955, 3: 1 },
+  meetScore: "dots",
   pr: { basis: "e1rm", highlight: true },
   needsProgramWeeks: 2,
 
@@ -233,8 +236,10 @@ const ATHLETE_KEYS = [
   "variationPercent",
 ] as const satisfies readonly (keyof CoachSettings)[];
 
-export function forAthlete(settings: CoachSettings): CoachSettings {
-  return { ...DEFAULTS, ...Object.fromEntries(ATHLETE_KEYS.map((k) => [k, settings[k]])) };
+export function forAthlete(settings: CoachSettings, ownChart?: RpeTable | null): CoachSettings {
+  const shared = { ...DEFAULTS, ...Object.fromEntries(ATHLETE_KEYS.map((k) => [k, settings[k]])) };
+  // An athlete with their own RPE chart reads every RPE weight and estimate off it.
+  return ownChart ? { ...shared, rpeTable: ownChart } : shared;
 }
 
 export function parseSettings(json: string | null | undefined): CoachSettings {

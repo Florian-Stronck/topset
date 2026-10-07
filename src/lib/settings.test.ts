@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { estimate1RM, oneRepMaxFor, percentOf1RM, roundToIncrement } from "@/lib/intensity";
+import { curveHandles, estimate1RM, oneRepMaxFor, parseRpeTable, percentOf1RM, resolveDay, roundToIncrement, tableFromCurve } from "@/lib/intensity";
 import { DEFAULTS, mergeSettings, parseSettings, setActiveSettings } from "@/lib/settings";
 
 describe("parseSettings", () => {
@@ -70,4 +70,35 @@ test("variation drop-off: the exercise's own, else the athlete's, else the coach
   assert.equal(oneRepMaxFor("Squat", "VARIATION", own, "Paused Squat"), 170);
   assert.equal(oneRepMaxFor("Squat", "VARIATION", own, "Pin Squat"), 160);
   assert.equal(oneRepMaxFor("Squat", "PRIMARY", own, "Squat"), 200);
+});
+
+describe("rpe chart curve", () => {
+  test("an untouched curve leaves the chart exactly as it was", () => {
+    const table = DEFAULTS.rpeTable;
+    assert.deepEqual(tableFromCurve(table, curveHandles(table)).pct, table.pct);
+  });
+  test("lowering a handle lightens the cells around it, and only those", () => {
+    const table = DEFAULTS.rpeTable;
+    const handles = curveHandles(table);
+    const lowered = handles.map((h, i) => (i === 1 ? { ...h, y: h.y - 2 } : h));
+    const out = tableFromCurve(table, lowered);
+    assert.ok(out.pct[0][1] < table.pct[0][1]); // 2 @ RPE 10
+    assert.equal(out.pct[6][9], table.pct[6][9]); // 10 @ RPE 7, far off
+  });
+  test("a chart of the athlete's own is read instead of the coach's", () => {
+    const own = { ...DEFAULTS.rpeTable, pct: DEFAULTS.rpeTable.pct.map((row) => row.map((p) => p - 5)) };
+    assert.equal(percentOf1RM(1, 10, own), 95);
+    assert.equal(percentOf1RM(1, 10), DEFAULTS.rpeTable.pct[0][0]);
+  });
+  test("a malformed chart counts as none", () => {
+    assert.equal(parseRpeTable("{\"rpe\":[10],\"reps\":[1,2],\"pct\":[[100]]}"), null);
+    assert.equal(parseRpeTable("nope"), null);
+  });
+  test("a program's RPE weights come off the athlete's own chart", () => {
+    const row = { id: "r", tier: "PRIMARY" as const, target: "Squat", reps: 1, intensityType: "RPE" as const, intensity: 10, intensityMax: null };
+    const maxes = { squat1RM: 200, bench1RM: null, dead1RM: null, unit: "KG" as const };
+    const own = { ...DEFAULTS.rpeTable, pct: DEFAULTS.rpeTable.pct.map((r) => r.map((p) => p - 10)) };
+    assert.equal(resolveDay([row], maxes).get("r")?.weight, 200);
+    assert.equal(resolveDay([row], { ...maxes, rpeTable: JSON.stringify(own) }).get("r")?.weight, 180);
+  });
 });

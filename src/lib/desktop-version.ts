@@ -30,12 +30,13 @@ export function tooOld(request: Request, min = MIN_DESKTOP_VERSION): string | nu
 }
 
 /**
- * The first desktop app that knows about teams. Older ones keep syncing, but only see and
- * get the coach's own athletes: a teammate's would arrive without the coach they belong to.
+ * The first desktop app that knows athletes can be shared, and with which role. Older ones
+ * keep syncing, but only see and get the coach's own athletes: they'd let a coach change
+ * an athlete shared with them only to view, and lose the change without a word.
  */
-export const TEAMS_VERSION = "0.6.0";
+export const SHARES_VERSION = "0.9.0";
 
-/** Whether this request's desktop app can take athletes shared through a team. */
-export function knowsTeams(request: Request): boolean {
-  return !olderThan(request.headers.get(VERSION_HEADER) ?? "0.0.0", TEAMS_VERSION);
+/** Whether this request's desktop app can take athletes other coaches shared with it. */
+export function knowsShares(request: Request): boolean {
+  return !olderThan(request.headers.get(VERSION_HEADER) ?? "0.0.0", SHARES_VERSION);
 }

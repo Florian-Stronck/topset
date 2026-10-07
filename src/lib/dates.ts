@@ -3,6 +3,62 @@ import { t } from "@/lib/i18n";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+export type ProgramOverlap = {
+  /** The program that started first, and the one that started inside it. */
+  earlier: string;
+  later: string;
+  /** Negative, like an overlap in `phaseGaps`: days from `earlier`'s end back to `later`'s start. */
+  days: number;
+};
+
+/**
+ * Pairs of programs with phases running on the same days, from `today` on — an overlap
+ * that is over no longer decides anything. A phase's `weeks` is a count.
+ */
+export function programOverlaps(
+  programs: { id: string; phases: { startDate: Date | string; weeks: number }[] }[],
+  today: Date,
+): ProgramOverlap[] {
+  const spans = programs
+    .filter((p) => p.phases.length > 0)
+    .map((p) => ({
+      id: p.id,
+      phases: p.phases.map((x) => {
+        const start = new Date(x.startDate).getTime();
+        return [start, start + x.weeks * 7 * DAY_MS] as const;
+      }),
+    }))
+    .map((p) => ({ ...p, start: Math.min(...p.phases.map((x) => x[0])), end: Math.max(...p.phases.map((x) => x[1])) }))
+    .sort((a, b) => a.start - b.start || a.id.localeCompare(b.id));
+
+  const from = today.getTime();
+  const out: ProgramOverlap[] = [];
+  for (const [i, a] of spans.entries()) {
+    for (const b of spans.slice(i + 1)) {
+      const shared = a.phases.some(([as, ae]) =>
+        b.phases.some(([bs, be]) => Math.max(as, bs) < Math.min(ae, be) && Math.min(ae, be) > from),
+      );
+      if (shared) out.push({ earlier: a.id, later: b.id, days: Math.round((b.start - a.end) / DAY_MS) });
+    }
+  }
+  return out;
+}
+
+/** `programOverlaps` from a flat list of phases tagged with their program. */
+export function phaseOverlaps(
+  phases: { programId: string; startDate: Date | string; weeks: number }[],
+  today: Date,
+): ProgramOverlap[] {
+  const byProgram = new Map<string, { startDate: Date | string; weeks: number }[]>();
+  for (const p of phases) byProgram.set(p.programId, [...(byProgram.get(p.programId) ?? []), p]);
+  return programOverlaps([...byProgram].map(([id, list]) => ({ id, phases: list })), today);
+}
+
+/** Whether every overlap has a winner: the active program is one of each pair. */
+export function overlapsSettled(pairs: ProgramOverlap[], active: string | null | undefined): boolean {
+  return pairs.every((o) => o.earlier === active || o.later === active);
+}
+
 /**
  * Days between one phase ending and the next starting, keyed by the later phase's id.
  * Positive is a break (rest, vacation), negative an overlap; back-to-back phases are left

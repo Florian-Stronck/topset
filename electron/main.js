@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, shell, dialog } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -373,7 +373,7 @@ function openWindow() {
     backgroundColor: "#0a0a0c",
     title: "Topset",
     icon: path.join(__dirname, "icon.ico"),
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, "preload.js") },
   });
 
   window.removeMenu();
@@ -445,19 +445,33 @@ async function start() {
 const UPDATE_EVERY_MS = 4 * 60 * 60 * 1000;
 
 /**
- * Installed copies download new releases from GitHub in the background and ask to restart
- * once one is ready; "Later" installs it the next time Topset closes. Only an installed copy
- * has app-update.yml, so dev and the old zip folders never check.
+ * Installed copies check GitHub for new releases and ask before downloading anything. Only
+ * the changed parts of the installer come down (electron-builder's blockmaps), and it
+ * installs over the existing copy; the data in %APPDATA%\Topset is never touched. Only an
+ * installed copy has app-update.yml, so dev and the old zip folders never check.
  */
 function watchForUpdates() {
   if (dev || !fs.existsSync(path.join(process.resourcesPath, "app-update.yml"))) return;
   const { autoUpdater } = require("electron-updater");
+  autoUpdater.autoDownload = false;
+  // Once declined, not asked again until the next start.
   let asked = false;
 
   autoUpdater.on("error", (error) => console.error("[topset] update check failed", error));
-  autoUpdater.on("update-downloaded", async ({ version }) => {
+  autoUpdater.on("update-available", async ({ version }) => {
     if (asked) return;
     asked = true;
+    const { response } = await dialog.showMessageBox(window, {
+      type: "info",
+      buttons: ["Download", "Not now"],
+      defaultId: 0,
+      cancelId: 1,
+      message: `Topset ${version} is available`,
+      detail: `You have ${app.getVersion()}. Download it now? It comes down in the background while you keep working.`,
+    });
+    if (response === 0) autoUpdater.downloadUpdate().catch(() => {});
+  });
+  autoUpdater.on("update-downloaded", async ({ version }) => {
     const { response } = await dialog.showMessageBox(window, {
       type: "info",
       buttons: ["Restart now", "Later"],
@@ -473,7 +487,31 @@ function watchForUpdates() {
   check();
   // Coaches leave it open for days.
   setInterval(check, UPDATE_EVERY_MS);
+
+  // "Check for updates" from the palette: asks again even if declined, and says so when
+  // there is nothing new.
+  ipcMain.removeHandler("check-for-updates");
+  ipcMain.handle("check-for-updates", async () => {
+    asked = false;
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      if (!result?.isUpdateAvailable) {
+        await dialog.showMessageBox(window, { type: "info", message: "Topset is up to date", detail: `You have ${app.getVersion()}.` });
+      }
+    } catch (error) {
+      await dialog.showMessageBox(window, { type: "warning", message: "Could not check for updates", detail: String(error?.message || error) });
+    }
+  });
 }
+
+// Until watchForUpdates takes it over: dev and the old zip folders can't update themselves.
+ipcMain.handle("check-for-updates", () =>
+  dialog.showMessageBox(window, {
+    type: "info",
+    message: "This copy doesn't update itself",
+    detail: "Only an installed Topset checks for updates. Download the installer from the Releases page.",
+  }),
+);
 
 app.whenReady().then(() =>
   start().catch((error) => {

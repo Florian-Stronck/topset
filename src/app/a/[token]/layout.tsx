@@ -1,3 +1,4 @@
+import { parseRpeTable } from "@/lib/intensity";
 import type { Metadata, Viewport } from "next";
 import { notFound } from "next/navigation";
 import { AthleteNav } from "@/components/athlete/AthleteNav";
@@ -42,7 +43,7 @@ export default async function AthleteLayout({
   const [settings, unread] = await Promise.all([loadSettings(athlete.coachId), unreadCount(athlete.id, await athleteToday())]);
 
   return (
-    <SettingsProvider settings={forAthlete(settings)}>
+    <SettingsProvider settings={forAthlete(settings, parseRpeTable(athlete.rpeTable))}>
       <div className="mx-auto flex min-h-dvh w-full max-w-[560px] flex-col">
         <RememberAthlete token={token} />
         <WriteSync />

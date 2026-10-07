@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { canEdit } from "@/lib/share";
 import { today as calendarToday, ymdOf } from "@/lib/dates";
 import { isActive, sortInjuries } from "@/lib/injuries";
 import { HistoryProvider } from "@/components/history";
@@ -76,17 +77,18 @@ export default async function ProgrammingPage({
               exerciseHistory={exerciseHistory}
               meets={meetData}
               injuries={sortInjuries(injuries.filter((i) => isActive(i, today)), today)}
+              readOnly={!canEdit(athlete.share)}
             />
           </HistoryProvider>
         ) : (
-          <EmptyState athleteId={athlete.id} athleteName={athlete.name} />
+          <EmptyState athleteId={athlete.id} athleteName={athlete.name} readOnly={!canEdit(athlete.share)} />
         )}
       </main>
     </div>
   );
 }
 
-function EmptyState({ athleteId, athleteName }: { athleteId: string; athleteName: string }) {
+function EmptyState({ athleteId, athleteName, readOnly }: { athleteId: string; athleteName: string; readOnly: boolean }) {
   return (
     <div className="grid flex-1 place-items-center">
       <div className="text-center">
@@ -94,9 +96,11 @@ function EmptyState({ athleteId, athleteName }: { athleteId: string; athleteName
         <div className="mt-1 text-[12px] text-muted">
           {t("Create one to start programming for them.")}
         </div>
-        <div className="mt-4 flex justify-center gap-2">
-          <NewProgramButton athleteId={athleteId} />
-        </div>
+        {!readOnly && (
+          <div className="mt-4 flex justify-center gap-2">
+            <NewProgramButton athleteId={athleteId} />
+          </div>
+        )}
       </div>
     </div>
   );

@@ -10,7 +10,7 @@ import { dayStatus, daySets, offPlan, rowSets, rpeDelta, type DayStatus, type Of
 import { formatDate, formatMoment, weekdayOf, weekdayOfDay } from "@/lib/dates";
 import { useCommands, type Command } from "@/lib/commands";
 import { t, weekdayShort } from "@/lib/i18n";
-import { estimate1RM, formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
+import { estimate1RM, rpeTableFor, formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
 import { setTrackingPref, usePref } from "@/lib/prefs";
 import type { AthleteCheckins, MessageData } from "@/lib/queries";
 import { dateOfDay } from "@/lib/schedule";
@@ -214,7 +214,7 @@ export function ReviewView({
                 off,
                 pr,
                 top,
-                e1rm: top ? estimate1RM(top.weight, top.reps, top.rpe, athlete.unit) : null,
+                e1rm: top ? estimate1RM(top.weight, top.reps, top.rpe, athlete.unit, rpeTableFor(maxes)) : null,
                 previous: previous[row.id] ?? null,
                 facts: { tier: row.tier, off, pr },
               };

@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { cloudClient } from "@/lib/cloud";
 import { body, fail, json, withCoach } from "@/lib/coach-api";
-import { knowsTeams, tooOld } from "@/lib/desktop-version";
+import { knowsShares, tooOld } from "@/lib/desktop-version";
 import { flushPlanNotices, notePlanChanges, notifyMeetings, notifyNotes } from "@/lib/push";
 import { accessData, applyPush, athleteData, planData, planRev, pushNews, snapshot, type PushPayload } from "@/lib/sync-server";
 
@@ -12,11 +12,11 @@ export const maxDuration = 60;
  * `?part=snapshot`: all of the coach's data. `?part=ids`: just its ids.
  * `?part=athlete`: what their athletes logged; `&since=<version>` skips it if nothing new.
  * `?part=plan&since=<rev>`: plan rows the coach's other computers changed since then.
- * `?part=access`: the coach's teams, and every athlete they may see.
+ * `?part=access`: every athlete the coach may see, with their role, and who theirs are shared with.
  * `?part=athletes&ids=<a,b>`: everything under athletes just shared with the coach.
  * Snapshots carry the log's `rev` as of just before they were read.
  *
- * A desktop app too old for teams gets only the coach's own athletes, as it always did.
+ * A desktop app too old for shares gets only the coach's own athletes, as it always did.
  */
 export async function GET(request: Request) {
   return withCoach(request, async (coach) => {
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
     if (old) return fail(old, 426);
     const params = new URL(request.url).searchParams;
     const part = params.get("part");
-    const shared = knowsTeams(request);
+    const shared = knowsShares(request);
     const client = cloudClient();
     try {
       if (part === "athlete") {
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
         if (!Number.isInteger(since) || since < 0) return fail("Plan pulls need a since.");
         return json({ ok: true, ...(await planData(client, coach.id, coach.sessionId, since, undefined, shared)) });
       }
-      // Only for apps that know teams; to anything older these parts don't exist.
+      // Only for apps that know shares; to anything older these parts don't exist.
       if ((part === "access" || part === "athletes") && !shared) return fail("Unknown part.");
       if (part === "access") return json({ ok: true, ...(await accessData(client, coach.id)) });
       if (part === "athletes") {
@@ -50,7 +50,7 @@ export async function GET(request: Request) {
       if (part === "snapshot" || part === "ids") {
         const rev = await planRev(client);
         // A take-over (`ids`) deletes from the server what the computer doesn't have: only
-        // ever the coach's own, never a teammate's athlete it hasn't pulled yet.
+        // ever the coach's own, never another coach's athlete it hasn't pulled yet.
         return json({ ok: true, rev, tables: await snapshot(client, coach.id, part === "ids", part === "snapshot" && shared) });
       }
       return fail("Unknown part.");

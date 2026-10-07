@@ -3,7 +3,8 @@
 import { assertCoach } from "@/lib/role";
 import { revalidatePath } from "next/cache";
 import type { AttemptResult, MeetLift } from "@prisma/client";
-import { best, MEET_LIFTS, maxFor, planned } from "@/lib/competition";
+import { best, MEET_LIFTS, maxFor, planned, suggestion } from "@/lib/competition";
+import { loadSettings } from "@/lib/coach-settings";
 import { prisma } from "@/lib/prisma";
 
 function revalidateAll() {
@@ -80,7 +81,24 @@ export async function updateAttempt(
     create: { meetId, lift, number, ...patch },
     update: patch,
   });
+  if (patch.result && patch.result !== "PENDING" && number < 3) await fillNext(meetId, lift, number + 1);
   revalidateAll();
+}
+
+/**
+ * Once an attempt is called, the next one on that lift gets its weight if it has none yet:
+ * a jump after a make, the same again after a miss. On the day that is one click less.
+ */
+async function fillNext(meetId: string, lift: MeetLift, number: number) {
+  await loadSettings();
+  const meet = await prisma.meet.findUniqueOrThrow({
+    where: { id: meetId },
+    include: { athlete: true, attempts: true },
+  });
+  const next = meet.attempts.find((a) => a.lift === lift && a.number === number);
+  if (!next || next.weight !== null) return;
+  const weight = suggestion(meet.attempts, lift, number, maxFor(lift, meet.athlete), meet.athlete.unit);
+  if (weight !== null) await prisma.attempt.update({ where: { id: next.id }, data: { weight } });
 }
 
 /**
@@ -89,6 +107,7 @@ export async function updateAttempt(
  */
 export async function planFromMaxes(meetId: string) {
   assertCoach();
+  await loadSettings();
   const meet = await prisma.meet.findUniqueOrThrow({
     where: { id: meetId },
     include: { athlete: true, attempts: true },

@@ -16,7 +16,7 @@ import {
 } from "@/app/programming/actions";
 import { useHistory } from "@/components/history";
 import { addWeekUndoable, ProgrammingGrid } from "@/components/ProgrammingGrid";
-import { addPhaseUndoable, closeGapUndoable, pastePhaseUndoable, Topbar, type Panel } from "@/components/Topbar";
+import { addPhaseUndoable, closeGapUndoable, moveProgramUndoable, pastePhaseUndoable, programOverlap, setActiveProgramUndoable, Topbar, type Panel } from "@/components/Topbar";
 import { WholeProgramSheet, type ProgramPosition } from "@/components/WholeProgramSheet";
 import type { MeetSummary } from "@/lib/competition";
 import { describeGap, phaseGaps } from "@/lib/dates";
@@ -72,6 +72,7 @@ export function ProgrammingWorkspace({
   exerciseHistory,
   meets,
   injuries,
+  readOnly = false,
 }: {
   phase: BlockData;
   /** The week in the URL, so a reload opens where the coach was. */
@@ -85,6 +86,8 @@ export function ProgrammingWorkspace({
   meets: MeetSummary[];
   /** Injuries the athlete has now, worst first — kept in sight while the plan is written. */
   injuries: InjuryData[];
+  /** Shared with this coach to view or review: the plan shows, but can't be changed. */
+  readOnly?: boolean;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -497,6 +500,29 @@ export function ProgrammingWorkspace({
       });
     }
 
+    const { pairs, overlapping, chosen } = programOverlap(programs, athlete);
+    for (const o of pairs) {
+      const later = programs.find((p) => p.id === o.later);
+      const earlier = programs.find((p) => p.id === o.earlier);
+      if (!later || !earlier) continue;
+      list.push({
+        id: `program-gap-${o.later}`,
+        group: "Program",
+        title: t("Fix the {gap}: start {phase} when {previous} ends", { gap: describeGap(o.days), phase: later.name, previous: earlier.name }),
+        keywords: "overlap programs both dates start move",
+        run: () => moveProgramUndoable(history, later, -o.days),
+      });
+    }
+    if (overlapping.has(program.id) && chosen !== program.id) {
+      list.push({
+        id: "program-active",
+        group: "Program",
+        title: t("Make this program the active one"),
+        keywords: "overlap active current train both programs",
+        run: () => setActiveProgramUndoable(history, athlete, program.id),
+      });
+    }
+
     const gaps = phaseGaps(program.phases);
     for (const [i, p] of program.phases.entries()) {
       const days = gaps.get(p.id);
@@ -643,8 +669,10 @@ export function ProgrammingWorkspace({
     return list.sort((a, b) => groups.indexOf(a.group) - groups.indexOf(b.group));
   }, [activeWeek, athlete, tightIntensity, columns, hideRest, copied, view, programOpen, wholeProgram, block, history, program, programs, router]);
 
-  // Above the sidebar's: "Tracking" here knows which phase to open.
-  useCommands("workspace", commands, 1);
+  // Above the sidebar's: "Tracking" here knows which phase to open. Read-only, only what
+  // looks, moves or copies out.
+  const allowed = useMemo(() => (readOnly ? commands.filter((c) => READ_ONLY_COMMANDS.test(c.id)) : commands), [commands, readOnly]);
+  useCommands("workspace", allowed, 1);
 
   return (
     <>
@@ -676,6 +704,12 @@ export function ProgrammingWorkspace({
         </Link>
       )}
 
+      {readOnly && (
+        <p className="mx-6 mt-2 w-fit rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-[12px] text-muted">
+          {t("Shared with you to look at: the plan can't be changed here.")}
+        </p>
+      )}
+
       {view === "program" ? (
         <WholeProgramSheet
           phases={wholeProgram}
@@ -695,12 +729,16 @@ export function ProgrammingWorkspace({
           onWeek={setWeek}
           deletingWeek={deletingWeek}
           onDeletingWeek={setDeletingWeek}
+          readOnly={readOnly}
         />
       )}
       <SaveFailed />
     </>
   );
 }
+
+/** Commands that leave the plan as it is, for an athlete shared to view or review. */
+const READ_ONLY_COMMANDS = /^(go-|open-|export-|print-|whole-program$|sync-now$|backup-|phase-copy$|week-copy$|program-copy$)/;
 
 /**
  * Edits show before the server has them, and are sent fire-and-forget — so a save that

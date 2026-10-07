@@ -1,5 +1,6 @@
 "use client";
 
+import { RpeChartEditor } from "@/components/RpeChartEditor";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import type { IntensityType, MeetLift, Tier } from "@prisma/client";
@@ -13,8 +14,6 @@ import {
   deleteMyAccount,
   listCoaches,
   manageCoach,
-  createTeam,
-  manageTeam,
   resetPassword,
   signedInComputers,
   signIn,
@@ -24,7 +23,6 @@ import {
   type AccountStatus,
   type CoachListing,
   type InviteListing,
-  type TeamListing,
 } from "@/app/settings/cloud-actions";
 import { useSettings } from "@/components/SettingsProvider";
 import { EXERCISE_CATALOG } from "@/lib/exercises";
@@ -33,7 +31,6 @@ import { formatMoment } from "@/lib/dates";
 import { pickFile, restoreBackup, type RestoreStatus } from "@/lib/pick-file";
 import { colorOfTarget, PREF_DEFAULTS, resetPref, setPref, usePref, type Column } from "@/lib/prefs";
 import {
-  activeSettings,
   DEFAULTS,
   TIERS,
   tierLabel,
@@ -201,11 +198,11 @@ function Units({ settings, update }: Props) {
       </Row>
       <Row
         label="RPE chart"
-        hint="% of 1RM for each RPE and rep count. RPE loads come off this; anything off the chart is read along the same curve."
+        hint="% of 1RM for each RPE and rep count. RPE loads come off this; anything off the chart is read along the same curve. An athlete can have their own on their card."
         stacked
         action={<ResetLink onClick={() => update({ rpeTable: DEFAULTS.rpeTable })} />}
       >
-        <RpeChart table={settings.rpeTable} onChange={(rpeTable) => update({ rpeTable })} />
+        <RpeChartEditor table={settings.rpeTable} base={DEFAULTS.rpeTable} onChange={(rpeTable) => update({ rpeTable })} />
       </Row>
     </Section>
   );
@@ -740,6 +737,16 @@ function Tracking({ settings, update }: Props) {
           ))}
         </div>
       </Row>
+      <Row label="Score meets by" hint="Classic GL; a bench-only total uses the bench formula.">
+        <Select
+          value={settings.meetScore}
+          options={[
+            ["dots", "DOTS"],
+            ["gl", "IPF GL"],
+          ]}
+          onChange={(v) => update({ meetScore: v as CoachSettings["meetScore"] })}
+        />
+      </Row>
       <Row label="A PR is">
         <Select
           value={settings.pr.basis}
@@ -813,7 +820,7 @@ function AthleteApp({ settings, update }: Props) {
     <Section
       id="athlete-app"
       title="Account and athlete app"
-      hint="Sign in to your Topset server to give athletes their check-in links. You keep working on this computer; your athletes sync in the background. Every coach only ever sees their own athletes, and those shared with their team."
+      hint="Sign in to your Topset server to give athletes their check-in links. You keep working on this computer; your athletes sync in the background. Every coach only ever sees their own athletes, and those other coaches share with them."
     >
       {status && !status.canSignIn ? (
         <Row label="Account" hint="Signing in works in the desktop app.">
@@ -1161,9 +1168,8 @@ function SignInSecurity() {
  * athletes' links working until it's turned back on.
  */
 function Coaches() {
-  const [data, setData] = useState<{ coaches: CoachListing[]; invites: InviteListing[]; teams: TeamListing[]; error?: string } | null>(null);
+  const [data, setData] = useState<{ coaches: CoachListing[]; invites: InviteListing[]; error?: string } | null>(null);
   const [label, setLabel] = useState("");
-  const [teamName, setTeamName] = useState("");
   const [fresh, setFresh] = useState<string | null>(null);
   const [reset, setReset] = useState<{ id: string; code: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1276,93 +1282,6 @@ function Coaches() {
               )}
             </div>
           ))}
-        </div>
-      </Row>
-
-      <Row
-        label="Teams"
-        stacked
-        hint="Coaches on a team see and edit every athlete on it. Each coach shares their own athletes from the athlete card."
-      >
-        <div className="space-y-1.5">
-          {data?.teams.map((team) => {
-            const off = data.coaches.filter((c) => !c.disabled && !team.coaches.includes(c.id));
-            return (
-              <div key={team.id} className="flex flex-wrap items-center gap-2 text-[12px]">
-                <span className="font-medium">{team.name}</span>
-                {team.coaches.map((id) => {
-                  const c = data.coaches.find((x) => x.id === id);
-                  return (
-                    <span key={id} className="flex items-center gap-1 rounded bg-surface-3 px-1.5 text-muted">
-                      {c?.name ?? id}
-                      <button
-                        type="button"
-                        disabled={pending}
-                        title={t("Take off the team")}
-                        onClick={() => act(() => manageTeam(team.id, { action: "remove", coachId: id }))}
-                        className="text-muted-2 hover:text-red-400"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  );
-                })}
-                {off.length > 0 && (
-                  <select
-                    value=""
-                    disabled={pending}
-                    onChange={(e) => e.target.value && act(() => manageTeam(team.id, { action: "add", coachId: e.target.value }))}
-                    className={`${fieldClass} w-[140px]`}
-                  >
-                    <option value="">{t("Add a coach…")}</option>
-                    {off.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <span className="ml-auto text-muted-2">{plural(team.athletes, "{n} athlete", "{n} athletes")}</span>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => {
-                    const name = window.prompt(t("New name for {name}", { name: team.name }), team.name)?.trim();
-                    if (name && name !== team.name) act(() => manageTeam(team.id, { action: "rename", name }));
-                  }}
-                  className={button}
-                >
-                  {t("Rename")}
-                </button>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => {
-                    if (window.confirm(t("Delete the team {name}? Its athletes go back to the coaches who added them. Nothing else is deleted.", { name: team.name }))) {
-                      act(() => manageTeam(team.id, { action: "delete" }));
-                    }
-                  }}
-                  className={`${button} hover:!border-red-400 hover:!text-red-400`}
-                >
-                  {t("Delete")}
-                </button>
-              </div>
-            );
-          })}
-          <div className="flex items-center gap-2 pt-1">
-            <input value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder={t("Team name")} className={`${fieldClass} w-[200px]`} />
-            <button
-              type="button"
-              disabled={pending || !teamName.trim()}
-              onClick={() => {
-                act(() => createTeam(teamName));
-                setTeamName("");
-              }}
-              className="rounded bg-accent px-2.5 py-1 text-[12px] font-medium text-white disabled:opacity-50"
-            >
-              {t("New team")}
-            </button>
-          </div>
         </div>
       </Row>
 
@@ -1575,53 +1494,6 @@ function Row({
 }
 
 /** The RPE × reps chart, every cell editable. */
-function RpeChart({
-  table,
-  onChange,
-}: {
-  table: CoachSettings["rpeTable"];
-  onChange: (table: CoachSettings["rpeTable"]) => void;
-}) {
-  const set = (r: number, c: number, v: number | null) =>
-    onChange({
-      ...table,
-      pct: table.pct.map((row, i) => (i === r ? row.map((x, j) => (j === c ? (v ?? x) : x)) : row)),
-    });
-  const fmt = (n: number) => String(n).replace(".", activeSettings().language === "en" ? "." : ",");
-
-  return (
-    <div className="overflow-x-auto">
-      <table className="border-collapse text-[11px]">
-        <thead>
-          <tr>
-            <th className="px-1.5 py-1 text-left font-normal text-muted-2">{t("Reps")}</th>
-            {table.reps.map((reps) => (
-              <th key={reps} className="px-1 py-1 text-center font-normal text-muted-2">
-                {reps}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {table.rpe.map((rpe, r) => (
-            <tr key={rpe}>
-              <th className="px-1.5 py-0.5 text-left font-normal whitespace-nowrap text-muted-2">RPE {fmt(rpe)}</th>
-              {table.reps.map((reps, c) => (
-                <td key={reps} className="p-0.5">
-                  <span className="flex items-center rounded border border-border bg-background pr-1">
-                    <NumberField value={table.pct[r][c]} step={0.5} width={40} min={1} max={100} onCommit={(v) => set(r, c, v)} bare />
-                    <span className="text-muted-2">%</span>
-                  </span>
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 /** Each target with its colour: pick one, or switch it off. */
 function TargetColors({ targets }: { targets: string[] }) {
   const colors = usePref("targetColors");

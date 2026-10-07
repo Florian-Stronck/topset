@@ -22,7 +22,7 @@ npm test
 
 CI runs the same three on every pull request.
 
-- **Schema changes** need a new plain-SQL migration in `prisma/migrations/`. Never edit a migration that has already been merged: desktop apps and the server have already applied it.
+- **Schema changes** need a new plain-SQL migration in `prisma/migrations/`. Never edit a migration that has already been merged: desktop apps and the server have already applied it. Migrations run in name order, so name a new one one day after the latest folder (`20261022090000_<name>` after `20261021090000_…`), not by today's date: the names are a sequence, not real dates, and a name that sorts before an applied one runs out of order.
 - **Text the user sees** goes through `t()` with the English text as the key. Add the German, French and Luxembourgish entries in `src/lib/i18n/` if you can. If you can't, leave them out and say so in the pull request.
 - **Coach-only server actions and routes** start with `assertCoach()`. The hosted server runs the same code with `TOPSET_ROLE=athlete` and must never expose coach data.
 - Keep pull requests to one change, and describe what a coach or athlete will notice.

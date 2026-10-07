@@ -3,17 +3,25 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useContextMenu } from "@/components/ContextMenu";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fresh, useCommands, type Command } from "@/lib/commands";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { togglePref, usePref } from "@/lib/prefs";
 import { LAST_SCREEN_COOKIE } from "@/lib/athlete-cookies";
 import { NewAthleteButton } from "@/components/Roster";
 import { startTutorial, Tutorial } from "@/components/Tutorial";
-import { t } from "@/lib/i18n";
+import { plural, t } from "@/lib/i18n";
+import { ROLE_LABEL, ShareCodeDialog, ShareDialog } from "@/components/AthleteShares";
+import type { AthleteShareInfo } from "@/lib/share";
 
-/** `team`: shared through a team, marked with a small dot. */
-type Athlete = { id: string; name: string; team?: { name: string } | null };
+declare global {
+  interface Window {
+    topset?: { checkForUpdates: () => Promise<unknown> };
+  }
+}
+
+/** `share`: an athlete shared either way is marked with a small dot. */
+type Athlete = { id: string; name: string; share?: AthleteShareInfo };
 
 /** Small enough to read at 16px, and drawn rather than lettered so a collapsed rail
  *  still says what each screen is. */
@@ -88,6 +96,10 @@ export function Sidebar({
 }) {
   const router = useRouter();
   const athleteMenu = useContextMenu();
+  // The share panels opened from a right-click, right where it was made.
+  const popAnchor = useRef<HTMLElement | null>(null);
+  const [shareFor, setShareFor] = useState<{ id: string; name: string } | null>(null);
+  const [codeOpen, setCodeOpen] = useState(false);
 
   // Getting around, from any screen's palette.
   const commands = useMemo<Command[]>(() => {
@@ -126,12 +138,34 @@ export function Sidebar({
         run: () => router.push(fresh(`/athletes?new=1`)),
       },
       {
+        id: "athlete-share-code",
+        group: "Athlete",
+        title: t("Enter share code…"),
+        keywords: "shared coach code another athlete join",
+        run: () => router.push(fresh(`/athletes?code=1`)),
+      },
+      ...(activeAthleteId && athletes.find((a) => a.id === activeAthleteId)?.share?.role === "own"
+        ? [
+            {
+              id: "athlete-share",
+              group: "Athlete",
+              title: t("Share athlete with a coach…"),
+              keywords: "share coach code view review edit access",
+              run: () => router.push(fresh(`/athletes?athlete=${activeAthleteId}&share=1`)),
+            },
+          ]
+        : []),
+      {
         id: "tutorial",
         group: "Help",
         title: t("Start the tutorial"),
         keywords: "help tour guide how learn",
         run: startTutorial,
       },
+      // Only the desktop app has the bridge (electron/preload.js).
+      ...(typeof window !== "undefined" && window.topset
+        ? [{ id: "check-updates", group: "Help", title: t("Check for updates"), keywords: "update upgrade version new release", run: () => void window.topset?.checkForUpdates() }]
+        : []),
       // Straight to a part of the settings, from anywhere. The admin's own page is left out:
       // who is admin isn't known here.
       ...SETTINGS_SECTIONS.filter((s) => !("admin" in s)).map((s) =>
@@ -215,13 +249,17 @@ export function Sidebar({
           {athletes.map((a) => (
             <Link
               key={a.id}
-              onContextMenu={(e) =>
+              onContextMenu={(e) => {
+                const el = e.currentTarget;
                 athleteMenu.open(e, [
                   { label: t("Programming"), onSelect: () => router.push(`/programming?athlete=${a.id}`) },
                   { label: t("Tracking"), onSelect: () => router.push(`/tracking?athlete=${a.id}`) },
                   { label: t("Competition"), onSelect: () => router.push(`/competition?athlete=${a.id}`) },
-                ])
-              }
+                ...(!a.share || a.share.role === "own"
+                  ? [{ label: t("Share with a coach"), onSelect: () => { popAnchor.current = el; setShareFor({ id: a.id, name: a.name }); } }]
+                  : []),
+                ]);
+              }}
               href={`${SECTION_HREF[section] ?? "/programming"}?athlete=${a.id}${keep ? `&${keep}` : ""}`}
               title={collapsed ? a.name : undefined}
               className={`flex items-center gap-2 rounded-lg border text-[13px] ${
@@ -236,15 +274,28 @@ export function Sidebar({
                 {a.name.slice(0, 1).toUpperCase()}
               </span>
               {!collapsed && <span className="truncate">{a.name}</span>}
-              {!collapsed && a.team && (
-                <span title={t("Shared with {team}", { team: a.team.name })} className="ml-auto size-1.5 shrink-0 rounded-full bg-muted-2" />
+              {!collapsed && a.share && (a.share.role !== "own" || a.share.count > 0) && (
+                <span
+                  title={
+                    a.share.role === "own"
+                      ? plural(a.share.count, "Shared with {n} coach", "Shared with {n} coaches")
+                      : `${t("Shared by {name}", { name: a.share.owner })} · ${t(ROLE_LABEL[a.share.role])}`
+                  }
+                  className="ml-auto size-1.5 shrink-0 rounded-full bg-muted-2"
+                />
               )}
             </Link>
           ))}
         </div>
 
         {!collapsed && (
-          <div className="mt-1.5">
+          <div
+            className="mt-1.5"
+            onContextMenu={(e) => {
+              const el = e.currentTarget;
+              athleteMenu.open(e, [{ label: t("Enter share code"), onSelect: () => { popAnchor.current = el; setCodeOpen(true); } }]);
+            }}
+          >
             <NewAthleteButton compact />
           </div>
         )}
@@ -359,6 +410,8 @@ export function Sidebar({
         </div>
       </div>
       {athleteMenu.menu}
+      {shareFor && <ShareDialog athleteId={shareFor.id} name={shareFor.name} open onClose={() => setShareFor(null)} anchorRef={popAnchor} />}
+      {codeOpen && <ShareCodeDialog open onClose={() => setCodeOpen(false)} anchorRef={popAnchor} />}
     </aside>
   );
 }

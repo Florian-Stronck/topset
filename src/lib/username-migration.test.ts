@@ -10,7 +10,12 @@ import { normalizeUsername, validUsername } from "@/lib/auth";
 const MIGRATION = "20260926090000_coach_username";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "topset-username-"));
 
-after(() => fs.rmSync(dir, { recursive: true, force: true }));
+// Windows can still hold the SQLite file after close; a leftover temp dir is harmless.
+after(() => {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {}
+});
 
 test("emails become the part before the @, and clashes keep apart", async () => {
   // Every migration before the rename, then coaches with emails, then the rename.

@@ -94,8 +94,8 @@ async function syncRow(rowId: string) {
  */
 async function changed(token: string) {
   await prisma.coach.updateMany({
-    // The athlete's coach, and everyone on the team they're shared with.
-    where: { OR: [{ athletes: { some: { accessToken: token } } }, { teams: { some: { team: { athletes: { some: { accessToken: token } } } } } }] },
+    // The athlete's coach, and every coach they're shared with.
+    where: { OR: [{ athletes: { some: { accessToken: token } } }, { shares: { some: { athlete: { accessToken: token } } } }] },
     data: { athleteVersion: { increment: 1 } },
   });
   // Coach screens only exist on the desktop app. On the athlete host this would only throw

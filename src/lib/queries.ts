@@ -10,12 +10,19 @@ import { sessionsOf } from "@/lib/schedule";
 import { prisma } from "@/lib/prisma";
 import type { BlockData } from "@/lib/types";
 import { myCoach } from "@/lib/me";
+import { shareOf } from "@/lib/share";
+
+/** Who an athlete belongs to and is shared with, for `shareOf`. */
+const SHARES = { shares: { select: { coachId: true, role: true } }, coach: { select: { name: true } } } as const;
 
 export async function getCoach() {
   const coach = await prisma.coach.findFirst({ where: await myCoach() });
   if (!coach) throw new Error("No coach found — run `npm run db:seed`.");
-  // Everyone here: the coach's own athletes and those shared with them through a team.
-  const athletes = await prisma.athlete.findMany({ orderBy: { name: "asc" }, include: { team: { select: { name: true } } } });
+  // Everyone here: the coach's own athletes and those other coaches shared with them.
+  const athletes = (await prisma.athlete.findMany({ orderBy: { name: "asc" }, include: SHARES })).map(({ shares, coach: owner, ...a }) => ({
+    ...a,
+    share: shareOf({ ...a, shares, coach: owner }, coach.id),
+  }));
   return { ...coach, athletes };
 }
 
@@ -198,6 +205,8 @@ export async function getOverview(today: Date) {
     dead1RM: athlete.dead1RM,
     variationPct: athlete.variationPct,
     variationPcts: athlete.variationPcts,
+    rpeTable: athlete.rpeTable,
+    activeProgramId: athlete.activeProgramId,
     blocks: athlete.blocks.map((block) => {
       const first = block.weeks[0];
       return {
@@ -222,7 +231,7 @@ export async function getOverview(today: Date) {
   }));
 
   const currentIds = athletes
-    .map((a) => currentBlock(a.blocks, today)?.id)
+    .map((a) => currentBlock(a.blocks, today, a.activeProgramId)?.id)
     .filter((id): id is string => id !== undefined);
 
   const currentRows = await prisma.exerciseRow.findMany({
@@ -281,7 +290,7 @@ export async function getRoster() {
     // The coach's own athletes and those shared with them: everyone here.
     orderBy: { name: "asc" },
     include: {
-      team: { select: { name: true } },
+      ...SHARES,
       questions: { where: { archived: false }, orderBy: [{ order: "asc" }, { createdAt: "asc" }] },
       programs: {
         orderBy: { createdAt: "asc" },
@@ -318,7 +327,7 @@ export async function getRoster() {
     if (at && (!was || at > was)) lastCheckin.set(a.id, at);
   });
 
-  return { coach, athletes, lastCheckin };
+  return { coach, athletes: athletes.map((a) => ({ ...a, share: shareOf(a, coach.id) })), lastCheckin };
 }
 
 export type RosterAthlete = Awaited<ReturnType<typeof getRoster>>["athletes"][number];
@@ -384,13 +393,18 @@ export async function getRecentCheckins(coachId: string, limit = 8) {
  * of just the days that fall in the window.
  */
 export async function getTrainingWindow(athleteIds: string[], from: string, to: string) {
-  const moves = await getMoveMap(athleteIds);
+  const [moves, picked] = await Promise.all([
+    getMoveMap(athleteIds),
+    prisma.athlete.findMany({ where: { id: { in: athleteIds } }, select: { id: true, activeProgramId: true } }),
+  ]);
+  const active = new Map(picked.map((a) => [a.id, a.activeProgramId]));
   const blocks = await prisma.block.findMany({
     where: { athleteId: { in: athleteIds } },
     orderBy: { startDate: "asc" },
     select: {
       id: true,
       athleteId: true,
+      programId: true,
       startDate: true,
       weeks: { select: { order: true, days: { select: { id: true, index: true, label: true, rest: true } } } },
     },
@@ -403,7 +417,7 @@ export async function getTrainingWindow(athleteIds: string[], from: string, to: 
   for (const [athleteId, list] of byAthlete) {
     scheduled.set(
       athleteId,
-      sessionsOf<(typeof list)[number]["weeks"][number]["days"][number], (typeof list)[number]>(list, moves)
+      sessionsOf<(typeof list)[number]["weeks"][number]["days"][number], (typeof list)[number]>(list, moves, active.get(athleteId))
         .filter((s) => s.ymd >= from && s.ymd <= to)
         .map((s) => ({ ymd: s.ymd, dayId: s.day.id, label: s.day.label })),
     );

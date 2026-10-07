@@ -7,7 +7,7 @@ import { applyAllProgressions } from "@/app/programming/actions";
 import { loadSettings } from "@/lib/coach-settings";
 import { snapStart } from "@/lib/dates";
 import { prisma } from "@/lib/prisma";
-import { parseVariationPcts } from "@/lib/intensity";
+import { parseRpeTable, parseVariationPcts } from "@/lib/intensity";
 import { t } from "@/lib/i18n";
 import { COLORS, formatDays, KINDS, parseConfig, type CheckinCadence, type CheckinConfig, type CheckinKind, bodyweightQuestionId } from "@/lib/checkins";
 import { CHECKIN_ICONS } from "@/components/CheckinIcon";
@@ -201,12 +201,24 @@ export async function updateAthleteProfile(
     variationPct?: number | null;
     /** JSON, {"Paused Squat": 85}; null clears every per-exercise drop-off. */
     variationPcts?: string | null;
+    /** Their own RPE chart as JSON; null goes back to the coach's. */
+    rpeTable?: string | null;
+    /** "M" or "F", for meet scores; null clears it. */
+    sex?: "M" | "F" | null;
     /** The coach's own notes; empty clears them. */
     notes?: string | null;
+    /** The program that wins where two overlap; null lets the later start win. */
+    activeProgramId?: string | null;
   },
 ) {
   assertCoach();
   const data = { ...patch };
+  if (data.rpeTable != null) {
+    const own = parseRpeTable(data.rpeTable);
+    if (own) data.rpeTable = JSON.stringify(own);
+    else delete data.rpeTable;
+  }
+  if (data.sex != null && data.sex !== "M" && data.sex !== "F") delete data.sex;
   if (data.notes !== undefined) data.notes = data.notes?.trim().slice(0, 5000) || null;
   if (data.variationPct != null && !(data.variationPct > 0 && data.variationPct <= 200)) delete data.variationPct;
   if (data.variationPcts != null) {
@@ -303,7 +315,7 @@ export async function reorderCheckinQuestions(athleteId: string, ids: string[]) 
 
 export async function deleteAthlete(athleteId: string) {
   assertCoach();
-  // A teammate's athlete is theirs to delete; the server would refuse it, and hold up sync.
+  // An athlete another coach shared is theirs to delete; the server would refuse it, and hold up sync.
   const me = await myCoach();
   if (me.id && !(await prisma.athlete.count({ where: { id: athleteId, coachId: me.id } }))) {
     throw new Error("Only the coach who added this athlete can delete them.");
@@ -425,4 +437,12 @@ export async function copyProgram(
 
   revalidateAll();
   return { programId: copy.id, phaseId: copy.phases[0]?.id ?? null };
+}
+
+/** The other coaches an athlete is shared with, by name, as sync last brought them. */
+export async function sharedWithOf(athleteId: string): Promise<{ coachId: string; name: string; role: string }[]> {
+  assertCoach();
+  const shares = await prisma.athleteShare.findMany({ where: { athleteId }, select: { coachId: true, role: true } });
+  const names = new Map((await prisma.coach.findMany({ select: { id: true, name: true } })).map((c) => [c.id, c.name]));
+  return shares.map((s) => ({ coachId: s.coachId, name: names.get(s.coachId) ?? s.coachId, role: s.role }));
 }

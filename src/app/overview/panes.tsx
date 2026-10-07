@@ -9,7 +9,7 @@ import { t, weekdayShort } from "@/lib/i18n";
 import { getAllPhasesForAthlete, getMeetings, getMessages, getMoves, type ChatSummary } from "@/lib/queries";
 import { sessionsOf } from "@/lib/schedule";
 
-type Who = { id: string; name: string; hasLink: boolean };
+type Who = { id: string; name: string; hasLink: boolean; activeProgramId?: string | null };
 
 const when = (ymd: string) => `${weekdayShort(weekdayOf(ymd))} ${formatDate(ymd)}`;
 
@@ -108,7 +108,7 @@ export async function SchedulePane({
     const [phases, moves, meetings] = await Promise.all([getAllPhasesForAthlete(athlete.id), getMoves(athlete.id), getMeetings(athlete.id)]);
     // Every session with something in it, where it now falls, and whether it was done.
     type Phase = (typeof phases)[number];
-    const calendar: CalendarSession[] = sessionsOf<Phase["weeks"][number]["days"][number], Phase>(phases, new Map(moves.map((m) => [m.dayId, m.day])))
+    const calendar: CalendarSession[] = sessionsOf<Phase["weeks"][number]["days"][number], Phase>(phases, new Map(moves.map((m) => [m.dayId, m.day])), athlete.activeProgramId)
       .filter((s) => s.day.rows.some((r) => r.exercise.trim() !== ""))
       .map((s) => ({
         ymd: s.ymd,

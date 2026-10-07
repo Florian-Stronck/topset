@@ -681,7 +681,7 @@ async function progressionWrites(blockId: string, headIds?: string[]) {
       bench1RM: true,
       dead1RM: true,
       athlete: {
-        select: { unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true },
+        select: { unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true, rpeTable: true },
       },
       weeks: {
         select: {

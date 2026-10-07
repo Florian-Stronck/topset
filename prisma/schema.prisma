@@ -28,27 +28,39 @@ model Coach {
   resetExpiresAt DateTime?
   athletes Athlete[]
   sessions CoachSession[]
-  teams    TeamMember[]
+  shares   AthleteShare[]
 }
 
-/// A gym's coaches sharing a roster: every member sees and edits every athlete on the team.
-/// Only the admin makes teams and picks their members. Kept on the server; a desktop app
-/// holds a copy of the teams its coach is on, refreshed by sync and never sent back.
-model Team {
-  id       String       @id @default(cuid())
-  name     String
-  members  TeamMember[]
-  athletes Athlete[]
-}
+/// One athlete shared with another coach. The athlete's own coach (`Athlete.coachId`) stays
+/// the owner: only they share, change a role or delete the athlete. Written on the server
+/// only; a desktop app keeps a copy of the shares it is part of, refreshed by sync.
+model AthleteShare {
+  athleteId String
+  coachId   String
+  /// "view": sees everything, changes nothing. "review": also marks sessions reviewed and
+  /// writes notes to the athlete. "edit": changes the plan too, like the owner.
+  role      String
+  createdAt DateTime @default(now())
+  athlete   Athlete  @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  coach     Coach    @relation(fields: [coachId], references: [id], onDelete: Cascade)
 
-model TeamMember {
-  teamId  String
-  coachId String
-  team    Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  coach   Coach @relation(fields: [coachId], references: [id], onDelete: Cascade)
-
-  @@id([teamId, coachId])
+  @@id([athleteId, coachId])
   @@index([coachId])
+}
+
+/// A code the owner hands another coach, who enters it to get `role` on the athlete. Server only.
+model ShareCode {
+  code      String    @id
+  athleteId String
+  role      String
+  /// Kept after use, until it expires or the owner deletes it; otherwise gone once used.
+  reusable  Boolean   @default(false)
+  /// Null: never expires.
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  athlete   Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  @@index([athleteId])
 }
 
 /// A signed-in desktop app. Only a hash of its token is kept.
@@ -87,17 +99,23 @@ model Athlete {
   variationPct  Float?
   /// Per-exercise drop-offs as JSON, {"Paused Squat": 85}; beats `variationPct`.
   variationPcts String?
+  /// Their own RPE chart as JSON (`RpeTable`); null uses the coach's.
+  rpeTable      String?
+  /// "M" or "F": the division they lift in, for meet scores (DOTS, GL).
+  sex           String?
   /// The coach's own notes on the athlete — goals, history; never shown to the athlete.
   notes         String?
+  /// The program that wins the days where two of the athlete's programs overlap; null lets
+  /// the one that started later win. A plain id, not a relation: a deleted program just stops matching.
+  activeProgramId String?
   /// Secret for the athlete's check-in link. Null until the coach hands one out; a new one
   /// replaces the old, so a lost phone is one click away from locked out.
   accessToken String? @unique
   /// Secret for a read-only view of the athlete's Tracking, for a second coach.
   viewToken   String? @unique
-  /// The team this athlete is shared with; null keeps them to `coachId`, who stays the
-  /// owner either way. Set on the server only (see `PULLED_COLUMNS`).
-  teamId   String?
-  team     Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  /// Other coaches this athlete is shared with; `coachId` stays the owner.
+  shares     AthleteShare[]
+  shareCodes ShareCode[]
   blocks   Block[]
   programs Program[]
   meets    Meet[]
@@ -113,7 +131,6 @@ model Athlete {
   meetings    Meeting[]
 
   @@index([coachId])
-  @@index([teamId])
 }
 
 /// An injury, from the athlete app or the coach. Both sides write it, so it syncs like
@@ -667,7 +684,7 @@ model PlanChange {
   table     String
   rowId     String
   sessionId String?
-  /// The athlete the row belongs to, so teammates get each other's edits. Null for a
+  /// The athlete the row belongs to, so coaches it's shared with get each other's edits. Null for a
   /// coach's own profile, and for entries from before teams.
   athleteId String?
   at        DateTime @default(now())

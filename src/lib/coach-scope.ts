@@ -4,6 +4,7 @@
  * up or asks for is checked against this before it touches the database.
  */
 
+import { ROLES, type Role } from "@/lib/roles";
 import { MERGED_TABLES, type Row } from "@/lib/sync-plan";
 
 type Parent = { column: string; table: string; optional?: boolean };
@@ -51,19 +52,21 @@ const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
 /**
  * SQL selecting the ids of `table` that belong to one coach, with a single `?` for the
- * coach's id — a chain of `IN (SELECT …)` up to the Coach row. With `shared`, athletes on
- * a team the coach is in count too, and so does everything under them: what a teammate may
- * read and edit. Without it, only what the coach owns: what they may delete outright.
+ * coach's id — a chain of `IN (SELECT …)` up to the Coach row. With `shared`, athletes
+ * shared with the coach count too, and so does everything under them: `true` for any share
+ * (what they may read), a role for shares at least that strong. Without it, only what the
+ * coach owns: what they may delete outright.
  */
-export function ownedIdsSql(table: string, shared = false): string {
+export function ownedIdsSql(table: string, shared: boolean | Role = false): string {
   const entry = SCOPE.find((s) => s.table === table);
   if (!entry) throw new Error(`No ownership rule for ${table}.`);
   if (entry.parents.length === 0) return `SELECT "id" FROM ${quote(table)} WHERE "id" = ?`;
   if (table === "Athlete" && shared) {
+    const roles = ROLES.slice(ROLES.indexOf(shared === true ? "view" : shared));
     // Still one `?`, so callers that mix in their own arguments stay as they are.
     return (
-      `SELECT a."id" FROM "Athlete" a, (SELECT ? AS "me") m WHERE a."coachId" = m."me" ` +
-      `OR a."teamId" IN (SELECT "teamId" FROM "TeamMember" WHERE "coachId" = m."me")`
+      `SELECT a."id" FROM "Athlete" a, (SELECT ? AS "me") m WHERE a."coachId" = m."me" OR a."id" IN ` +
+      `(SELECT "athleteId" FROM "AthleteShare" WHERE "coachId" = m."me" AND "role" IN (${roles.map((r) => `'${r}'`).join(", ")}))`
     );
   }
   const [parent] = entry.parents;
@@ -91,9 +94,43 @@ export function athleteChain(table: string): { from: string; athlete: string } |
 export type PushTables = Record<string, { upsert: Row[]; remove: string[] }>;
 
 /**
+ * A push without what the coach may only look at: rows under athletes shared with them to
+ * view or review (`readOnly`, per table), and new rows hung under those. Dropped rather than
+ * refused, so an app that changed one anyway keeps syncing the rest. Review keeps the
+ * Reviewed mark: a Day in `reviewable` comes back in `reviews`, for the caller to write alone.
+ */
+export function withoutReadOnly(
+  tables: PushTables,
+  readOnly: Map<string, Set<string>>,
+  reviewable: Set<string> = new Set(),
+): { tables: PushTables; reviews: { id: string; reviewedAt: unknown }[] } {
+  const out: PushTables = {};
+  const dropped = new Map<string, Set<string>>();
+  const reviews: { id: string; reviewedAt: unknown }[] = [];
+  const blocked = (table: string, id: unknown) => readOnly.get(table)?.has(String(id)) || dropped.get(table)?.has(String(id));
+  for (const { table, parents } of SCOPE) {
+    const change = tables[table];
+    if (!change) continue;
+    const gone = new Set<string>();
+    dropped.set(table, gone);
+    const upsert = change.upsert.filter((row) => {
+      const keep = !readOnly.get(table)?.has(String(row.id)) && !parents.some((p) => row[p.column] != null && blocked(p.table, row[p.column]));
+      if (!keep) gone.add(String(row.id));
+      if (!keep && table === "Day" && reviewable.has(String(row.id))) reviews.push({ id: String(row.id), reviewedAt: row.reviewedAt ?? null });
+      return keep;
+    });
+    const remove = change.remove.filter((id) => !readOnly.get(table)?.has(id));
+    if (upsert.length || remove.length) out[table] = { upsert, remove };
+  }
+  // Tables outside the scope are refused by `checkPush`, so they pass through to it.
+  for (const [table, change] of Object.entries(tables)) if (!SCOPED_TABLES.includes(table)) out[table] = change;
+  return { tables: out, reviews };
+}
+
+/**
  * Whether one coach may make these changes: every row it sends is new or already theirs,
  * and hangs off a parent that is theirs or arrives in the same push; every row it removes
- * is theirs. `owned` is what the coach has now, teammates' athletes included; `taken` holds
+ * is theirs. `owned` is what the coach has now, athletes shared with them to edit included; `taken` holds
  * ids that exist but belong to someone else. `owners` names the owner of each athlete in
  * `owned` that isn't the coach's own: only an owner removes an athlete or hands it over.
  * Returns the first problem, or null.
@@ -120,11 +157,11 @@ export function checkPush(
       if (typeof row.id !== "string" || row.id === "") return `A ${table} row has no id.`;
       if (taken.has(row.id)) return `${table} ${row.id} belongs to someone else.`;
       if (table === "Coach" && row.id !== coachId) return "Only your own coach profile can be changed.";
-      // A new athlete is the coach's own; a teammate's stays theirs.
+      // A new athlete is the coach's own; one shared with them stays its owner's.
       if (table === "Athlete" && row.coachId !== (owners.get(row.id) ?? coachId)) return `Athlete ${row.id} isn't yours to hand over.`;
       for (const p of parents) {
         const value = row[p.column];
-        // A teammate's athlete hangs off its owner, checked just above.
+        // A shared athlete hangs off its owner, checked just above.
         if (table === "Athlete" && owners.has(row.id) && value === owners.get(row.id)) continue;
         if (value === null || value === undefined) {
           if (p.optional) continue;

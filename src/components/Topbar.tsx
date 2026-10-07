@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { Fragment, useRef, useState, useTransition } from "react";
-import { copyProgram } from "@/app/athletes/actions";
+import { copyProgram, updateAthleteProfile } from "@/app/athletes/actions";
 import {
   addPhase,
   closePhaseGap,
@@ -22,7 +22,7 @@ import { Confirm } from "@/components/Confirm";
 import { Popover } from "@/components/Popover";
 import { PhaseSettings, ProgramSettings } from "@/components/ProgramSettings";
 import { GridTools } from "@/components/ProgrammingGrid";
-import { describeGap, formatDate, phaseGaps, snapStart, weekdayOf } from "@/lib/dates";
+import { describeGap, formatDate, overlapsSettled, phaseGaps, programOverlaps, snapStart, today, weekdayOf, type ProgramOverlap } from "@/lib/dates";
 import { activeSettings, phaseName, type ExportKind } from "@/lib/settings";
 import { useSettings } from "@/components/SettingsProvider";
 import { WEEKDAYS } from "@/lib/types";
@@ -102,6 +102,33 @@ export async function closeGapUndoable(history: History, phaseId: string) {
 }
 
 /** Pastes a copy of `sourceId` after `afterId` (the end when undefined) and opens it. */
+/** Makes `programId` the one trained where the athlete's programs overlap; undo puts the old pick back. */
+export async function setActiveProgramUndoable(history: History, athlete: AthleteData, programId: string) {
+  const was = athlete.activeProgramId ?? null;
+  const run = () => updateAthleteProfile(athlete.id, { activeProgramId: programId });
+  await run();
+  history.push({ label: "active program", undo: () => updateAthleteProfile(athlete.id, { activeProgramId: was }), redo: run });
+}
+
+/** The athlete's programs that overlap from today on, pair by pair, and which one is picked to train, if any. */
+export function programOverlap(programs: ProgramSummary[], athlete: AthleteData) {
+  const pairs = programOverlaps(
+    programs.map((p) => ({ id: p.id, phases: p.phases.map((x) => ({ startDate: x.startDate, weeks: x.weeks.length })) })),
+    today(),
+  );
+  const overlapping = new Set(pairs.flatMap((o) => [o.earlier, o.later]));
+  const chosen = athlete.activeProgramId && overlapping.has(athlete.activeProgramId) ? athlete.activeProgramId : null;
+  return { pairs, overlapping, chosen };
+}
+
+/** Moves every phase of a program by `days`, keeping their spacing; undo puts them back. */
+export async function moveProgramUndoable(history: History, program: ProgramSummary, days: number) {
+  const before = program.phases.map((p) => ({ id: p.id, startDate: new Date(p.startDate) }));
+  const after = before.map((p) => ({ id: p.id, startDate: new Date(p.startDate.getTime() + days * 24 * 60 * 60 * 1000) }));
+  await setPhaseStarts(after);
+  history.push({ label: "move program", undo: () => setPhaseStarts(before), redo: () => setPhaseStarts(after) });
+}
+
 export async function pastePhaseUndoable(
   history: History,
   programId: string,
@@ -165,6 +192,7 @@ export function Topbar({
   const [addingPhase, setAddingPhase] = useState(false);
   const [deletingPhaseId, setDeletingPhaseId] = useState<string | null>(null);
   const gaps = phaseGaps(program.phases);
+  const { pairs, overlapping, chosen } = programOverlap(programs, athlete);
   const phaseMenu = useContextMenu();
   const programMenu = useContextMenu();
   const history = useHistory();
@@ -203,6 +231,9 @@ export function Topbar({
       { label: t("Program settings…"), disabled: !current, onSelect: panelAt("settings") },
       { label: t("Copy program…"), disabled: !current, onSelect: panelAt("copy") },
       { label: t("New program…"), onSelect: panelAt("new") },
+      ...(overlapping.has(p.id) && chosen !== p.id
+        ? [{ label: t("Make {name} the active program", { name: p.name }), onSelect: () => void setActiveProgramUndoable(history, athlete, p.id) }]
+        : []),
       "divider",
       {
         label: t("Delete {name}…", { name: p.name }),
@@ -284,6 +315,9 @@ export function Topbar({
               className="flex max-w-[200px] items-center gap-1.5 py-1.5 pl-3 pr-1 text-muted hover:text-foreground"
             >
               <span className="truncate">{program.name}</span>
+              {!overlapsSettled(pairs, chosen) && (
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" title={t("Programs overlap — pick the one to train")} />
+              )}
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">
                 <path d="M6 9l6 6 6-6" />
               </svg>
@@ -328,23 +362,31 @@ export function Topbar({
               {programs.map((p) => {
                 const weeks = p.phases.reduce((n, x) => n + x.weeks.length, 0);
                 const first = p.phases[0];
+                const overlap = pairs.find((o) => o.later === p.id);
+                const earlier = overlap && programs.find((x) => x.id === overlap.earlier);
                 return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => openProgram(p)}
-                    onContextMenu={(e) => programMenuFor(e, p)}
-                    title={first ? t("From {date}", { date: formatDate(first.startDate) }) : undefined}
-                    className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left text-[12px] ${
-                      p.id === program.id ? "bg-surface-3" : "hover:bg-surface-2"
-                    }`}
-                  >
-                    <span className="min-w-0 truncate">{p.name}</span>
-                    <span className="ml-auto shrink-0 text-[11px] text-muted-2">
-                      {t(p.phases.length === 1 ? "{n} phase" : "{n} phases", { n: p.phases.length })} ·{" "}
-                      {t(weeks === 1 ? "{n} week" : "{n} weeks", { n: weeks })}
-                    </span>
-                  </button>
+                  <Fragment key={p.id}>
+                    {overlap && earlier && (
+                      <div className="py-0.5">
+                        <ProgramOverlapChip overlap={overlap} earlier={earlier} later={p} athlete={athlete} chosen={chosen} />
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => openProgram(p)}
+                      onContextMenu={(e) => programMenuFor(e, p)}
+                      title={first ? t("From {date}", { date: formatDate(first.startDate) }) : undefined}
+                      className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left text-[12px] ${
+                        p.id === program.id ? "bg-surface-3" : "hover:bg-surface-2"
+                      }`}
+                    >
+                      <span className="min-w-0 truncate">{p.name}</span>
+                      <span className="ml-auto shrink-0 text-[11px] text-muted-2">
+                        {t(p.phases.length === 1 ? "{n} phase" : "{n} phases", { n: p.phases.length })} ·{" "}
+                        {t(weeks === 1 ? "{n} week" : "{n} weeks", { n: weeks })}
+                      </span>
+                    </button>
+                  </Fragment>
                 );
               })}
             </div>
@@ -945,6 +987,93 @@ function GapChip({
         </div>
         <p className="mt-2 text-[11px] leading-snug text-muted-2">
           {t("Phases after it move by the same amount, keeping their spacing.")}
+        </p>
+      </Popover>
+    </>
+  );
+}
+
+/**
+ * Two programs running on the same days: the program-level twin of `GapChip`. Red until
+ * the coach moves one or picks which is trained where both have a session.
+ */
+function ProgramOverlapChip({
+  overlap,
+  earlier,
+  later,
+  athlete,
+  chosen,
+}: {
+  overlap: ProgramOverlap;
+  earlier: ProgramSummary;
+  later: ProgramSummary;
+  athlete: AthleteData;
+  chosen: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const ref = useRef<HTMLButtonElement>(null);
+  const history = useHistory();
+  const settled = chosen === earlier.id || chosen === later.id;
+  const text = t("“{phase}” starts before “{previous}” ends — both would run at once.", { previous: earlier.name, phase: later.name });
+  const run = (fn: () => Promise<unknown>) =>
+    startTransition(async () => {
+      await fn();
+      setOpen(false);
+    });
+
+  return (
+    <>
+      <button
+        ref={ref}
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        title={text}
+        className={`rounded px-1.5 py-0.5 text-[11px] ${
+          settled
+            ? "border border-dashed border-amber-500/40 text-amber-400/90 hover:bg-amber-500/10"
+            : "border border-red-500/50 bg-red-500/10 text-red-400 hover:bg-red-500/20"
+        } ${pending ? "opacity-60" : ""}`}
+      >
+        {describeGap(overlap.days)}
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={280}>
+        <p className="text-[11px] leading-snug text-muted">{text}</p>
+        <div className="mt-2.5 flex flex-col gap-1.5">
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => run(() => moveProgramUndoable(history, later, -overlap.days))}
+            className="rounded bg-accent px-2.5 py-1.5 text-[11px] font-medium text-white disabled:opacity-60"
+          >
+            {t("Start “{phase}” when “{previous}” ends", { phase: later.name, previous: earlier.name })}
+          </button>
+          {[earlier, later].map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              disabled={pending}
+              aria-pressed={chosen === p.id}
+              onClick={() => run(async () => {
+                if (chosen !== p.id) await setActiveProgramUndoable(history, athlete, p.id);
+              })}
+              className={`rounded border px-2.5 py-1.5 text-[11px] ${
+                chosen === p.id ? "border-accent bg-accent-soft font-medium text-accent" : "border-border text-muted hover:text-foreground"
+              }`}
+            >
+              {t("Keep both — train “{name}” on shared days", { name: p.name })}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="rounded border border-border px-2.5 py-1.5 text-[11px] text-muted hover:text-foreground"
+          >
+            {t("Leave it")}
+          </button>
+        </div>
+        <p className="mt-2 text-[11px] leading-snug text-muted-2">
+          {t("Every phase of “{name}” moves by the same amount, keeping their spacing.", { name: later.name })}
         </p>
       </Popover>
     </>

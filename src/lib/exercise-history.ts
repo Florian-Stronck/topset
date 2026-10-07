@@ -1,4 +1,4 @@
-import { estimate1RM, formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
+import { estimate1RM, rpeTableFor, formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
 import type { ProgressBlock } from "@/lib/progress";
 import { NO_MOVES, sessionDate } from "@/lib/schedule";
 import type { AthleteData } from "@/lib/types";
@@ -50,7 +50,7 @@ export function exerciseHistory(blocks: HistoryBlock[], athlete: AthleteData, mo
             weight: row.actualWeight,
             reps: row.reps,
             rpe: row.performedRpe,
-            e1rm: row.reps === null ? null : estimate1RM(row.actualWeight, row.reps, row.performedRpe, athlete.unit),
+            e1rm: row.reps === null ? null : estimate1RM(row.actualWeight, row.reps, row.performedRpe, athlete.unit, rpeTableFor(athlete)),
           });
           out.set(key, entry);
         }

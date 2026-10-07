@@ -28,7 +28,7 @@ export const getAthleteByToken = cache(async (token: string) => {
   return prisma.athlete.findUnique({
     // A coach the admin turned off takes their athletes' links with them.
     where: { accessToken: token, coach: { disabledAt: null } },
-    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true },
+    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true, rpeTable: true, activeProgramId: true },
   });
 });
 
@@ -39,7 +39,7 @@ export const getAthleteByViewToken = cache(async (token: string) => {
   if (!plausibleToken(token)) return null;
   return prisma.athlete.findUnique({
     where: { viewToken: token, coach: { disabledAt: null } },
-    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true },
+    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true, rpeTable: true },
   });
 });
 
@@ -53,6 +53,7 @@ async function phasesFor(athleteId: string) {
     orderBy: { startDate: "asc" },
     select: {
       id: true,
+      programId: true,
       phase: true,
       startDate: true,
       squat1RM: true,
@@ -180,7 +181,7 @@ export async function getAthleteSchedule(athlete: TokenAthlete): Promise<Schedul
 /** The calendar with the phases it was laid out from, rest weeks and all, and the sessions moved. */
 export async function getAthleteCalendar(athlete: TokenAthlete): Promise<{ phases: Phase[]; sessions: ScheduledSession[] }> {
   const [phases, moves] = await Promise.all([phasesFor(athlete.id), movesFor(athlete.id)]);
-  return { phases, sessions: sessionsOf<PhaseDay, Phase>(phases, movesMap(moves)) };
+  return { phases, sessions: sessionsOf<PhaseDay, Phase>(phases, movesMap(moves), athlete.activeProgramId) };
 }
 
 /** The sessions the athlete moved and hasn't moved back. */

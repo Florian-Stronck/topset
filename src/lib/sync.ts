@@ -15,12 +15,12 @@ import {
   coachSignature,
   MERGED_COLUMNS,
   PULL_ONLY_TABLES,
-  pushedColumns,
   logChanges,
   mergeAthleteColumns,
   newerRows,
   quote,
   stampOf,
+  syncedColumns,
   syncedTable,
   tableChanges,
   type Row,
@@ -36,7 +36,7 @@ import { newVideoPath, readLedger, writeLedger } from "@/lib/videos";
  *
  * - up, every couple of seconds: whatever the coach changed;
  * - down, every few seconds and on Refresh: what their athletes logged, plan changes made
- *   on the coach's other computers or by teammates, and the teams the coach is on.
+ *   on the coach's other computers or by coaches sharing their athletes, and who shares what.
  *
  * What was last sent is kept in the database (SyncSent), so a restart knows exactly what
  * changed or was deleted here. A row this computer never had is never deleted from the
@@ -407,14 +407,15 @@ async function pullPlan(config: CloudConfig): Promise<void> {
 }
 
 /**
- * The coach's teams, and which athletes they may see: teams and teammates' names are copied
- * in, athletes newly shared with the coach come down whole, and ones no longer shared go,
- * with everything under them. A server from before teams has none of this, and is skipped.
+ * Which athletes the coach may see, and what they may do with each: the shares and the other
+ * coaches' names are copied in, athletes newly shared with the coach come down whole, and ones
+ * no longer shared go, with everything under them. A server from before teams has none of
+ * this, and is skipped; one from before shares sends teams, whose athletes are all to edit.
  */
 async function pullAccess(config: CloudConfig): Promise<void> {
   const s = state();
   const db = local();
-  // Taking over too: a restored backup may hold a teammate's athlete no longer shared, which
+  // Taking over too: a restored backup may hold another coach's athlete no longer shared, which
   // the server would refuse, and hold up the take-over.
   if (!s.sent) return;
   let access: AccessData;
@@ -425,7 +426,8 @@ async function pullAccess(config: CloudConfig): Promise<void> {
     throw error;
   }
   const here = new Set((db.prepare(`SELECT "id" FROM "Athlete"`).all() as Row[]).map((r) => String(r.id)));
-  const fresh = access.athletes.map((a) => a.id).filter((id) => !here.has(id));
+  // Not one deleted here whose delete hasn't gone up yet: that one is on its way out.
+  const fresh = access.athletes.map((a) => a.id).filter((id) => !here.has(id) && !s.sent?.get("Athlete")?.has(id));
   const { tables: incoming } = fresh.length
     ? await api<{ tables: Record<string, Row[]> }>(config.server, `sync?part=athletes&ids=${fresh.map(encodeURIComponent).join(",")}`, {
         token: config.token,
@@ -452,43 +454,24 @@ async function pullAccess(config: CloudConfig): Promise<void> {
 
 /** The pure-database half of `pullAccess`, apart for testing. Changes `sent` to match. */
 export function applyAccess(db: Database.Database, access: AccessData, incoming: Record<string, Row[]>, sent: Sent, me: string): void {
-  // Teammates first: athletes and memberships point at them. Their rows are never sent up.
+  // Other coaches first: athletes and shares point at them. Their rows are never sent up.
   const addCoach = db.prepare(`INSERT OR IGNORE INTO "Coach" ("id", "username", "name") VALUES (?, ?, ?)`);
   const nameCoach = db.prepare(`UPDATE "Coach" SET "name" = ? WHERE "id" = ?`);
   for (const c of access.coaches) {
     if (c.id === me) continue;
-    addCoach.run(c.id, `team:${c.id}`, c.name);
+    addCoach.run(c.id, `shared:${c.id}`, c.name);
     nameCoach.run(c.name, c.id);
   }
-  db.prepare(`DELETE FROM "TeamMember"`).run();
-  db.prepare(`DELETE FROM "Team"`).run();
-  const addTeam = db.prepare(`INSERT INTO "Team" ("id", "name") VALUES (?, ?)`);
-  for (const t of access.teams) addTeam.run(t.id, t.name);
-  const addMember = db.prepare(`INSERT OR IGNORE INTO "TeamMember" ("teamId", "coachId") VALUES (?, ?)`);
-  for (const m of access.members) addMember.run(m.teamId, m.coachId);
 
-  // Athletes no longer shared go: a teammate's always, the coach's own only once the server
+  // Athletes no longer shared go: another coach's always, the coach's own only once the server
   // has had them (one made here and not sent yet stays, to go up).
-  const allowed = new Map(access.athletes.map((a) => [a.id, a.teamId]));
+  // A server from before shares had teams, whose coaches all edit.
+  const allowed = new Map(access.athletes.map((a) => [a.id, a.role ?? "edit"]));
   const here = db.prepare(`SELECT "id", "coachId" FROM "Athlete"`).all() as Row[];
   const gone = here
     .filter((a) => !allowed.has(a.id) && (a.coachId !== me || sent.get("Athlete")?.has(a.id)))
     .map((a) => String(a.id));
-  if (gone.length) {
-    const marks = gone.map(() => "?").join(", ");
-    for (const { table } of [...SCOPE].reverse()) {
-      const chain = athleteChain(table);
-      if (!chain) continue;
-      const ids = (db.prepare(`SELECT t0."id" AS "id" FROM ${chain.from} WHERE ${chain.athlete} IN (${marks})`).all(...gone) as Row[]).map((r) =>
-        String(r.id),
-      );
-      const drop = db.prepare(`DELETE FROM ${quote(table)} WHERE "id" = ?`);
-      for (const id of ids) {
-        drop.run(id);
-        sent.get(table)?.delete(id);
-      }
-    }
-  }
+  dropAthletes(db, gone, sent);
 
   // Athletes newly shared come in whole, as the server has them.
   const names = tables(db);
@@ -504,9 +487,55 @@ export function applyAccess(db: Database.Database, access: AccessData, incoming:
     for (const r of missing) mine.set(String(r.id), coachSignature(t, r, cols));
   }
 
-  // Which team each is on: set on the server only, so never an edit to send.
-  const setTeam = db.prepare(`UPDATE "Athlete" SET "teamId" = ? WHERE "id" = ?`);
-  for (const [id, teamId] of allowed) setTeam.run(teamId, id);
+  // Who shares what, now that every athlete named is here: the coach's role on others'
+  // athletes, and who the coach's own are shared with.
+  db.prepare(`DELETE FROM "AthleteShare"`).run();
+  const addShare = db.prepare(`INSERT OR IGNORE INTO "AthleteShare" ("athleteId", "coachId", "role") VALUES (?, ?, ?)`);
+  for (const [id, role] of allowed) if (role !== "own") addShare.run(id, me, role);
+  for (const sh of access.shares ?? []) addShare.run(sh.athleteId, sh.coachId, sh.role);
+}
+
+/** Every row under these athletes, per table, with the athlete it's under. */
+function idsUnder(db: Database.Database, athletes: Set<string>): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
+  if (athletes.size === 0) return out;
+  const ids = [...athletes];
+  for (const { table } of SCOPE) {
+    const chain = athleteChain(table);
+    if (!chain) continue;
+    const rows = db
+      .prepare(`SELECT t0."id" AS "id", ${chain.athlete} AS "athlete" FROM ${chain.from} WHERE ${chain.athlete} IN (${ids.map(() => "?").join(", ")})`)
+      .all(...ids) as Row[];
+    out.set(table, new Map(rows.map((r) => [String(r.id), String(r.athlete)])));
+  }
+  return out;
+}
+
+/** Deletes these athletes here, with everything under them, and forgets they were sent. Foreign keys off. */
+function dropAthletes(db: Database.Database, athletes: string[], sent: Sent): void {
+  if (athletes.length === 0) return;
+  const marks = athletes.map(() => "?").join(", ");
+  for (const { table } of [...SCOPE].reverse()) {
+    const chain = athleteChain(table);
+    if (!chain) continue;
+    const ids = (db.prepare(`SELECT t0."id" AS "id" FROM ${chain.from} WHERE ${chain.athlete} IN (${marks})`).all(...athletes) as Row[]).map((r) =>
+      String(r.id),
+    );
+    const drop = db.prepare(`DELETE FROM ${quote(table)} WHERE "id" = ?`);
+    for (const id of ids) {
+      drop.run(id);
+      sent.get(table)?.delete(id);
+    }
+  }
+}
+
+/** The athletes others shared with this coach that they may not edit, and those they may review. */
+export function readOnlyAthletes(db: Database.Database, me: string): { readOnly: Set<string>; review: Set<string> } {
+  const shares = db.prepare(`SELECT "athleteId", "role" FROM "AthleteShare" WHERE "coachId" = ? AND "role" != 'edit'`).all(me) as Row[];
+  return {
+    readOnly: new Set(shares.map((r) => String(r.athleteId))),
+    review: new Set(shares.filter((r) => r.role === "review").map((r) => String(r.athleteId))),
+  };
 }
 
 /** The pure-database half of `pullPlan`, apart for testing. Changes `sent` to match. */
@@ -645,15 +674,32 @@ async function push(config: CloudConfig, force: boolean): Promise<void> {
   const next = new Map<string, Map<string, string>>();
   const agreed = new Map<string, string>();
   const payload: Push = { tables: {}, athlete: [] };
+  // What the coach may only look at doesn't go up: the server would drop it anyway. Review
+  // still sends its marks. An athlete changed anyway (past the read-only screens) is
+  // dropped here once the push is through, and comes back whole, as the server has it,
+  // with the next pull of who shares what.
+  // ponytail: a row deleted here can't be traced to its athlete, so it stays gone here
+  // until the athlete is re-pulled for some other change.
+  const { readOnly, review } = readOnlyAthletes(db, config.coachId);
+  const locked = idsUnder(db, readOnly);
+  const reviewDays = idsUnder(db, review).get("Day");
+  const bounced = new Set<string>();
+  const keepBack = (t: string, id: string) => {
+    const athlete = locked.get(t)?.get(id);
+    if (!athlete || (t === "Day" && reviewDays?.has(id))) return false;
+    bounced.add(athlete);
+    return true;
+  };
 
   for (const t of names) {
     const cols = columnsOf(db, t);
-    const sentCols = pushedColumns(t, cols);
-    // Teammates' coach rows are here to name them; only the coach's own goes up.
+    const sentCols = syncedColumns(t, cols);
+    // Other coaches' rows are here to name them; only the coach's own goes up.
     const all = db.prepare(`SELECT * FROM ${quote(t)}`).all() as Row[];
     const rows = t === "Coach" ? all.filter((r) => r.id === config.coachId) : all;
     const changes = tableChanges(t, rows, cols, s.sent.get(t) ?? new Map());
     next.set(t, changes.signatures);
+    if (locked.size) changes.upsert = changes.upsert.filter((r) => !keepBack(t, String(r.id)));
     if (changes.upsert.length || changes.remove.length) {
       payload.tables[t] = {
         upsert: changes.upsert.map((r) => Object.fromEntries(sentCols.map((c) => [c, r[c] ?? null])) as Row),
@@ -672,6 +718,10 @@ async function push(config: CloudConfig, force: boolean): Promise<void> {
         // pulls that find nothing new would otherwise never give it a base.
         if (base === undefined && !before?.has(row.id)) agreed.set(row.id, mine);
         if (base === undefined || mine === base) continue;
+        if (locked.get(t)?.has(row.id)) {
+          bounced.add(locked.get(t)!.get(row.id)!);
+          continue;
+        }
         payload.athlete.push({ id: row.id, values: Object.fromEntries(athleteCols.map((c) => [c, row[c] ?? null])) as Row });
         agreed.set(row.id, mine);
       }
@@ -685,7 +735,11 @@ async function push(config: CloudConfig, force: boolean): Promise<void> {
     if (PULL_ONLY_TABLES.has(table)) continue;
     const held = s.merged?.get(table);
     if (!held) continue;
-    const fresh = newerRows(db.prepare(`SELECT ${cols.map(quote).join(", ")} FROM ${quote(table)}`).all() as Row[], held);
+    const fresh = newerRows(db.prepare(`SELECT ${cols.map(quote).join(", ")} FROM ${quote(table)}`).all() as Row[], held).filter((r) => {
+      const ok = !readOnly.has(String(r.athleteId)) || (table === "CoachMessage" && review.has(String(r.athleteId)));
+      if (!ok) bounced.add(String(r.athleteId));
+      return ok;
+    });
     if (fresh.length > 0) outgoing[table] = fresh;
   }
   if (Object.keys(outgoing).length > 0) payload.merged = outgoing;
@@ -700,10 +754,22 @@ async function push(config: CloudConfig, force: boolean): Promise<void> {
     for (const row of list) s.merged?.get(table)?.set(row.id, stampOf(row.updatedAt));
   }
   const before = s.sent;
-  db.transaction(() => {
-    saveSent(db, before, next);
-    if (s.takeOverRev !== null) writeMeta(db, PLAN_REV, String(s.takeOverRev));
-  })();
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      dropAthletes(db, [...bounced], next);
+      saveSent(db, before, next);
+      if (s.takeOverRev !== null) writeMeta(db, PLAN_REV, String(s.takeOverRev));
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  // Pull them again straight away, and what was logged under them with them.
+  if (bounced.size) {
+    s.lastPull = 0;
+    s.athleteVersion = null;
+    s.merged = null;
+  }
   if (s.takeOver) {
     s.takeOver = false;
     s.takeOverRev = null;
@@ -942,7 +1008,7 @@ export async function syncNow(): Promise<{ lastSync: number | null; error: strin
 
 /**
  * An open chat, every couple of seconds: athlete news down and the coach's waiting message
- * up, without the plan and teams. Says whether anything new came down.
+ * up, without the plan and shares. Says whether anything new came down.
  */
 export async function syncChat(): Promise<boolean> {
   const s = state();

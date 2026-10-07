@@ -238,6 +238,9 @@ function fullDate(startDate: string, week: number, dayIndex: number) {
   return `${t(WEEKDAYS[weekdayOf(d)])} ${formatDate(d, true)}`;
 }
 
+/** The grid's palette commands for an athlete shared to view or review: none. */
+const NO_COMMANDS: Command[] = [];
+
 export function ProgrammingGrid({
   block: initialBlock,
   athlete,
@@ -248,6 +251,7 @@ export function ProgrammingGrid({
   deletingWeek,
   onDeletingWeek,
   weekLabel = "tabs",
+  readOnly = false,
 }: {
   block: BlockData;
   athlete: AthleteData;
@@ -261,6 +265,8 @@ export function ProgrammingGrid({
   /** "tabs" (default) switches weeks; "static" just marks which week this is — for
    *  showing every week at once, where there's nothing to switch to. */
   weekLabel?: "tabs" | "static";
+  /** Shared with this coach to view or review: the weeks switch, nothing else moves. */
+  readOnly?: boolean;
 }) {
   const [block, setBlock] = useState(initialBlock);
   const [synced, setSynced] = useState(initialBlock);
@@ -848,7 +854,7 @@ export function ProgrammingGrid({
     // coordOf only reads the DOM.
     [],
   );
-  useCommands("grid", rowCommands);
+  useCommands("grid", readOnly ? NO_COMMANDS : rowCommands);
 
   /** The spreadsheet keys: Tab across, shift+arrows to select, fill down, clear. */
   function onSheetKey(e: React.KeyboardEvent): boolean {
@@ -1111,12 +1117,14 @@ export function ProgrammingGrid({
           deleting={deletingWeek}
           onDeleting={onDeletingWeek}
           phaseLabel={block.phase}
+          readOnly={readOnly}
         />
       )}
 
       <div className="flex-1 overflow-auto" style={{ scrollbarGutter: "stable" }}>
         <div
           ref={gridRef}
+          inert={readOnly}
           style={{ minWidth: GRID_MIN_WIDTH, maxWidth: SHELL_MAX_WIDTH }}
           className={`quiet-placeholders mx-auto w-full pb-24 ${dragging ? "select-none" : ""}`}
           onKeyDown={onNavKey}
@@ -1864,9 +1872,12 @@ function WeekTabs({
   deleting,
   onDeleting,
   phaseLabel,
+  readOnly = false,
 }: {
   /** The phase's name, for what a copied week is called on the clipboard. */
   phaseLabel: string;
+  /** Weeks only switch: nothing to add, delete or paste. */
+  readOnly?: boolean;
   weeks: { id: string; order: number; locked: boolean }[];
   active: number;
   blockId: string;
@@ -1982,7 +1993,7 @@ function WeekTabs({
         <div
           key={w}
           data-week={w}
-          onContextMenu={(e) => menuFor(e, weeks.find((x) => x.order === w)!)}
+          onContextMenu={readOnly ? undefined : (e) => menuFor(e, weeks.find((x) => x.order === w)!)}
           className={`group/tab flex shrink-0 items-center border-b-2 ${
             w === active ? "border-accent" : "border-transparent"
           }`}
@@ -2001,7 +2012,7 @@ function WeekTabs({
               <LockIcon locked size={11} />
             </span>
           )}
-          {weeks.length > 1 && (
+          {!readOnly && weeks.length > 1 && (
             <button
               ref={(el) => {
                 if (w === confirmWeek) confirmAnchor.current = el;
@@ -2052,6 +2063,7 @@ function WeekTabs({
           />
         </Popover>
       )}
+      {!readOnly && (
       <button
         type="button"
         onContextMenu={(e) =>
@@ -2071,6 +2083,7 @@ function WeekTabs({
       >
         + {t("add week")}
       </button>
+      )}
       </div>
 
       {weekMenu.menu}

@@ -1,8 +1,11 @@
 import { redirect } from "next/navigation";
+import { canEdit } from "@/lib/share";
 import { MeetPlanner } from "@/components/MeetPlanner";
 import { Sidebar } from "@/components/Sidebar";
 import type { MeetData } from "@/lib/competition";
-import { getMeetsForAthlete, getCoach } from "@/lib/queries";
+import { getBodyweights, getMeetsForAthlete, getCoach } from "@/lib/queries";
+import { weightToMake } from "@/lib/bodyweight";
+import { today as calendarToday, ymdOf } from "@/lib/dates";
 import { loadSettings } from "@/lib/coach-settings";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +21,10 @@ export default async function CompetitionPage({
   if (coach.athletes.length === 0) redirect("/athletes");
 
   const athlete = coach.athletes.find((a) => a.id === params.athlete) ?? coach.athletes[0];
-  const meets = await getMeetsForAthlete(athlete.id);
+  const [meets, weights] = await Promise.all([
+    getMeetsForAthlete(athlete.id),
+    getBodyweights([athlete.id]),
+  ]);
 
   const data: MeetData[] = meets.map((meet) => ({
     id: meet.id,
@@ -49,6 +55,10 @@ export default async function CompetitionPage({
         meets={data}
         activeMeetId={params.meet ?? null}
         today={new Date().toISOString()}
+        calendarDay={ymdOf(calendarToday())}
+        bodyweights={weights.get(athlete.id) ?? []}
+        limits={Object.fromEntries(meets.map((m) => [m.id, weightToMake(m)]))}
+        readOnly={!canEdit(athlete.share)}
       />
     </div>
   );

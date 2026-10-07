@@ -101,6 +101,74 @@ export function total(attempts: AttemptData[]): number | null {
   return Math.round(sum * 10) / 10;
 }
 
+/**
+ * What the total would be if every attempt still standing goes: per lift the heaviest one
+ * made or still to come. Null while a totalled lift has nothing left that could count.
+ */
+export function projectedTotal(attempts: AttemptData[]): number | null {
+  const tops = totalLifts().map((lift) => {
+    const live = attempts.filter((a) => a.lift === lift && a.result !== "MISS" && a.weight !== null);
+    return live.length === 0 ? null : Math.max(...live.map((a) => a.weight as number));
+  });
+  if (tops.some((w) => w === null)) return null;
+  return Math.round((tops as number[]).reduce((a, b) => a + b, 0) * 10) / 10;
+}
+
+/** The attempt the platform is on: the first one, in lifting order, not yet called. */
+export function currentAttempt(attempts: AttemptData[]): { lift: MeetLift; number: number } | null {
+  return (
+    ATTEMPT_ROWS.find(({ lift, number }) => {
+      const a = attempts.find((x) => x.lift === lift && x.number === number);
+      return !a || a.result === "PENDING";
+    }) ?? null
+  );
+}
+
+/** DOTS polynomial coefficients (a·bw⁴ … e) and the bodyweight range they hold over. */
+const DOTS = {
+  M: { c: [-0.000001093, 0.0007391293, -0.1918759221, 24.0900756, -307.75076], max: 210 },
+  F: { c: [-0.0000010706, 0.0005158568, -0.1126655495, 13.6175032, -57.96288], max: 150 },
+} as const;
+
+/** IPF GL (2020) coefficients for classic lifting: the full total, and bench-only meets. */
+const GL = {
+  total: { M: [1199.72839, 1025.18162, 0.00921], F: [610.32796, 1045.59282, 0.03048] },
+  bench: { M: [320.98041, 281.40258, 0.01008], F: [142.40398, 442.52671, 0.04724] },
+} as const;
+
+export function scoreName(): string {
+  return activeSettings().meetScore === "gl" ? "GL" : "DOTS";
+}
+
+/**
+ * A total scored across bodyweights — DOTS or IPF GL, as the coach chose — with the total
+ * and bodyweight in the athlete's unit. Null if anything is missing.
+ */
+export function meetScore(
+  total: number | null,
+  bodyweight: number | null,
+  sex: string | null | undefined,
+  unit: Unit,
+  kind: "dots" | "gl" = activeSettings().meetScore,
+): number | null {
+  if (total === null || bodyweight === null || (sex !== "M" && sex !== "F")) return null;
+  const kg = unit === "LB" ? 0.45359237 : 1;
+  const bw = bodyweight * kg;
+  let points: number;
+  if (kind === "gl") {
+    const lifts = totalLifts();
+    const event = lifts.length === 1 && lifts[0] === "BENCH" ? "bench" : "total";
+    const [a, b, c] = GL[event][sex];
+    if (bw < 35) return null;
+    points = (total * kg * 100) / (a - b * Math.exp(-c * bw));
+  } else {
+    const { c, max } = DOTS[sex];
+    const clamped = Math.min(Math.max(bw, 40), max);
+    points = (total * kg * 500) / c.reduce((sum, coef) => sum * clamped + coef, 0);
+  }
+  return Math.round(points * 100) / 100;
+}
+
 /** A meet as the programming grid needs it: when it is, and what is on the bar. */
 export type MeetSummary = {
   id: string;

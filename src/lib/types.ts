@@ -84,6 +84,12 @@ export type AthleteData = {
   variationPct: number | null;
   /** Per-exercise drop-offs as JSON — see `parseVariationPcts`. */
   variationPcts: string | null;
+  /** Their own RPE chart as JSON; null or left out uses the coach's. */
+  rpeTable?: string | null;
+  /** "M" or "F", for meet scores; left out where nothing scores a meet. */
+  sex?: string | null;
+  /** The program that wins where two overlap; null or left out lets the later start win. */
+  activeProgramId?: string | null;
 };
 
 export const WEEKDAYS = [

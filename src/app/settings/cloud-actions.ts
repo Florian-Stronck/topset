@@ -2,8 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { updateSettings } from "@/app/settings/actions";
-import { prisma } from "@/lib/prisma";
 import { assertCoach } from "@/lib/role";
+import type { Role } from "@/lib/roles";
 import {
   api,
   readConfig,
@@ -206,8 +206,6 @@ export async function syncEverything(): Promise<Result> {
   return error ? { ok: false, message: error } : { ok: true, message: "Everything is synced." };
 }
 
-export type TeamListing = { id: string; name: string; coaches: string[]; athletes: number };
-
 export type CoachListing = { id: string; name: string; username: string; isAdmin: boolean; disabled: boolean; athletes: number };
 export type InviteListing = { code: string; note: string | null; expiresAt: string };
 
@@ -217,60 +215,49 @@ async function admin<T>(route: string, init?: { method?: string; body?: unknown 
   return api<T>(config.server, route, { ...init, token: config.token });
 }
 
-export async function listCoaches(): Promise<{ coaches: CoachListing[]; invites: InviteListing[]; teams: TeamListing[]; error?: string }> {
+export async function listCoaches(): Promise<{ coaches: CoachListing[]; invites: InviteListing[]; error?: string }> {
   assertCoach();
   try {
-    const [{ coaches }, { invites }, { teams }] = await Promise.all([
+    const [{ coaches }, { invites }] = await Promise.all([
       admin<{ coaches: CoachListing[] }>("coaches"),
       admin<{ invites: InviteListing[] }>("invites"),
-      // A server from before teams has none.
-      admin<{ teams: TeamListing[] }>("teams").catch(() => ({ teams: [] })),
     ]);
-    return { coaches, invites, teams };
+    return { coaches, invites };
   } catch (error) {
-    return { coaches: [], invites: [], teams: [], error: message(error) };
+    return { coaches: [], invites: [], error: message(error) };
   }
 }
 
-/** For the admin: a new team, empty until coaches are put on it. */
-export async function createTeam(name: string): Promise<{ error?: string }> {
+export type ShareCodeListing = { code: string; athleteId: string; role: Role; reusable: boolean; expiresAt: string | null };
+
+/** Share codes still open for the coach's own athletes. */
+export async function listShareCodes(): Promise<{ codes: ShareCodeListing[]; error?: string }> {
   assertCoach();
   try {
-    await admin("teams", { method: "POST", body: { name } });
-    return {};
+    return { codes: (await admin<{ codes: ShareCodeListing[] }>("shares")).codes };
   } catch (error) {
-    return { error: message(error) };
+    return { codes: [], error: message(error) };
   }
 }
 
 /**
- * For the admin, on one team: rename it, put a coach on it or take them off, or delete it
- * (its athletes go back to the coaches who added them). Teammates' computers catch up on
- * their next sync.
+ * Sharing one athlete with another coach, on the server (see `api/coach/shares`). Sync
+ * runs straight after, so this computer, and the other coach's on their next sync, catch up.
  */
-export async function manageTeam(
-  id: string,
-  change: { action: "rename"; name: string } | { action: "add" | "remove"; coachId: string } | { action: "delete" },
-): Promise<{ error?: string }> {
+export async function manageShare(
+  change:
+    | { action: "code"; athleteId: string; role: Role; reusable: boolean; days: number | null }
+    | { action: "redeem"; code: string }
+    | { action: "role"; athleteId: string; coachId: string; role: Role }
+    | { action: "remove"; athleteId: string; coachId: string }
+    | { action: "dropCode"; code: string },
+): Promise<{ code?: ShareCodeListing; athlete?: string; error?: string }> {
   assertCoach();
   try {
-    await admin(`teams/${encodeURIComponent(id)}`, { method: "POST", body: change });
-    await syncNow();
-    return {};
-  } catch (error) {
-    return { error: message(error) };
-  }
-}
-
-/** Shares one of the coach's own athletes with a team they're on, or stops sharing them (`null`). */
-export async function setAthleteTeam(athleteId: string, teamId: string | null): Promise<{ error?: string }> {
-  assertCoach();
-  try {
-    await admin("athlete-team", { method: "POST", body: { athleteId, teamId } });
-    // Set on the server only, so it's no edit to send: this copy just catches up now.
-    await prisma.athlete.update({ where: { id: athleteId }, data: { teamId } });
+    const out = await admin<{ code?: ShareCodeListing; athlete?: string }>("shares", { method: "POST", body: change });
+    if (change.action !== "code" && change.action !== "dropCode") await syncNow();
     revalidatePath("/", "layout");
-    return {};
+    return { code: out.code, athlete: out.athlete };
   } catch (error) {
     return { error: message(error) };
   }

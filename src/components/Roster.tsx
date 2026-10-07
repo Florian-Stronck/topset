@@ -4,10 +4,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState, useTransition, type ReactNode } from "react";
 import { createAthlete, deleteAthlete, updateAthleteProfile } from "@/app/athletes/actions";
-import { setAthleteTeam } from "@/app/settings/cloud-actions";
+import { manageShare } from "@/app/settings/cloud-actions";
+import { EnterShareCode, ROLE_LABEL, ShareButton } from "@/components/AthleteShares";
+import { canEdit, type AthleteShareInfo } from "@/lib/share";
 import { AthleteLinkButton } from "@/components/AthleteLink";
 import { formKeys, NumberInput, TextInput } from "@/components/cells";
-import { parseVariationPcts } from "@/lib/intensity";
+import { parseRpeTable, parseVariationPcts } from "@/lib/intensity";
+import { RpeChartEditor } from "@/components/RpeChartEditor";
 import type { CheckinStatus } from "@/lib/overview";
 import { library } from "@/lib/exercises";
 import { ExerciseInput } from "@/components/ExerciseInput";
@@ -26,11 +29,10 @@ export type RosterEntry = AthleteData & {
   hasViewLink: boolean;
   /** How recently they checked in, by the Overview's rule. */
   checkin: CheckinStatus;
-  /** The team the athlete is shared with, if any. */
-  teamId: string | null;
-  team: string | null;
-  /** A teammate's athlete: theirs to share or delete, everyone's to edit. */
-  theirs: boolean;
+  /** Whose athlete this is, and what this coach may do with them. */
+  share: AthleteShareInfo;
+  /** The coaches the athlete is shared with, for their owner. */
+  sharedWith: { coachId: string; name: string; role: string }[];
   /** What the athlete app asks in the check-in, in order. */
   questions: CheckinQuestionData[];
   /** The coach's own notes, never shown to the athlete. */
@@ -38,6 +40,8 @@ export type RosterEntry = AthleteData & {
   nextMeet: { name: string; date: string; days: number; weightClass: string | null } | null;
   /** Injuries still open today, worst first. */
   injuries: { label: string; severity: number; since: string }[];
+  /** Whether every pair of overlapping programs has the active one in it. */
+  overlapsSettled: boolean;
   /** Oldest first. */
   programs: {
     id: string;
@@ -48,6 +52,8 @@ export type RosterEntry = AthleteData & {
     /** "1 Sep – 12 Oct"; null with no phases. */
     dates: string | null;
     status: "upcoming" | "active" | "done" | null;
+    /** Runs on some of the same days as another of the athlete's programs, from today on. */
+    overlapping: boolean;
   }[];
 };
 
@@ -59,20 +65,26 @@ const MAXES = [
 
 export function Roster({
   athletes,
-  teams = [],
+  signedIn = false,
   picked,
   openNew = false,
   openLink,
+  openShare = false,
+  openCode = false,
   nonce,
 }: {
   athletes: RosterEntry[];
-  /** The teams the coach is on, to share their own athletes with. */
-  teams?: { id: string; name: string }[];
+  /** Signed in to a Topset server: sharing athletes with other coaches happens there. */
+  signedIn?: boolean;
   /** The athlete shown, picked in the sidebar; the first one when none is. */
   picked?: string;
   openNew?: boolean;
   /** An athlete whose check-in link opens straight away — the palette's "Athlete check-in link…". */
   openLink?: string;
+  /** The picked athlete's share panel opens straight away — the palette's "Share athlete…". */
+  openShare?: boolean;
+  /** The share-code box opens straight away — the palette's "Enter share code…". */
+  openCode?: boolean;
   /** Changes with every palette request, so asking again reopens what was closed. */
   nonce?: string;
 }) {
@@ -88,7 +100,8 @@ export function Roster({
       const input = document.querySelector<HTMLInputElement>(`[data-athlete="${id}"] ${selector}`);
       if (input) {
         input.focus();
-        input.select();
+        input.select?.();
+        input.scrollIntoView({ block: "center", behavior: "smooth" });
       } else if (tries++ < 20) setTimeout(attempt, 100);
     };
     attempt();
@@ -114,6 +127,14 @@ export function Roster({
             keywords: "variation percent max paused pin tempo",
             kind: "athlete",
             run: () => focusIn(a.id, "[data-variations] input"),
+          },
+          {
+            id: `roster-rpe-${a.id}`,
+            group: "Athlete",
+            title: t("RPE chart for {name}", { name: a.name }),
+            keywords: "rpe chart curve percent reps own custom",
+            kind: "athlete",
+            run: () => focusIn(a.id, "[data-rpe] button"),
           },
           {
             id: `roster-notes-${a.id}`,
@@ -163,7 +184,10 @@ export function Roster({
             {plural(athletes.reduce((n, a) => n + a.programs.length, 0), "{n} program", "{n} programs")}
           </p>
         </div>
-        <NewAthleteButton key={`new-${nonce ?? ""}`} initiallyOpen={openNew} />
+        <div className="flex items-center gap-2">
+          {signedIn && <EnterShareCode key={`code-${nonce ?? ""}`} initiallyOpen={openCode} />}
+          <NewAthleteButton key={`new-${nonce ?? ""}`} initiallyOpen={openNew} />
+        </div>
       </div>
 
       {athletes.length === 0 ? (
@@ -173,10 +197,11 @@ export function Roster({
       ) : (
         <div className="mt-6">
           <AthleteCard
-            key={selected.id === openLink ? `${selected.id}-${nonce ?? ""}` : selected.id}
+            key={selected.id === openLink || openShare ? `${selected.id}-${nonce ?? ""}` : selected.id}
             athlete={selected}
-            teams={teams}
+            signedIn={signedIn}
             linkOpen={selected.id === openLink}
+            shareOpen={openShare}
           />
         </div>
       )}
@@ -230,8 +255,22 @@ function NotesField({ value, onCommit }: { value: string | null; onCommit: (v: s
   );
 }
 
-function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams: { id: string; name: string }[]; linkOpen: boolean }) {
+function AthleteCard({
+  athlete,
+  signedIn,
+  linkOpen,
+  shareOpen,
+}: {
+  athlete: RosterEntry;
+  signedIn: boolean;
+  linkOpen: boolean;
+  shareOpen: boolean;
+}) {
   const [, startTransition] = useTransition();
+  const [leaving, startLeaving] = useTransition();
+  const own = athlete.share.role === "own";
+  // Shared to view or review: everything shows, nothing changes.
+  const readOnly = !canEdit(athlete.share);
   const unit = athlete.unit === "LB" ? "lb" : "kg";
   const total = MAXES.reduce((sum, m) => sum + (athlete[m.key] ?? 0), 0);
 
@@ -251,18 +290,38 @@ function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams
           {athlete.name.slice(0, 1).toUpperCase()}
         </span>
         <div className="min-w-0 flex-1">
-          <div className={`-ml-2 max-w-[360px] ${editable}`} title={t("Click to rename")}>
+          <fieldset disabled={readOnly} className={`-ml-2 max-w-[360px] ${editable}`} title={readOnly ? undefined : t("Click to rename")}>
             <TextInput
               value={athlete.name}
               placeholder={t("Athlete name")}
               onCommit={(v) => v && patch({ name: v })}
               className="!text-[18px] font-semibold"
             />
-          </div>
+          </fieldset>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 pl-0.5 text-[11px] text-muted-2">
             <span aria-hidden className={`size-2 shrink-0 rounded-full ${TONE[athlete.checkin.tone]}`} />
             {athlete.checkin.label}
-            {athlete.team ? ` · ${t("Shared with {team}", { team: athlete.team })}` : ""}
+            {athlete.share.role !== "own" && (
+              <>
+                {` · ${t("Shared by {name}", { name: athlete.share.owner })} · ${t(ROLE_LABEL[athlete.share.role])}`}
+                {signedIn && (
+                  <button
+                    type="button"
+                    disabled={leaving}
+                    onClick={() => {
+                      if (!window.confirm(t("Take {name} off your roster? {owner} can share them with you again.", { name: athlete.name, owner: athlete.share.owner }))) return;
+                      startLeaving(async () => {
+                        const out = await manageShare({ action: "remove", athleteId: athlete.id, coachId: athlete.share.me });
+                        if (out.error) window.alert(out.error);
+                      });
+                    }}
+                    className="ml-1 text-muted-2 underline-offset-2 hover:text-red-400 hover:underline"
+                  >
+                    {t("Leave")}
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
         <Link
@@ -273,6 +332,15 @@ function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams
         </Link>
       </div>
 
+      {readOnly && (
+        <p className="mb-3 rounded-lg border border-border bg-surface-2 px-3 py-2 text-[12px] text-muted">
+          {athlete.share.role === "review"
+            ? t("{owner} shared {name} with you to review: you can mark sessions reviewed and write to them, not change the plan.", { owner: athlete.share.owner, name: athlete.name })
+            : t("{owner} shared {name} with you to view: you see everything but can't change anything.", { owner: athlete.share.owner, name: athlete.name })}
+        </p>
+      )}
+
+      <fieldset disabled={readOnly} className="contents">
       <div className="grid lg:grid-cols-2">
         <div className="lg:border-r lg:border-border lg:pr-6">
           <Band
@@ -306,6 +374,10 @@ function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams
 
           <Band label={t("VARIATIONS")}>
             <VariationDropoffs athlete={athlete} patch={patch} />
+          </Band>
+
+          <Band label={t("DIVISION")} hint={t("Division, for DOTS and GL")}>
+            <DivisionToggle sex={athlete.sex ?? null} onChange={(sex) => patch({ sex })} />
           </Band>
 
           <Band label={t("NEXT MEET")}>
@@ -354,6 +426,39 @@ function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams
               <span className="text-[12px] text-muted-2">{t("No program yet")}</span>
             ) : (
               <div className="flex flex-col gap-1.5">
+                {(() => {
+                  const overlapping = athlete.programs.filter((p) => p.overlapping);
+                  if (overlapping.length === 0) return null;
+                  const chosen = athlete.overlapsSettled;
+                  return (
+                    <div className="mb-1 rounded-lg border border-border bg-surface-2 px-2.5 py-2">
+                      <p className="flex items-baseline gap-1.5 text-[11px] leading-snug text-muted">
+                        {!chosen && <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-red-500" />}
+                        {chosen
+                          ? t("Programs overlap. On days both have a session, the athlete trains the active one.")
+                          : t("Programs overlap — pick the one the athlete trains on days both have a session.")}
+                      </p>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {overlapping.map((p) => {
+                          const on = p.id === athlete.activeProgramId;
+                          return (
+                            <button
+                              key={p.id}
+                              type="button"
+                              aria-pressed={on}
+                              onClick={() => !on && patch({ activeProgramId: p.id })}
+                              className={`max-w-full truncate rounded-full border px-2.5 py-0.5 text-[11px] ${
+                                on ? "border-accent bg-accent-soft font-medium text-accent" : "border-border text-muted hover:border-accent hover:text-accent"
+                              }`}
+                            >
+                              {p.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {[...athlete.programs].reverse().map((p) => (
                   <div key={p.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px]">
                     <Link href={`/programming?athlete=${athlete.id}&program=${p.id}`} className="font-medium hover:text-accent">
@@ -394,7 +499,11 @@ function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams
                   <LinkState sent={athlete.hasViewLink} />
                 </div>
               </div>
-              {!athlete.theirs && teams.length > 0 && <TeamPicker athlete={athlete} teams={teams} />}
+              {own && signedIn && (
+                <div className="flex items-center gap-2">
+                  <ShareButton athleteId={athlete.id} name={athlete.name} sharedWith={athlete.sharedWith} initiallyOpen={shareOpen} />
+                </div>
+              )}
             </div>
           </Band>
 
@@ -404,11 +513,16 @@ function AthleteCard({ athlete, teams, linkOpen }: { athlete: RosterEntry; teams
         </div>
       </div>
 
-      {!athlete.theirs && (
+      <Band label={t("RPE CHART")} hint={t("An RPE chart of their own: every RPE weight and estimate for them comes off it.")}>
+        <AthleteRpeChart athlete={athlete} patch={patch} />
+      </Band>
+
+      {own && (
         <div className="flex justify-end border-t border-border py-3">
           <DeleteAthleteButton athlete={athlete} />
         </div>
       )}
+      </fieldset>
     </div>
   );
 }
@@ -521,30 +635,69 @@ function VariationDropoffs({
   );
 }
 
-/** Which of the coach's teams sees this athlete too. Needs the server, so it can say no. */
-function TeamPicker({ athlete, teams }: { athlete: RosterEntry; teams: { id: string; name: string }[] }) {
-  const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+/**
+ * The athlete's own RPE chart, or the coach's until one is made. Kept here as it is edited,
+ * so a dragged curve stays put while the save goes through.
+ */
+function AthleteRpeChart({
+  athlete,
+  patch,
+}: {
+  athlete: RosterEntry;
+  patch: (data: Parameters<typeof updateAthleteProfile>[1]) => void;
+}) {
+  const coach = useSettings().settings.rpeTable;
+  const [own, setOwn] = useState(() => parseRpeTable(athlete.rpeTable));
+  const [synced, setSynced] = useState(athlete.rpeTable);
+  if (synced !== athlete.rpeTable) {
+    setSynced(athlete.rpeTable);
+    setOwn(parseRpeTable(athlete.rpeTable));
+  }
+
+  const save = (table: typeof own) => {
+    setOwn(table);
+    patch({ rpeTable: table ? JSON.stringify(table) : null });
+  };
+  const link = "rounded-lg border border-border px-2.5 py-1 text-[12px] text-muted hover:border-accent hover:text-accent";
+
+  if (!own) {
+    return (
+      <div data-rpe className="flex flex-wrap items-center gap-3 text-[12px]">
+        <span className="text-muted-2">{t("Uses your chart from Settings.")}</span>
+        <button type="button" onClick={() => save(coach)} className={link}>
+          {t("Give them their own")}
+        </button>
+      </div>
+    );
+  }
   return (
-    <label className="flex items-center gap-1.5 text-[12px] text-muted" title={error ?? undefined}>
-      {t("Team")}
-      <select
-        value={athlete.teamId ?? ""}
-        disabled={pending}
-        onChange={(e) => {
-          const teamId = e.target.value || null;
-          startTransition(async () => setError((await setAthleteTeam(athlete.id, teamId)).error ?? null));
-        }}
-        className={`rounded-lg border bg-surface px-2 py-1 text-[12px] ${error ? "border-red-400 text-red-400" : "border-border"}`}
-      >
-        <option value="">{t("Not shared")}</option>
-        {teams.map((team) => (
-          <option key={team.id} value={team.id}>
-            {team.name}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div data-rpe className="flex flex-col gap-2">
+      <RpeChartEditor table={own} base={coach} onChange={save} />
+      <div>
+        <button type="button" onClick={() => save(null)} className={link}>
+          {t("Back to your chart")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Men or women, for DOTS and GL; clicking the one on clears it. */
+function DivisionToggle({ sex, onChange }: { sex: string | null; onChange: (sex: "M" | "F" | null) => void }) {
+  return (
+    <div className="flex w-fit shrink-0 overflow-hidden rounded-full border border-border text-[11px]">
+      {(["M", "F"] as const).map((s) => (
+        <button
+          key={s}
+          type="button"
+          aria-pressed={s === sex}
+          onClick={() => onChange(s === sex ? null : s)}
+          className={`px-2.5 py-1 ${s === sex ? "bg-accent-soft font-medium text-accent" : "text-muted-2 hover:text-foreground"}`}
+        >
+          {s === "M" ? t("Men") : t("Women")}
+        </button>
+      ))}
+    </div>
   );
 }
 

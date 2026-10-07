@@ -162,6 +162,9 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "meet-rename", group: "Competition", title: "Rename meet" },
   { id: "meet-plan", group: "Competition", title: "Plan attempts from 1RMs" },
   { id: "meet-results", group: "Competition", title: "Save results as the new 1RMs" },
+  { id: "meet-good", group: "Competition", title: "Mark the current attempt good" },
+  { id: "meet-miss", group: "Competition", title: "Mark the current attempt missed" },
+  { id: "meet-score", group: "Competition", title: "Score meets by DOTS / GL" },
 
   { id: "week-prev", group: "Week", title: "Previous week", keys: ["alt+arrowleft"] },
   { id: "week-next", group: "Week", title: "Next week", keys: ["alt+arrowright"] },
@@ -190,6 +193,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "program-rename", group: "Program", title: "Rename program" },
   { id: "program-import", group: "Program", title: "Import program file…" },
   { id: "program-copy", group: "Program", title: "Copy program…" },
+  { id: "program-active", group: "Program", title: "Make this program the active one" },
   { id: "whole-program", group: "Program", title: "Whole program" },
 
   { id: "row-insert", group: "Row", title: "Insert a row below", keys: ["alt+enter"], when: "grid" },
@@ -232,6 +236,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "backup-restore", group: "Backup", title: "Restore backup…" },
 
   { id: "athlete-new", group: "Athlete", title: "New athlete…" },
+  { id: "athlete-share", group: "Athlete", title: "Share athlete with a coach…" },
+  { id: "athlete-share-code", group: "Athlete", title: "Enter share code…" },
   { id: "athlete-link", group: "Athlete", title: "Athlete check-in link…" },
   { id: "athlete-example", group: "Athlete", title: "Add the example athlete" },
   { id: "athlete-prev", group: "Athlete", title: "Previous athlete" },
@@ -250,6 +256,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "go-settings", group: "Go", title: "Settings" },
 
   { id: "tutorial", group: "Help", title: "Start the tutorial" },
+  { id: "check-updates", group: "Help", title: "Check for updates" },
 ];
 
 export const SPEC_BY_ID = new Map(COMMAND_SPECS.map((s) => [s.id, s]));
