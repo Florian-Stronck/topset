@@ -8,8 +8,11 @@ import { fresh, useCommands, type Command } from "@/lib/commands";
 import { t } from "@/lib/i18n";
 import { SHELL_MAX_WIDTH } from "@/lib/layout";
 import { setTrackingPref, usePref } from "@/lib/prefs";
+import { useChartTabs } from "@/components/tracking/ChartBoard";
+import { newId } from "@/lib/chart-library";
 
-export type TrackingView = "review" | "progress" | "wellness";
+/** The three built-in views, or `c:<tab id>` for one of the coach's own chart tabs. */
+export type TrackingView = "review" | "progress" | "wellness" | `c:${string}`;
 
 export const VIEWS: { id: TrackingView; label: string; icon: string }[] = [
   { id: "review", label: "Review", icon: "M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" },
@@ -55,6 +58,10 @@ export function TrackingShell({
   const autoSync = usePref("tracking").autoSync;
   const [lastRefresh, setLastRefresh] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const charts = useChartTabs(athlete.id);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [menu, setMenu] = useState(false);
+  const customTab = view.startsWith("c:") ? charts.tabs.find((x) => `c:${x.id}` === view) : undefined;
 
   const refresh = useCallback(() => {
     startTransition(async () => {
@@ -102,6 +109,39 @@ export function TrackingShell({
     [athlete.id, block, search],
   );
 
+  const newTab = useCallback(() => {
+    const id = newId();
+    charts.save([...charts.tabs, { id, name: t("Charts {n}", { n: charts.tabs.length + 1 }), charts: [] }]);
+    setRenaming(id);
+    router.push(href({ view: `c:${id}` }));
+  }, [charts, href, router]);
+
+  const removeTab = useCallback(
+    (id: string) => {
+      const tab = charts.tabs.find((x) => x.id === id);
+      if (!tab || !window.confirm(t("Remove the tab “{name}” and its charts?", { name: tab.name }))) return;
+      charts.save(charts.tabs.filter((x) => x.id !== id));
+      if (view === `c:${id}`) router.push(href({ view: "progress" }));
+    },
+    [charts, href, router, view],
+  );
+
+  const rename = (id: string, value: string) => {
+    const name = value.trim();
+    const tab = charts.tabs.find((x) => x.id === id);
+    if (tab && name && name !== tab.name) charts.save(charts.tabs.map((x) => (x.id === id ? { ...x, name } : x)));
+    setRenaming(null);
+  };
+
+  const moveTab = (id: string, by: number) => {
+    const i = charts.tabs.findIndex((x) => x.id === id);
+    const j = i + by;
+    if (i < 0 || j < 0 || j >= charts.tabs.length) return;
+    const next = [...charts.tabs];
+    [next[i], next[j]] = [next[j], next[i]];
+    charts.save(next);
+  };
+
   const commands = useMemo<Command[]>(() => {
     const track = (blockId: string) => router.push(`/tracking?athlete=${athlete.id}&block=${blockId}${view === "review" ? "" : `&view=${view}`}`);
     const at = block ? phases.findIndex((p) => p.id === block.id) : -1;
@@ -116,6 +156,26 @@ export function TrackingShell({
           run: () => router.push(href({ view: v.id })),
         }),
       ),
+      ...charts.tabs.map(
+        (tab): Command => ({
+          id: `view-c:${tab.id}`,
+          group: "Tracking view",
+          title: tab.name,
+          keywords: "tracking tab view charts custom",
+          kind: "place",
+          run: () => router.push(href({ view: `c:${tab.id}` })),
+        }),
+      ),
+      { id: "chart-tab-new", group: "Tracking view", title: t("New chart tab"), keywords: "graph charts custom tab add", run: newTab },
+      ...(customTab
+        ? [
+            { id: "chart-tab-rename", group: "Tracking view", title: t("Rename this chart tab"), run: () => setRenaming(customTab.id) },
+            { id: "chart-tab-remove", group: "Tracking view", title: t("Remove this chart tab"), run: () => removeTab(customTab.id) },
+          ]
+        : []),
+      charts.own
+        ? { id: "chart-tabs-own", group: "Tracking view", title: t("Put {name} back on your chart tabs", { name: athlete.name }), keywords: "charts custom reset default", run: charts.reset }
+        : { id: "chart-tabs-own", group: "Tracking view", title: t("Give {name} their own chart tabs", { name: athlete.name }), keywords: "charts custom athlete override", run: charts.customise },
       {
         id: "refresh",
         group: "Sync",
@@ -183,7 +243,7 @@ export function TrackingShell({
           ]
         : []),
     ];
-  }, [athlete, autoSync, block, href, phases, programs, refresh, router, view]);
+  }, [athlete, autoSync, block, charts, customTab, href, newTab, phases, programs, refresh, removeTab, router, view]);
   // Above the sidebar's: "Programming" here opens this very phase.
   useCommands("tracking", commands, 1);
 
@@ -289,6 +349,96 @@ export function TrackingShell({
               </Link>
             );
           })}
+          {charts.tabs.map((tab) => {
+            const on = `c:${tab.id}` === view;
+            if (renaming === tab.id) {
+              return (
+                <input
+                  key={tab.id}
+                  autoFocus
+                  defaultValue={tab.name}
+                  aria-label={t("Tab name")}
+                  onFocus={(e) => e.target.select()}
+                  onBlur={(e) => rename(tab.id, e.target.value)}
+                  onKeyDown={(e) => {
+                    // Straight away, not on blur: a window in the background never sends one.
+                    if (e.key === "Enter") rename(tab.id, e.currentTarget.value);
+                    if (e.key === "Escape") setRenaming(null);
+                  }}
+                  className="-mb-px w-32 border-b-2 border-accent bg-transparent px-3 pb-2 pt-1 text-[13px] outline-none"
+                />
+              );
+            }
+            return (
+              <div key={tab.id} className="relative flex items-center">
+                <Link
+                  role="tab"
+                  aria-selected={on}
+                  href={href({ view: `c:${tab.id}` })}
+                  scroll={false}
+                  onDoubleClick={(e) => {
+                    e.preventDefault();
+                    setRenaming(tab.id);
+                  }}
+                  title={t("Double-click to rename")}
+                  className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 pb-2 pt-1 text-[13px] ${
+                    on ? "border-accent font-medium text-foreground" : "border-transparent text-muted hover:text-foreground"
+                  }`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+                  </svg>
+                  {tab.name}
+                </Link>
+                {on && (
+                  <button
+                    type="button"
+                    aria-label={t("Tab options")}
+                    aria-expanded={menu}
+                    onClick={() => setMenu((m) => !m)}
+                    className="-ml-2 mb-1 grid size-5 place-items-center rounded-full text-muted-2 hover:bg-surface-2 hover:text-foreground"
+                  >
+                    ⋯
+                  </button>
+                )}
+                {on && menu && (
+                  <div className="absolute left-0 top-full z-30 mt-1 w-56 rounded-xl border border-border bg-surface p-1 text-[12px] shadow-xl" onMouseLeave={() => setMenu(false)}>
+                    {[
+                      { label: t("Rename"), run: () => setRenaming(tab.id) },
+                      { label: t("Move left"), run: () => moveTab(tab.id, -1) },
+                      { label: t("Move right"), run: () => moveTab(tab.id, 1) },
+                      charts.own
+                        ? { label: t("Put {name} back on your chart tabs", { name: athlete.name }), run: charts.reset }
+                        : { label: t("Give {name} their own chart tabs", { name: athlete.name }), run: charts.customise },
+                      { label: t("Remove tab"), run: () => removeTab(tab.id) },
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        onClick={() => {
+                          setMenu(false);
+                          item.run();
+                        }}
+                        className="block w-full rounded-lg px-2.5 py-1.5 text-left hover:bg-surface-2"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            onClick={newTab}
+            title={t("New chart tab")}
+            aria-label={t("New chart tab")}
+            className="mb-1 ml-1 grid size-6 place-items-center self-center rounded-full text-muted-2 hover:bg-surface-2 hover:text-accent"
+          >
+            +
+          </button>
+          {charts.own && <span className="self-center pb-1 text-[11px] text-muted-2">{t("Own tabs for {name}", { name: athlete.name })}</span>}
           {!hasLink && (
             <span className="ml-auto self-center pb-1 text-[11px] text-muted-2">{t("No check-in link yet — nothing will come in from the phone.")}</span>
           )}

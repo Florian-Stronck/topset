@@ -155,6 +155,7 @@ export function BarChart({
   empty,
   notes,
   max: fixedMax,
+  xLabelEvery = 1,
 }: {
   categories: string[];
   series: Series[];
@@ -167,6 +168,7 @@ export function BarChart({
   /** A short word over each bar, such as the missed sessions that week. */
   notes?: (string | null)[];
   max?: number;
+  xLabelEvery?: number;
 }) {
   const { box, width: W } = useWidth();
   const plot = { w: W - PAD.left - PAD.right, h: height - PAD.top - PAD.bottom };
@@ -208,9 +210,11 @@ export function BarChart({
                     {notes[i]}
                   </text>
                 )}
-                <text x={x(i)} y={plot.h + 17} textAnchor="middle" fill="var(--muted-2)" fontSize={10}>
-                  {c}
-                </text>
+                {i % xLabelEvery === 0 && (
+                  <text x={x(i)} y={plot.h + 17} textAnchor="middle" fill="var(--muted-2)" fontSize={10}>
+                    {c}
+                  </text>
+                )}
               </g>
             );
           })}
@@ -342,7 +346,8 @@ export function LineChart({
             </g>
           ))}
           {categories.map((c, i) =>
-            i % xLabelEvery === 0 || i === categories.length - 1 ? (
+            // The last date too, unless it would sit on top of the one before it.
+            i % xLabelEvery === 0 || (i === categories.length - 1 && i % xLabelEvery >= xLabelEvery / 2) ? (
               <text key={i} x={x(i)} y={plot.h + 17} textAnchor="middle" fill="var(--muted-2)" fontSize={10}>
                 {c}
               </text>
@@ -378,4 +383,479 @@ export function LineChart({
 /** The line under a chart that reads out the hovered column; holds its height when empty. */
 function Readout({ children }: { children: ReactNode }) {
   return <div className="flex min-h-[22px] flex-wrap items-center gap-3 border-t border-border/60 pt-1.5 text-[11px]">{children}</div>;
+}
+
+// --- Combo and pie, for the charts coaches build themselves --------------------------------
+
+export type ComboType = "line" | "bar" | "area" | "dots";
+/** A straight line by index: y = slope × i + intercept. */
+export type Trend = { slope: number; intercept: number };
+export type ComboSeries = Series & { values: (number | null)[]; type: ComboType; axis: "left" | "right"; dashed?: boolean; trend?: Trend | null };
+type Domain = { min?: number | null; max?: number | null };
+
+/** 12345 → "12.3k", 3.14159 → "3.1": short enough for an axis or a label over a bar. */
+export function compact(v: number): string {
+  const a = Math.abs(v);
+  if (a >= 1e6) return `${Math.round(v / 1e5) / 10}M`;
+  if (a >= 1e4) return `${Math.round(v / 100) / 10}k`;
+  return String(Math.round(v * 10) / 10);
+}
+
+/**
+ * Any mix of bars, lines, areas and dots over the same dates, each on the left or the right
+ * axis — the spreadsheet combo chart. Bars sit side by side, or stacked per axis.
+ */
+export function ComboChart({
+  categories,
+  series,
+  height = 200,
+  label,
+  empty,
+  stack = false,
+  left,
+  right,
+  refLine,
+  labels = false,
+  xLabelEvery = 1,
+}: {
+  categories: string[];
+  series: ComboSeries[];
+  height?: number;
+  label: string;
+  empty: string;
+  stack?: boolean;
+  left?: Domain;
+  right?: Domain;
+  refLine?: { value: number; label: string } | null;
+  /** The value over every bar and point. */
+  labels?: boolean;
+  xLabelEvery?: number;
+}) {
+  const { box, width: W } = useWidth();
+  const hasRight = series.some((s) => s.axis === "right");
+  const hasLeft = series.some((s) => s.axis === "left");
+  const padRight = hasRight ? PAD.left : PAD.right;
+  const plot = { w: W - PAD.left - padRight, h: height - PAD.top - PAD.bottom };
+  const band = plot.w / Math.max(1, categories.length);
+  const x = (i: number) => band * i + band / 2;
+  const { ref, hover, onMove, onLeave } = useHover(categories.length, x, W);
+  const any = series.some((s) => s.values.some((v) => v !== null));
+  if (!any || categories.length === 0) return <div ref={box}><Empty text={empty} /></div>;
+
+  const bars = series.filter((s) => s.type === "bar");
+  // Where each bar series stands in its band: one slot per series, or one per axis when stacked.
+  const slots = stack ? [...new Set(bars.map((s) => s.axis))] : bars.map((s) => s.key);
+  const slotOf = (s: ComboSeries) => slots.indexOf(stack ? s.axis : s.key);
+  const groupW = Math.min(56, band * 0.72);
+  const barW = groupW / Math.max(1, slots.length);
+
+  // Each axis fits what is drawn on it; bars and areas stand on zero.
+  const scale = (axis: "left" | "right", fixed: Domain | undefined) => {
+    const own = series.filter((s) => s.axis === axis);
+    const values: number[] = [];
+    for (const s of own) if (!(stack && s.type === "bar")) for (const v of s.values) if (v !== null) values.push(v);
+    for (const s of own) {
+      const ends = trendEnds(s);
+      if (ends) values.push(ends[0][1], ends[1][1]);
+    }
+    if (stack) {
+      const stacked = own.filter((s) => s.type === "bar");
+      categories.forEach((_, i) => {
+        values.push(
+          stacked.reduce((n, s) => n + Math.max(0, s.values[i] ?? 0), 0),
+          stacked.reduce((n, s) => n + Math.min(0, s.values[i] ?? 0), 0),
+        );
+      });
+    }
+    if (axis === "left" && refLine) values.push(refLine.value);
+    const grounded = own.some((s) => s.type === "bar" || s.type === "area");
+    let lo = values.length ? Math.min(...values) : 0;
+    let hi = values.length ? Math.max(...values) : 1;
+    if (grounded) {
+      lo = Math.min(0, lo);
+      hi = Math.max(0, hi);
+      hi += (hi - lo) * 0.08;
+    } else {
+      const pad = Math.max(0.5, (hi - lo) * 0.15);
+      lo -= pad;
+      hi += pad;
+    }
+    lo = fixed?.min ?? lo;
+    hi = fixed?.max ?? hi;
+    if (hi <= lo) hi = lo + 1;
+    return { lo, hi, y: (v: number) => plot.h - ((v - lo) / (hi - lo)) * plot.h };
+  };
+  const axes = { left: scale("left", left), right: scale("right", right) };
+
+  const path = (s: ComboSeries) => {
+    const { y } = axes[s.axis];
+    let d = "";
+    s.values.forEach((v, i) => {
+      if (v !== null) d += `${d ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
+    });
+    return d;
+  };
+  const area = (s: ComboSeries) => {
+    const { y, lo, hi } = axes[s.axis];
+    const base = y(Math.min(hi, Math.max(lo, 0)));
+    const pts = s.values.flatMap((v, i) => (v === null ? [] : [[x(i), y(v)]]));
+    if (pts.length === 0) return "";
+    return `M${pts[0][0]},${base} ${pts.map(([px, py]) => `L${px.toFixed(1)},${py.toFixed(1)}`).join(" ")} L${pts[pts.length - 1][0]},${base} Z`;
+  };
+
+  // Stacked bars build up from zero per axis, category by category.
+  const stacks = categories.map(() => ({ left: { up: 0, down: 0 }, right: { up: 0, down: 0 } }));
+
+  return (
+    <div ref={box}>
+      <svg ref={ref} viewBox={`0 0 ${W} ${height}`} className="w-full" style={{ height }} role="img" aria-label={label} onMouseMove={onMove} onMouseLeave={onLeave}>
+        <g transform={`translate(${PAD.left},${PAD.top})`}>
+          {(hasLeft ? ticksOf(axes.left.lo, axes.left.hi) : []).map((v) => (
+            <g key={`l${v}`}>
+              <line x1={0} x2={plot.w} y1={axes.left.y(v)} y2={axes.left.y(v)} stroke="var(--border)" />
+              <text x={-8} y={axes.left.y(v)} textAnchor="end" dominantBaseline="middle" fill="var(--muted-2)" fontSize={10}>
+                {compact(v)}
+              </text>
+            </g>
+          ))}
+          {(hasRight ? ticksOf(axes.right.lo, axes.right.hi) : []).map((v) => (
+            <g key={`r${v}`}>
+              {!hasLeft && <line x1={0} x2={plot.w} y1={axes.right.y(v)} y2={axes.right.y(v)} stroke="var(--border)" />}
+              <text x={plot.w + 8} y={axes.right.y(v)} dominantBaseline="middle" fill="var(--muted-2)" fontSize={10}>
+                {compact(v)}
+              </text>
+            </g>
+          ))}
+
+          {bars.map((s) =>
+            s.values.map((v, i) => {
+              if (v === null || v === 0) return null;
+              const { y } = axes[s.axis];
+              let from = 0;
+              if (stack) {
+                const st = stacks[i][s.axis];
+                from = v > 0 ? st.up : st.down;
+                if (v > 0) st.up += v;
+                else st.down += v;
+              }
+              const top = y(Math.max(from, from + v));
+              const bottom = y(Math.min(from, from + v));
+              const bx = x(i) - groupW / 2 + slotOf(s) * barW;
+              return (
+                <g key={`${s.key}-${i}`} opacity={hover === null || hover === i ? 0.9 : 0.5}>
+                  <rect x={bx + 0.5} y={top} width={Math.max(1, barW - 1)} height={Math.max(1, bottom - top)} rx={2} fill={s.color} />
+                  {labels && (
+                    <text x={bx + barW / 2} y={top - 4} textAnchor="middle" fill="var(--muted)" fontSize={9}>
+                      {compact(v)}
+                    </text>
+                  )}
+                </g>
+              );
+            }),
+          )}
+
+          {refLine && hasLeft && (
+            <g>
+              <line x1={0} x2={plot.w} y1={axes.left.y(refLine.value)} y2={axes.left.y(refLine.value)} stroke="var(--muted-2)" strokeDasharray="4 4" />
+              <text x={plot.w} y={axes.left.y(refLine.value) - 4} textAnchor="end" fill="var(--muted-2)" fontSize={10}>
+                {refLine.label}
+              </text>
+            </g>
+          )}
+          {hover !== null && <line x1={x(hover)} x2={x(hover)} y1={0} y2={plot.h} stroke="var(--muted-2)" strokeDasharray="3 3" />}
+
+          {series.map((s) => {
+            const ends = trendEnds(s);
+            if (!ends) return null;
+            const { y } = axes[s.axis];
+            return (
+              <line
+                key={`trend-${s.key}`}
+                x1={x(ends[0][0])}
+                x2={x(ends[1][0])}
+                y1={y(ends[0][1])}
+                y2={y(ends[1][1])}
+                stroke={s.color}
+                strokeWidth={1.5}
+                strokeDasharray="2 4"
+                strokeLinecap="round"
+                opacity={0.9}
+              />
+            );
+          })}
+
+          {series
+            .filter((s) => s.type !== "bar")
+            .map((s) => {
+              const { y } = axes[s.axis];
+              return (
+                <g key={s.key}>
+                  {s.type === "area" && <path d={area(s)} fill={s.color} opacity={0.18} />}
+                  {s.type !== "dots" && (
+                    <path d={path(s)} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={s.dashed ? "6 5" : undefined} />
+                  )}
+                  {s.values.map((v, i) =>
+                    v === null ? null : (
+                      <g key={i}>
+                        <circle cx={x(i)} cy={y(v)} r={hover === i ? 4.5 : s.type === "dots" ? 3.5 : 2.5} fill={s.color} stroke="var(--surface)" strokeWidth={1.5} />
+                        {labels && (
+                          <text x={x(i)} y={y(v) - 7} textAnchor="middle" fill="var(--muted)" fontSize={9}>
+                            {compact(v)}
+                          </text>
+                        )}
+                      </g>
+                    ),
+                  )}
+                </g>
+              );
+            })}
+
+          {categories.map((c, i) =>
+            i % xLabelEvery === 0 || (i === categories.length - 1 && i % xLabelEvery >= xLabelEvery / 2) ? (
+              <text key={i} x={x(i)} y={plot.h + 17} textAnchor="middle" fill="var(--muted-2)" fontSize={10}>
+                {c}
+              </text>
+            ) : null,
+          )}
+        </g>
+      </svg>
+      <Readout>
+        {hover !== null && (
+          <>
+            <span className="text-muted-2">{categories[hover]}</span>
+            {series.map((s) =>
+              s.values[hover] === null ? null : (
+                <span key={s.key} className="flex items-center gap-1.5 text-muted">
+                  <span aria-hidden className="inline-block size-2 rounded-sm" style={{ background: s.color }} />
+                  {s.label} <span className="text-foreground">{compact(s.values[hover] as number)}</span>
+                </span>
+              ),
+            )}
+          </>
+        )}
+      </Readout>
+    </div>
+  );
+}
+
+/** Where a series' trend line starts and ends: across the stretch the series has values. */
+function trendEnds(s: ComboSeries): [[number, number], [number, number]] | null {
+  if (!s.trend) return null;
+  const first = s.values.findIndex((v) => v !== null);
+  const last = s.values.length - 1 - [...s.values].reverse().findIndex((v) => v !== null);
+  if (first < 0 || last <= first) return null;
+  const at = (i: number) => s.trend!.slope * i + s.trend!.intercept;
+  return [[first, at(first)], [last, at(last)]];
+}
+
+export type ScatterSeries = Series & { points: { x: number; y: number; tag: string }[]; trend?: { slope: number; intercept: number; r2: number } | null };
+
+/**
+ * One measure against another: a dot per day or week where both were logged, with the
+ * straight line that fits them best — whether more sleep goes with lower RPE, say.
+ */
+export function ScatterChart({
+  series,
+  xLabel,
+  height = 220,
+  label,
+  empty,
+}: {
+  series: ScatterSeries[];
+  xLabel: string;
+  height?: number;
+  label: string;
+  empty: string;
+}) {
+  const { box, width: W } = useWidth();
+  const [hover, setHover] = useState<{ key: string; i: number } | null>(null);
+  const pad = { ...PAD, bottom: PAD.bottom + 14 };
+  const plot = { w: W - pad.left - pad.right, h: height - pad.top - pad.bottom };
+  const all = series.flatMap((s) => s.points);
+  if (all.length === 0) return <div ref={box}><Empty text={empty} /></div>;
+
+  const range = (vs: number[]) => {
+    let lo = Math.min(...vs);
+    let hi = Math.max(...vs);
+    const padding = Math.max(0.5, (hi - lo) * 0.08);
+    lo -= padding;
+    hi += padding;
+    return { lo, hi };
+  };
+  const xs = range(all.map((p) => p.x));
+  const ys = range(all.map((p) => p.y));
+  const px = (v: number) => ((v - xs.lo) / (xs.hi - xs.lo)) * plot.w;
+  const py = (v: number) => plot.h - ((v - ys.lo) / (ys.hi - ys.lo)) * plot.h;
+  const clampY = (v: number) => Math.min(ys.hi, Math.max(ys.lo, v));
+  const focus = hover ? series.find((s) => s.key === hover.key) : undefined;
+  const point = focus && hover ? focus.points[hover.i] : undefined;
+
+  return (
+    <div ref={box}>
+      <svg viewBox={`0 0 ${W} ${height}`} className="w-full" style={{ height }} role="img" aria-label={label} onMouseLeave={() => setHover(null)}>
+        <g transform={`translate(${pad.left},${pad.top})`}>
+          {ticksOf(ys.lo, ys.hi).map((v) => (
+            <g key={`y${v}`}>
+              <line x1={0} x2={plot.w} y1={py(v)} y2={py(v)} stroke="var(--border)" />
+              <text x={-8} y={py(v)} textAnchor="end" dominantBaseline="middle" fill="var(--muted-2)" fontSize={10}>
+                {compact(v)}
+              </text>
+            </g>
+          ))}
+          {ticksOf(xs.lo, xs.hi, 6).map((v) => (
+            <g key={`x${v}`}>
+              <line x1={px(v)} x2={px(v)} y1={0} y2={plot.h} stroke="var(--border)" opacity={0.5} />
+              <text x={px(v)} y={plot.h + 16} textAnchor="middle" fill="var(--muted-2)" fontSize={10}>
+                {compact(v)}
+              </text>
+            </g>
+          ))}
+          <text x={plot.w / 2} y={plot.h + 32} textAnchor="middle" fill="var(--muted)" fontSize={10}>
+            {xLabel}
+          </text>
+          {series.map((s) =>
+            s.trend ? (
+              <line
+                key={`t-${s.key}`}
+                x1={0}
+                x2={plot.w}
+                y1={py(clampY(s.trend.slope * xs.lo + s.trend.intercept))}
+                y2={py(clampY(s.trend.slope * xs.hi + s.trend.intercept))}
+                stroke={s.color}
+                strokeWidth={1.5}
+                strokeDasharray="2 4"
+                strokeLinecap="round"
+              />
+            ) : null,
+          )}
+          {series.map((s) =>
+            s.points.map((p, i) => {
+              const on = hover?.key === s.key && hover.i === i;
+              return (
+                <circle
+                  key={`${s.key}-${i}`}
+                  cx={px(p.x)}
+                  cy={py(p.y)}
+                  r={on ? 6 : 4}
+                  fill={s.color}
+                  fillOpacity={on ? 1 : 0.7}
+                  stroke="var(--surface)"
+                  strokeWidth={1}
+                  onMouseEnter={() => setHover({ key: s.key, i })}
+                />
+              );
+            }),
+          )}
+        </g>
+      </svg>
+      <Readout>
+        {point && focus ? (
+          <>
+            <span className="text-muted-2">{point.tag}</span>
+            <span className="text-muted">
+              {xLabel} <span className="text-foreground">{compact(point.x)}</span>
+            </span>
+            <span className="flex items-center gap-1.5 text-muted">
+              <span aria-hidden className="inline-block size-2 rounded-sm" style={{ background: focus.color }} />
+              {focus.label} <span className="text-foreground">{compact(point.y)}</span>
+            </span>
+          </>
+        ) : (
+          series
+            .filter((s) => s.trend)
+            .map((s) => (
+              <span key={s.key} className="flex items-center gap-1.5 text-muted">
+                <span aria-hidden className="inline-block size-2 rounded-sm" style={{ background: s.color }} />
+                {s.label} <span className="text-foreground">r² {Math.round(s.trend!.r2 * 100) / 100}</span>
+              </span>
+            ))
+        )}
+      </Readout>
+    </div>
+  );
+}
+
+/** Shares of a whole, as a pie or a ring, with each slice's value and percentage beside it. */
+export function PieChart({
+  slices,
+  donut = false,
+  height = 200,
+  label,
+  empty,
+}: {
+  slices: (Series & { value: number })[];
+  donut?: boolean;
+  height?: number;
+  label: string;
+  empty: string;
+}) {
+  const [hover, setHover] = useState<string | null>(null);
+  const shown = slices.filter((s) => s.value > 0);
+  const total = shown.reduce((n, s) => n + s.value, 0);
+  if (total <= 0) return <Empty text={empty} />;
+  const r = height / 2 - 8;
+  const inner = donut ? r * 0.58 : 0;
+  const c = height / 2;
+  const point = (angle: number, radius: number) => [c + radius * Math.sin(angle), c - radius * Math.cos(angle)];
+  const turn = (v: number) => (v / total) * Math.PI * 2;
+  const arcs = shown.map((s, i) => {
+    const start = turn(shown.slice(0, i).reduce((n, x) => n + x.value, 0));
+    const sweep = turn(s.value);
+    return { s, start, end: start + sweep, sweep };
+  });
+  const ring = (R: number, back = false) =>
+    `M${c},${c - R} A${R},${R} 0 1 ${back ? 0 : 1} ${c},${c + R} A${R},${R} 0 1 ${back ? 0 : 1} ${c},${c - R} Z`;
+  const arc = ({ start, end, sweep }: (typeof arcs)[number], grow: number) => {
+    const R = r + grow;
+    // A whole circle can't be drawn as one arc.
+    if (sweep >= Math.PI * 2 - 1e-6) return inner > 0 ? `${ring(R)} ${ring(inner, true)}` : ring(R);
+    const large = sweep > Math.PI ? 1 : 0;
+    const [x1, y1] = point(start, R);
+    const [x2, y2] = point(end, R);
+    if (inner === 0) return `M${c},${c} L${x1},${y1} A${R},${R} 0 ${large} 1 ${x2},${y2} Z`;
+    const [x3, y3] = point(end, inner);
+    const [x4, y4] = point(start, inner);
+    return `M${x1},${y1} A${R},${R} 0 ${large} 1 ${x2},${y2} L${x3},${y3} A${inner},${inner} 0 ${large} 0 ${x4},${y4} Z`;
+  };
+  const focus = shown.find((s) => s.key === hover);
+
+  return (
+    <div className="flex flex-wrap items-center gap-6">
+      <svg viewBox={`0 0 ${height} ${height}`} style={{ width: height, height }} role="img" aria-label={label} className="shrink-0">
+        {arcs.map((a) => (
+          <path
+            key={a.s.key}
+            d={arc(a, hover === a.s.key ? 4 : 0)}
+            fill={a.s.color}
+            fillRule="evenodd"
+            stroke="var(--surface)"
+            strokeWidth={1.5}
+            opacity={hover === null || hover === a.s.key ? 1 : 0.55}
+            onMouseEnter={() => setHover(a.s.key)}
+            onMouseLeave={() => setHover(null)}
+          />
+        ))}
+        {donut && (
+          <text x={c} y={c} textAnchor="middle" dominantBaseline="middle" fill="var(--foreground)" fontSize={13}>
+            {focus ? `${Math.round((focus.value / total) * 100)}%` : compact(total)}
+          </text>
+        )}
+      </svg>
+      <ul className="min-w-0 flex-1 space-y-1 text-[11px]">
+        {shown.map((s) => (
+          <li
+            key={s.key}
+            onMouseEnter={() => setHover(s.key)}
+            onMouseLeave={() => setHover(null)}
+            className={`flex items-center gap-2 ${hover === s.key ? "text-foreground" : "text-muted"}`}
+          >
+            <span aria-hidden className="inline-block size-2 shrink-0 rounded-sm" style={{ background: s.color }} />
+            <span className="min-w-0 flex-1 truncate">{s.label}</span>
+            <span className="tabular-nums text-foreground">{compact(s.value)}</span>
+            <span className="w-9 text-right tabular-nums text-muted-2">{Math.round((s.value / total) * 100)}%</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }

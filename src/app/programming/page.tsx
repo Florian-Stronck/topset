@@ -81,24 +81,24 @@ export default async function ProgrammingPage({
             />
           </HistoryProvider>
         ) : (
-          <EmptyState athleteId={athlete.id} athleteName={athlete.name} readOnly={!canEdit(athlete.share)} />
+          <EmptyState athlete={athlete} meets={meetData} readOnly={!canEdit(athlete.share)} />
         )}
       </main>
     </div>
   );
 }
 
-function EmptyState({ athleteId, athleteName, readOnly }: { athleteId: string; athleteName: string; readOnly: boolean }) {
+function EmptyState({ athlete, meets, readOnly }: { athlete: Parameters<typeof NewProgramButton>[0]["athlete"]; meets: MeetSummary[]; readOnly: boolean }) {
   return (
     <div className="grid flex-1 place-items-center">
       <div className="text-center">
-        <div className="text-[14px] text-foreground">No programs yet for {athleteName}.</div>
+        <div className="text-[14px] text-foreground">No programs yet for {athlete.name}.</div>
         <div className="mt-1 text-[12px] text-muted">
           {t("Create one to start programming for them.")}
         </div>
         {!readOnly && (
           <div className="mt-4 flex justify-center gap-2">
-            <NewProgramButton athleteId={athleteId} />
+            <NewProgramButton athlete={athlete} meets={meets} />
           </div>
         )}
       </div>

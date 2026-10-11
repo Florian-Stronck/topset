@@ -7,6 +7,8 @@ import { TrackingShell, type TrackingView } from "@/components/tracking/Tracking
 import { InjuryPanel } from "@/components/InjuryPanel";
 import { deleteCoachInjury, saveCoachInjury } from "@/app/tracking/actions";
 import { WellnessView } from "@/components/tracking/WellnessView";
+import { ChartBoard } from "@/components/tracking/ChartBoard";
+import { computeMetrics } from "@/lib/metrics";
 import { weightToMake } from "@/lib/bodyweight";
 import { today as calendarToday, ymdOf } from "@/lib/dates";
 import { blockWindow, startOfDay } from "@/lib/overview";
@@ -14,6 +16,7 @@ import { liftProgress } from "@/lib/progress";
 import { exerciseHistory } from "@/lib/exercise-history";
 import {
   getAllPhasesForAthlete,
+  getAllPhasesWithLogs,
   getBodyweights,
   getCoach,
   getCheckins,
@@ -49,7 +52,7 @@ export default async function TrackingPage({
   if (coach.athletes.length === 0) redirect("/athletes");
 
   const view: TrackingView =
-    params.view === "progress" || params.view === "wellness" ? params.view : "review";
+    params.view === "progress" || params.view === "wellness" || params.view?.startsWith("c:") ? (params.view as TrackingView) : "review";
   const show = REVIEW_FILTERS.includes(params.show as ReviewFilter) ? (params.show as ReviewFilter) : null;
 
   const athlete = coach.athletes.find((a) => a.id === params.athlete) ?? coach.athletes[0];
@@ -111,8 +114,35 @@ export default async function TrackingPage({
     );
   }
 
+  /** A tab of the coach's own charts: every measure on file for the athlete, on one calendar. */
+  async function charts(tabId: string) {
+    const [withLogs, weights, nutrition, targets, injuries] = await Promise.all([
+      getAllPhasesWithLogs(athlete.id),
+      getBodyweights([athlete.id]),
+      getNutrition([athlete.id]),
+      getTargetSpans(athlete.id),
+      injuriesFor(athlete.id),
+    ]);
+    const metrics = computeMetrics({
+      phases: withLogs,
+      athlete,
+      bodyweights: weights.get(athlete.id) ?? [],
+      nutrition: nutrition.get(athlete.id) ?? [],
+      targets,
+      questions: checkins.questions,
+      answers: checkins.answers,
+      injuries,
+      moves: moveMap,
+      today,
+    });
+    const span = blockData ? { from: ymdOf(blockData.startDate), to: addDays(ymdOf(blockData.startDate), blockData.weeks.length * 7 - 1) } : null;
+    return <ChartBoard key={`${athlete.id}-${tabId}`} tabId={tabId} athlete={{ id: athlete.id, name: athlete.name }} metrics={metrics} today={today} phase={span} />;
+  }
+
   let body: React.ReactNode;
-  if (view === "wellness") {
+  if (view.startsWith("c:")) {
+    body = await charts(view.slice(2));
+  } else if (view === "wellness") {
     body = await wellness();
   } else if (!blockData) {
     body = (
@@ -163,7 +193,7 @@ export default async function TrackingPage({
 
   // Shared to view: nothing changes. To review: the Review view's marks and notes do, the
   // rest stays as it is. Progress has nothing to change, so its charts keep their hover.
-  const lock = view !== "progress" && (athlete.share.role === "view" || (athlete.share.role === "review" && view === "wellness"));
+  const lock = view !== "progress" && !view.startsWith("c:") && (athlete.share.role === "view" || (athlete.share.role === "review" && view === "wellness"));
 
   return (
     <div className="flex h-screen">

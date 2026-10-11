@@ -237,7 +237,10 @@ function ExerciseItem({
   const planned = Math.max(1, row.sets ?? 1);
   const logOf = (i: number) => row.logs.find((l) => l.setIndex === i) ?? null;
   const loads = row.loads.filter((l): l is number => l !== null);
-  const loadOf = (i: number) => row.loads[i] ?? loads[loads.length - 1] ?? null;
+  // Nothing prescribed falls back on what was done last time, set for set.
+  const lastSet = (i: number) => row.lastTime?.sets[Math.min(i, row.lastTime.sets.length - 1)] ?? null;
+  const loadOf = (i: number) => row.loads[i] ?? loads[loads.length - 1] ?? lastSet(i)?.weight ?? null;
+  const repsOf = (i: number) => row.reps ?? lastSet(i)?.reps ?? null;
   const target = loads.length === 0 ? null : loads[loads.length - 1];
   const finished = finishedRow(row);
   const doneLogs = row.logs.filter((l) => l.done);
@@ -255,7 +258,7 @@ function ExerciseItem({
   const asWritten = (i: number): SetPatch => {
     const log = logOf(i);
     if (timed) return { done: true, seconds: log?.seconds ?? row.duration };
-    return { done: true, weight: log?.weight ?? loadOf(i), reps: log?.reps ?? row.reps };
+    return { done: true, weight: log?.weight ?? loadOf(i), reps: log?.reps ?? repsOf(i) };
   };
 
   /** The timer ran a round: it goes on the first set not yet done, or a new one. */
@@ -359,6 +362,12 @@ function ExerciseItem({
             </div>
           )}
           {row.coachNotes && <p className="mt-2 whitespace-pre-line text-[13px] italic text-muted">{row.coachNotes}</p>}
+          {row.lastTime && (
+            <p className="mt-2 text-[12px] tabular-nums text-muted-2">
+              {t("Last time · {date}", { date: row.lastTime.date })}:{" "}
+              <span className="text-muted">{row.lastTime.sets.map(formatSet).join(" · ")}</span>
+            </p>
+          )}
 
           <Label>{t("EFFORT")}</Label>
           <div className="grid grid-cols-2 gap-1 rounded-2xl border border-border bg-surface p-1">
@@ -399,7 +408,7 @@ function ExerciseItem({
                   index={i}
                   log={log}
                   load={loadOf(i)}
-                  reps={row.reps}
+                  reps={repsOf(i)}
                   duration={row.duration}
                   unit={u}
                   effort={effort}

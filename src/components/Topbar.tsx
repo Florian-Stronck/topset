@@ -26,6 +26,8 @@ import { describeGap, formatDate, overlapsSettled, phaseGaps, programOverlaps, s
 import { activeSettings, phaseName, type ExportKind } from "@/lib/settings";
 import { useSettings } from "@/components/SettingsProvider";
 import { WEEKDAYS } from "@/lib/types";
+import { ICON } from "@/components/Sidebar";
+import type { MeetSummary } from "@/lib/competition";
 import { SHELL_MAX_WIDTH } from "@/lib/layout";
 import type { PhaseSummary, ProgramSummary } from "@/lib/queries";
 import type { AthleteData } from "@/lib/types";
@@ -164,6 +166,7 @@ export function Topbar({
   view,
   onView,
   week,
+  meets,
 }: {
   programs: ProgramSummary[];
   program: ProgramSummary;
@@ -176,6 +179,7 @@ export function Topbar({
   onView: (view: "phase" | "program") => void;
   /** The week open in the grid, for "print this week". */
   week: number;
+  meets: MeetSummary[];
 }) {
   const router = useRouter();
   const settingsRef = useRef<HTMLButtonElement>(null);
@@ -638,7 +642,7 @@ export function Topbar({
                   { label: t("Phase settings…"), onSelect: () => onPanel("phase-settings") },
                 ]);
               }}
-              className={`grid size-8 place-items-center rounded-full border text-[14px] leading-none ${
+              className={`grid size-8 place-items-center rounded-md border text-[14px] leading-none ${
                 panel !== null && panel !== "delete-phase"
                   ? "border-accent/50 text-accent"
                   : "border-border text-muted hover:border-accent hover:text-accent"
@@ -647,7 +651,8 @@ export function Topbar({
               ⋯
             </button>
             <NewProgramButton
-              athleteId={athlete.id}
+              athlete={athlete}
+              meets={meets}
               anchorRef={panelAnchor}
               align={panelAlign}
               open={panel === "new"}
@@ -700,14 +705,31 @@ export function Topbar({
   );
 }
 
+const NEW_MAXES = [
+  { key: "squat1RM", label: "SQUAT" },
+  { key: "bench1RM", label: "BENCH" },
+  { key: "dead1RM", label: "DEADLIFT" },
+] as const;
+
+type NewPhase = { phase: string; weeks: number };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A new program with as many phases as the coach lays out, back to back from the start
+ * date. Every phase starts from the maxes here — the athlete's card unless changed.
+ */
 export function NewProgramButton({
-  athleteId,
+  athlete,
+  meets,
   open: controlledOpen,
   onOpenChange,
   anchorRef,
   align = "right",
 }: {
-  athleteId: string;
+  athlete: Pick<AthleteData, "id" | "name" | "squat1RM" | "bench1RM" | "dead1RM">;
+  /** Marked on the phase each lands in; those weeks are created locked. */
+  meets: MeetSummary[];
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   /** Opens under this instead of a button of its own — the topbar's ⋯ menu. */
@@ -720,22 +742,48 @@ export function NewProgramButton({
   const setOpen = onOpenChange ?? setUncontrolledOpen;
   const [pending, setPending] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const [form, setForm] = useState({
-    name: "",
-    phase: "",
-    startDate: new Date().toISOString().slice(0, 10),
-    weeks: activeSettings().programWeeks,
-  });
+  const card = () =>
+    Object.fromEntries(NEW_MAXES.map((m) => [m.key, athlete[m.key] === null ? "" : String(athlete[m.key])]));
+  const fresh = (): NewPhase[] => {
+    const { programPhases, programWeeks, phaseWeeks } = activeSettings();
+    return Array.from({ length: programPhases }, (_, i) => ({ phase: "", weeks: i === 0 ? programWeeks : phaseWeeks }));
+  };
+  const [name, setName] = useState("");
+  const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [phases, setPhases] = useState<NewPhase[]>(fresh);
+  const [maxes, setMaxes] = useState<Record<string, string>>(card);
+  // When phase i starts; phaseStart(phases.length) is the day after the last one ends.
+  const phaseStart = (i: number) =>
+    Date.parse(snapStart(startDate) || today().toISOString().slice(0, 10)) +
+    phases.slice(0, i).reduce((n, p) => n + (Math.round(p.weeks) || 1), 0) * 7 * DAY_MS;
+  const meetsIn = (i: number) =>
+    meets.filter((m) => {
+      const at = Date.parse(m.date);
+      return at >= phaseStart(i) && at < phaseStart(i + 1);
+    });
+  const setPhase = (i: number, patch: Partial<NewPhase>) =>
+    setPhases((all) => all.map((p, j) => (j === i ? { ...p, ...patch } : p)));
 
   async function submit() {
     setPending(true);
-    const { phaseId } = await createProgram({ athleteId, ...form });
+    const num = (v: string) => (v.trim() === "" ? null : Number(v));
+    const { phaseId } = await createProgram({
+      athleteId: athlete.id,
+      name,
+      startDate,
+      phases,
+      maxes: { squat1RM: num(maxes.squat1RM), bench1RM: num(maxes.bench1RM), dead1RM: num(maxes.dead1RM) },
+    });
     setPending(false);
     setOpen(false);
-    setForm((f) => ({ ...f, name: "", phase: "" }));
+    setName("");
+    setPhases(fresh());
+    setMaxes(card());
     tutorialDid("program");
-    router.push(phaseHref(athleteId, phaseId));
+    router.push(phaseHref(athlete.id, phaseId));
   }
+
+  const label = "mb-1 text-[10px] tracking-[0.14em] text-muted-2";
 
   return (
     <>
@@ -751,42 +799,146 @@ export function NewProgramButton({
         </button>
       )}
 
-      <Popover open={open} onClose={() => setOpen(false)} anchorRef={anchorRef ?? buttonRef} width={268} align={anchorRef ? align : "left"}>
+      <Popover open={open} onClose={() => setOpen(false)} anchorRef={anchorRef ?? buttonRef} width={380} align={anchorRef ? align : "left"}>
         <div onKeyDown={formKeys(submit, () => setOpen(false), pending)}>
-          <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("NEW PROGRAM")}</div>
+          <div className="text-[11px] tracking-[0.14em] text-muted-2">
+            {t("NEW PROGRAM")} · {athlete.name.toUpperCase()}
+          </div>
 
+          <div className={`mt-3 ${label}`}>{t("PROGRAM")}</div>
           <input
             autoFocus
-            value={form.name}
+            value={name}
             placeholder={t("Program name")}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            className={`mt-2 ${field}`}
+            onChange={(e) => setName(e.target.value)}
+            className={field}
           />
-          <input
-            value={form.phase}
-            placeholder={t("First phase, e.g. {name}", { name: phaseName(0) })}
-            onChange={(e) => setForm({ ...form, phase: e.target.value })}
-            className={`mt-1.5 ${field}`}
-          />
-          <div className="mt-1.5 flex gap-1.5">
-            <input
-              type="date"
-              value={form.startDate}
-              onChange={(e) => setForm({ ...form, startDate: e.target.value })}
-              className={field}
-            />
-            <input
-              type="number"
-              min={1}
-              max={52}
-              value={form.weeks}
-              onChange={(e) => setForm({ ...form, weeks: Number(e.target.value) })}
-              className="w-[68px] rounded border border-border bg-surface px-2 py-1.5 text-[12px] outline-none focus:ring-1 focus:ring-accent/60"
-            />
-          </div>
-          <MondayHint date={form.startDate} />
 
-          <div className="mt-2.5 flex justify-end gap-1.5">
+          <div className="mt-2.5 flex gap-1.5">
+            <div className="min-w-0 flex-1">
+              <div className={label}>{t("FIRST PHASE")}</div>
+              <input
+                value={phases[0].phase}
+                placeholder={phaseName(0)}
+                onChange={(e) => setPhase(0, { phase: e.target.value })}
+                className={field}
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className={label}>{t("STARTS")}</div>
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={field} />
+            </div>
+            <div className="w-[68px]">
+              <div className={label}>{t("WEEKS")}</div>
+              <input
+                type="number"
+                min={1}
+                max={52}
+                value={phases[0].weeks}
+                onChange={(e) => setPhase(0, { weeks: Number(e.target.value) })}
+                className={field}
+              />
+            </div>
+          </div>
+          <MondayHint date={startDate} />
+
+          <div className="mt-2.5 flex items-baseline justify-between">
+            <div className={label}>{t("MAXES")}</div>
+            <div className="text-[11px] text-muted-2">{t("from {name}’s card", { name: athlete.name.split(" ")[0] })}</div>
+          </div>
+          <div className="flex gap-1.5">
+            {NEW_MAXES.map((m) => (
+              <label key={m.key} className="min-w-0 flex-1">
+                <div className="mb-0.5 text-[10px] text-muted-2">{t(m.label)}</div>
+                <input
+                  type="number"
+                  min={0}
+                  value={maxes[m.key]}
+                  placeholder="—"
+                  onChange={(e) => setMaxes({ ...maxes, [m.key]: e.target.value })}
+                  className={field}
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="mt-3 border-l border-border pl-3">
+            <div className="text-[12px] font-semibold text-foreground">{name.trim() || t("Program name")}</div>
+            {phases.map((p, i) => (
+              <div key={i} className="group mt-1 flex items-center gap-1.5 text-[12px] text-muted">
+                {/* The phase's marker; on the added phases it turns into their remove button. */}
+                <button
+                  type="button"
+                  disabled={i === 0}
+                  title={i === 0 ? undefined : t("Remove phase")}
+                  onClick={() => setPhases((all) => all.filter((_, j) => j !== i))}
+                  className="grid size-3 shrink-0 place-items-center enabled:hover:text-accent"
+                >
+                  <span className={`grid place-items-center ${i > 0 ? "group-hover:hidden" : ""}`}>
+                    {meetsIn(i).length > 0 ? (
+                      <svg
+                        viewBox="0 0 16 16"
+                        className="size-3 text-pr"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <title>{meetsIn(i).map((m) => `${m.name} · ${formatDate(m.date)}`).join(", ")}</title>
+                        {ICON.competition}
+                      </svg>
+                    ) : (
+                      <span className="size-1.5 rounded-[2px] bg-accent" />
+                    )}
+                  </span>
+                  {i > 0 && <span className="hidden text-[13px] leading-none group-hover:block">×</span>}
+                </button>
+                {i === 0 ? (
+                  <span className="flex-1">
+                    {p.phase.trim() || phaseName(0)} · {t(p.weeks === 1 ? "{n} week" : "{n} weeks", { n: p.weeks })}
+                  </span>
+                ) : (
+                  <>
+                    {/* Reads like the first row — "Strength · 4 weeks" — but each part is editable. */}
+                    <input
+                      value={p.phase}
+                      placeholder={phaseName(i)}
+                      size={Math.max(1, (p.phase || phaseName(i)).length)}
+                      onChange={(e) => setPhase(i, { phase: e.target.value })}
+                      className="min-w-0 bg-transparent text-muted outline-none [field-sizing:content] placeholder:text-muted"
+                    />
+                    <span>·</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={52}
+                      value={p.weeks}
+                      onChange={(e) => setPhase(i, { weeks: Number(e.target.value) })}
+                      // A click picks the whole number, so typing replaces it; the arrows (shown on hover) step it.
+                      onFocus={(e) => e.target.select()}
+                      style={{ width: `calc(${String(p.weeks).length + 1}ch + 16px)` }}
+                      className="rounded bg-transparent pl-1 outline-none hover:bg-surface-3 focus:bg-surface-3 [&::-webkit-inner-spin-button]:opacity-0 hover:[&::-webkit-inner-spin-button]:opacity-100 focus:[&::-webkit-inner-spin-button]:opacity-100"
+                    />
+                    <span className="flex-1">{t(p.weeks === 1 ? "week" : "weeks")}</span>
+                  </>
+                )}
+                <span className="w-[72px] shrink-0 text-right text-[11px] text-muted-2">{formatDate(new Date(phaseStart(i)))}</span>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setPhases((all) => [...all, { phase: "", weeks: activeSettings().phaseWeeks }])}
+              className="mt-1.5 text-[11px] text-muted-2 hover:text-accent"
+            >
+              + {t("Add phase")}
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] text-muted-2">
+            {t("Ends {date}", { date: formatDate(new Date(phaseStart(phases.length) - DAY_MS), true) })}
+          </p>
+
+          <div className="mt-3 flex justify-end gap-1.5">
             <button
               type="button"
               onClick={() => setOpen(false)}
@@ -798,9 +950,9 @@ export function NewProgramButton({
               type="button"
               disabled={pending}
               onClick={submit}
-              className="rounded bg-accent px-2.5 py-1 text-[11px] font-medium text-white disabled:opacity-60"
+              className="rounded bg-accent px-3 py-1.5 text-[12px] font-medium text-white disabled:opacity-60"
             >
-              {pending ? t("Creating…") : t("Create")}
+              {pending ? t("Creating…") : t("Create program")}
             </button>
           </div>
         </div>

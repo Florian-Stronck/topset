@@ -353,7 +353,9 @@ async function prepareDatabase(file) {
     // in WAL a read no longer waits on a write (or the other way round).
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
-    migrate(db, migrationsDir);
+    // dev.db is built by `prisma db push`: it has the tables but no migration ledger, so
+    // replaying the migrations over it fails on the first CREATE TABLE.
+    if (!dev) migrate(db, migrationsDir);
     ensureCoach(db);
     applyInstallerChoices(db, file);
   } finally {
@@ -444,43 +446,88 @@ async function start() {
 
 const UPDATE_EVERY_MS = 4 * 60 * 60 * 1000;
 
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
 /**
- * Installed copies check GitHub for new releases and ask before downloading anything. Only
- * the changed parts of the installer come down (electron-builder's blockmaps), and it
+ * A message in the app's own colours instead of the Windows dialog. Resolves with the index
+ * of the button pressed; closing the window (Esc, the X) answers the last button, which is
+ * always the "no" one. Buttons are links to topset-dialog:<n>, caught before they navigate.
+ */
+function showDialog({ message, detail, buttons = ["OK"] }) {
+  return new Promise((resolve) => {
+    const win = new BrowserWindow({
+      parent: window ?? undefined,
+      modal: !!window,
+      width: 420,
+      height: 180,
+      useContentSize: true,
+      show: false,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      backgroundColor: "#121216",
+      title: "Topset",
+      icon: path.join(__dirname, "icon.ico"),
+    });
+    win.removeMenu();
+    let answer = buttons.length - 1;
+    const actions = buttons
+      .map((b, i) => `<a href="topset-dialog:${i}" class="${i === 0 ? "primary" : ""}">${escapeHtml(b)}</a>`)
+      .join("");
+    const html = `<!doctype html><meta charset="utf-8"><style>
+      *{box-sizing:border-box}
+      body{margin:0;padding:22px 24px 20px;background:#121216;color:#e8e8ec;font:13px/1.5 ui-sans-serif,system-ui,"Segoe UI",sans-serif;-webkit-user-select:none;user-select:none;overflow:hidden}
+      .mark{font-size:12px;font-weight:700;letter-spacing:-.02em;color:#8b8b98;margin-bottom:12px}.mark span{color:#e5365a}
+      h1{margin:0 0 6px;font-size:15px;font-weight:600;letter-spacing:-.01em}
+      p{margin:0;color:#8b8b98}
+      .actions{display:flex;flex-direction:row-reverse;gap:8px;margin-top:20px}
+      a{padding:6px 14px;border-radius:6px;border:1px solid #26262e;background:#17171c;color:#e8e8ec;text-decoration:none;outline:none}
+      a:hover{background:#1e1e24}a:focus-visible{border-color:#e5365a}
+      a.primary{background:#e5365a;border-color:#e5365a;color:#fff}a.primary:hover{background:#ee4668}
+    </style><body><div class="mark"><span>T</span>opset</div><h1>${escapeHtml(message)}</h1>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}<div class="actions">${actions}</div>`;
+    win.webContents.on("will-navigate", (event, url) => {
+      event.preventDefault();
+      const n = /^topset-dialog:(\d+)$/.exec(url);
+      if (n) {
+        answer = Number(n[1]);
+        win.close();
+      }
+    });
+    win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    win.on("closed", () => resolve(answer));
+    win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(async () => {
+      const h = await win.webContents.executeJavaScript("document.body.scrollHeight");
+      win.setContentSize(420, h);
+      win.show();
+    });
+  });
+}
+
+/**
+ * Installed copies check GitHub for new releases and download them in the background, then
+ * ask only whether to restart now. Only the changed parts of the installer come down (electron-builder's blockmaps), and it
  * installs over the existing copy; the data in %APPDATA%\Topset is never touched. Only an
  * installed copy has app-update.yml, so dev and the old zip folders never check.
  */
 function watchForUpdates() {
   if (dev || !fs.existsSync(path.join(process.resourcesPath, "app-update.yml"))) return;
   const { autoUpdater } = require("electron-updater");
-  autoUpdater.autoDownload = false;
-  // Once declined, not asked again until the next start.
+  // Comes down silently while the coach works; the only question is when to restart.
+  autoUpdater.autoDownload = true;
+  // Once put off, not asked again until the next start.
   let asked = false;
 
   autoUpdater.on("error", (error) => console.error("[topset] update check failed", error));
-  autoUpdater.on("update-available", async ({ version }) => {
+  autoUpdater.on("update-downloaded", async ({ version }) => {
     if (asked) return;
     asked = true;
-    const { response } = await dialog.showMessageBox(window, {
-      type: "info",
-      buttons: ["Download", "Not now"],
-      defaultId: 0,
-      cancelId: 1,
-      message: `Topset ${version} is available`,
-      detail: `You have ${app.getVersion()}. Download it now? It comes down in the background while you keep working.`,
-    });
-    if (response === 0) autoUpdater.downloadUpdate().catch(() => {});
-  });
-  autoUpdater.on("update-downloaded", async ({ version }) => {
-    const { response } = await dialog.showMessageBox(window, {
-      type: "info",
+    const response = await showDialog({
       buttons: ["Restart now", "Later"],
-      defaultId: 0,
-      cancelId: 1,
       message: `Topset ${version} is ready`,
       detail: "Restart to update now, or it installs the next time you close Topset.",
     });
-    if (response === 0) autoUpdater.quitAndInstall();
+    // Silent, then reopen: without these the wizard (oneClick is off) would pop up.
+    if (response === 0) autoUpdater.quitAndInstall(true, true);
   });
 
   const check = () => autoUpdater.checkForUpdates().catch(() => {});
@@ -496,18 +543,17 @@ function watchForUpdates() {
     try {
       const result = await autoUpdater.checkForUpdates();
       if (!result?.isUpdateAvailable) {
-        await dialog.showMessageBox(window, { type: "info", message: "Topset is up to date", detail: `You have ${app.getVersion()}.` });
+        await showDialog({ message: "Topset is up to date", detail: `You have ${app.getVersion()}.` });
       }
     } catch (error) {
-      await dialog.showMessageBox(window, { type: "warning", message: "Could not check for updates", detail: String(error?.message || error) });
+      await showDialog({ message: "Could not check for updates", detail: String(error?.message || error) });
     }
   });
 }
 
 // Until watchForUpdates takes it over: dev and the old zip folders can't update themselves.
 ipcMain.handle("check-for-updates", () =>
-  dialog.showMessageBox(window, {
-    type: "info",
+  showDialog({
     message: "This copy doesn't update itself",
     detail: "Only an installed Topset checks for updates. Download the installer from the Releases page.",
   }),

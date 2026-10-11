@@ -25,7 +25,7 @@ type Athlete = { id: string; name: string; share?: AthleteShareInfo };
 
 /** Small enough to read at 16px, and drawn rather than lettered so a collapsed rail
  *  still says what each screen is. */
-const ICON: Record<string, React.ReactNode> = {
+export const ICON: Record<string, React.ReactNode> = {
   overview: (
     <>
       <rect x="2" y="2" width="5" height="5" rx="1" />

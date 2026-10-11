@@ -282,6 +282,31 @@ export async function getAllPhasesForAthlete(athleteId: string) {
   });
 }
 
+/** The same, with every set logged — for the custom charts, which count sets and PR flags. */
+export async function getAllPhasesWithLogs(athleteId: string) {
+  return prisma.block.findMany({
+    where: { athleteId },
+    orderBy: { startDate: "asc" },
+    include: {
+      program: { select: { id: true, name: true } },
+      weeks: {
+        orderBy: { order: "asc" },
+        include: {
+          days: {
+            orderBy: { index: "asc" },
+            include: {
+              rows: {
+                orderBy: { order: "asc" },
+                include: { logs: { orderBy: { setIndex: "asc" }, select: { weight: true, reps: true, rpe: true, rir: true, done: true, pr: true } } },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
 export async function getRoster() {
   const coach = await prisma.coach.findFirst({ where: await myCoach() });
   if (!coach) throw new Error("No coach found — run `npm run db:seed`.");

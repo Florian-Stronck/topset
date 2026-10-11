@@ -47,6 +47,51 @@ export type CustomExercise = {
   aliases: string[];
 };
 
+/** One measure on a custom chart: a metric id from `lib/metrics`, drawn its own way. */
+export type ChartMetric = {
+  id: string;
+  /** How its days are pooled into a week, or into one slice of a pie. */
+  agg?: "avg" | "sum" | "max" | "min" | "last";
+  color?: string;
+  /** What the coach calls it on this chart; the measure's own name otherwise. */
+  label?: string;
+  type?: "line" | "bar" | "area" | "dots";
+  axis?: "left" | "right";
+  dashed?: boolean;
+  /** The straight line that best fits it, over the chart's range. */
+  trend?: boolean;
+  /** Before combo charts: drawn as bars on their own scale. */
+  bars?: boolean;
+};
+
+/** A chart the coach built or took from the library. */
+export type ChartSpec = {
+  id: string;
+  title: string;
+  /**
+   * "scatter" plots the first measure across and the rest up. "line" and "stacked" are
+   * charts saved before combo charts, read as combos.
+   */
+  kind: "combo" | "pie" | "donut" | "scatter" | "line" | "stacked";
+  metrics: ChartMetric[];
+  by: "day" | "week";
+  /** Days back from today, or the phase open in Tracking, or everything logged. */
+  range: number | "phase" | "all";
+  ref?: { value: number; label: string } | null;
+  wide?: boolean;
+  /** Bars on the same axis stacked, rather than side by side. */
+  stack?: boolean;
+  /** Fixed ends for an axis; left out, it fits the values. */
+  left?: { min?: number | null; max?: number | null };
+  right?: { min?: number | null; max?: number | null };
+  /** The value written over each bar and point. */
+  labels?: boolean;
+  /** Taller, for a chart worth reading closely. */
+  tall?: boolean;
+};
+
+export type ChartTab = { id: string; name: string; charts: ChartSpec[] };
+
 export type CoachSettings = {
   // Units and numbers
   defaultUnit: Unit;
@@ -70,6 +115,8 @@ export type CoachSettings = {
     intensityType: IntensityType;
     intensity: number;
   };
+  /** How many phases the new-program form starts with. */
+  programPhases: number;
   programWeeks: number;
   phaseWeeks: number;
   /** Names given to a program's phases in order; the last repeats. */
@@ -117,6 +164,11 @@ export type CoachSettings = {
   meetScore: "dots" | "gl";
   pr: { basis: "e1rm" | "weight"; highlight: boolean };
   needsProgramWeeks: number;
+  /**
+   * Tracking's own chart tabs: the coach's, and for an athlete given their own set, theirs
+   * (null puts the athlete back on the coach's).
+   */
+  charts: { tabs: ChartTab[]; athletes: Record<string, ChartTab[] | null> };
 
   // Data
   backup: { enabled: boolean; everyDays: number; keep: number; folder: string | null };
@@ -146,6 +198,7 @@ export const DEFAULTS: CoachSettings = {
   decimals: 1,
 
   newRow: { tier: "ACCESSORY", target: "General", sets: 3, reps: 8, intensityType: "RPE", intensity: 7 },
+  programPhases: 1,
   programWeeks: 4,
   phaseWeeks: 4,
   phaseNames: ["Volume", "Strength", "Peaking"],
@@ -195,6 +248,7 @@ export const DEFAULTS: CoachSettings = {
   meetScore: "dots",
   pr: { basis: "e1rm", highlight: true },
   needsProgramWeeks: 2,
+  charts: { tabs: [], athletes: {} },
 
   backup: { enabled: true, everyDays: 1, keep: 14, folder: null },
   athleteAppUrl: "",

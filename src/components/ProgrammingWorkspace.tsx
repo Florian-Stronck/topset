@@ -687,6 +687,7 @@ export function ProgrammingWorkspace({
         view={view}
         onView={setView}
         week={activeWeek}
+        meets={meets}
       />
 
       {injuries.length > 0 && (

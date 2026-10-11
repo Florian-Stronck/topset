@@ -157,6 +157,13 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "checkins-low-only", group: "Chart", title: "Only low-readiness days: on / off" },
   { id: "readiness-per-question", group: "Chart", title: "Readiness as one score / per question" },
   { id: "bodyweight-add", group: "Chart", title: "Add a weigh-in" },
+  { id: "nutrition-add", group: "Chart", title: "Log a day's nutrition" },
+  { id: "chart-tab-new", group: "Tracking view", title: "New chart tab" },
+  { id: "chart-tab-rename", group: "Tracking view", title: "Rename this chart tab" },
+  { id: "chart-tab-remove", group: "Tracking view", title: "Remove this chart tab" },
+  { id: "chart-tabs-own", group: "Tracking view", title: "Own chart tabs for this athlete: on / off" },
+  { id: "chart-library", group: "Chart", title: "Add a chart from the library" },
+  { id: "chart-add", group: "Chart", title: "Build a chart" },
 
   { id: "meet-new", group: "Competition", title: "New meet…" },
   { id: "meet-rename", group: "Competition", title: "Rename meet" },

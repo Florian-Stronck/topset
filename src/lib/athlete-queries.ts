@@ -3,11 +3,12 @@ import { formatPrescription, formatRamp, maxesOf, resolveDay } from "@/lib/inten
 import { bodyweightEntry } from "@/lib/bodyweight";
 import { prisma } from "@/lib/prisma";
 import { ymdOf } from "@/lib/dates";
+import { shortDate } from "@/lib/athlete-format";
 import { answerDay, asksOn, nutrientOf, questionData, type CheckinAnswerData, type CheckinQuestionData, type PhotoView } from "@/lib/checkins";
 import { nutritionId, targetOn, targetSpan, type NutritionTarget, type TargetSpan } from "@/lib/nutrition";
 import { byWhen, meetingData, type MeetingData } from "@/lib/meetings";
 import { moveData, movesMap, type MoveData } from "@/lib/moves";
-import { sessionsOf, type Session } from "@/lib/schedule";
+import { dateOfDay, sessionsOf, type Session } from "@/lib/schedule";
 import type { SetLogData } from "@/lib/setlog";
 import { retentionDays, type ClipView } from "@/lib/athlete-videos";
 import { presign, storageConfig } from "@/lib/storage";
@@ -110,6 +111,8 @@ export type AthleteRow = {
   logs: SetLogData[];
   /** Videos the athlete sent of it; null when the server has nowhere to keep videos. */
   videos: ClipView[] | null;
+  /** The same exercise the last time it was logged before this day, set by set. */
+  lastTime: { date: string; sets: SetLogData[] } | null;
 };
 
 export type AthleteSession = {
@@ -127,7 +130,56 @@ export type AthleteSession = {
   done: number;
 };
 
-function toSession(s: ScheduledSession, dayRows: DayRow[], athlete: TokenAthlete, clips: Map<string, ClipView[]> | null): AthleteSession {
+/**
+ * The athlete's finished sets, newest first. Names are matched in code, not here: SQLite
+ * compares them case by case, and "Squat" and "squat" are the same lift.
+ * ponytail: capped at the latest 2000 sets; an exercise last done further back shows nothing.
+ */
+async function earlierSets(athleteId: string) {
+  const [logs, moves] = await Promise.all([
+    prisma.setLog.findMany({
+      where: { done: true, row: { day: { week: { block: { athleteId } } } } },
+      orderBy: { loggedAt: "desc" },
+      take: 2000,
+      include: {
+        row: { select: { exercise: true, dayId: true, day: { select: { index: true, week: { select: { order: true, block: { select: { startDate: true } } } } } } } },
+      },
+    }),
+    movesFor(athleteId),
+  ]);
+  const moved = movesMap(moves);
+  // Dated by the session they belong to, not by when they were typed in.
+  return logs.map(({ row, ...log }) => ({
+    name: sameName(row.exercise),
+    ymd: moved.get(row.dayId) ?? dateOfDay(row.day.week.block.startDate, row.day.week.order, row.day.index),
+    log: { ...log, loggedAt: log.loggedAt.toISOString() },
+  }));
+}
+
+type EarlierSet = Awaited<ReturnType<typeof earlierSets>>[number];
+
+const sameName = (exercise: string) => exercise.trim().toLowerCase();
+
+/** The sets of the exercise's latest session before the day, in set order. */
+function lastTimeOf(exercise: string, ymd: string, earlier: EarlierSet[]): AthleteRow["lastTime"] {
+  const name = sameName(exercise);
+  let latest: EarlierSet | null = null;
+  for (const e of earlier) if (e.name === name && e.ymd < ymd && (!latest || e.ymd > latest.ymd)) latest = e;
+  if (!latest) return null;
+  const sets = earlier
+    .filter((e) => e.log.rowId === latest.log.rowId)
+    .map((e) => e.log)
+    .sort((a, b) => a.setIndex - b.setIndex);
+  return { date: shortDate(latest.ymd), sets };
+}
+
+function toSession(
+  s: ScheduledSession,
+  dayRows: DayRow[],
+  athlete: TokenAthlete,
+  clips: Map<string, ClipView[]> | null,
+  earlier: EarlierSet[],
+): AthleteSession {
   const maxes = maxesOf(s.block, athlete);
   const rows = dayRows.filter((r) => r.exercise.trim() !== "");
   const resolved = resolveDay(dayRows, maxes);
@@ -154,6 +206,7 @@ function toSession(s: ScheduledSession, dayRows: DayRow[], athlete: TokenAthlete
       athleteNotes: row.athleteNotes,
       logs: row.logs.map((log) => ({ ...log, loggedAt: log.loggedAt.toISOString() })),
       videos: clips ? (clips.get(row.id) ?? []) : null,
+      lastTime: lastTimeOf(row.exercise, s.ymd, earlier),
     };
   });
 
@@ -200,13 +253,13 @@ export async function meetingsFor(athleteId: string): Promise<MeetingData[]> {
 export async function sessionsInFull(athlete: TokenAthlete, sessions: ScheduledSession[]): Promise<AthleteSession[]> {
   if (sessions.length === 0) return [];
   const byDay = new Map<string, DayRow[]>();
-  // The athlete's clips are read alongside the rows, not after them: one round trip, not two.
-  const [rows, videos] = await Promise.all([rowsOf(sessions.map((s) => s.day.id)), videosOf(athlete.id)]);
+  // The athlete's clips and earlier sets are read alongside the rows, not after them.
+  const [rows, videos, earlier] = await Promise.all([rowsOf(sessions.map((s) => s.day.id)), videosOf(athlete.id), earlierSets(athlete.id)]);
   for (const row of rows) {
     byDay.set(row.dayId, [...(byDay.get(row.dayId) ?? []), row]);
   }
   const clips = clipsOf(videos, new Set(rows.map((r) => r.id)));
-  return sessions.map((s) => toSession(s, byDay.get(s.day.id) ?? [], athlete, clips));
+  return sessions.map((s) => toSession(s, byDay.get(s.day.id) ?? [], athlete, clips, earlier));
 }
 
 /** How long a link to play a video works: long enough for a session at the gym. */

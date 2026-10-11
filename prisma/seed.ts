@@ -71,6 +71,15 @@ const days: SeedDay[] = [
 
 const WEEKS = 4;
 
+const DEMO_INJURIES = [
+  { area: "low-back", side: null, day: "2026-09-28", endDay: null, severity: 2, note: "Tight after heavy pulls, fine once warm", source: "athlete" },
+  { area: "elbow", side: "L", day: "2026-09-14", endDay: null, severity: 3, note: "Low-bar squats aggravate it", source: "athlete" },
+  { area: "shoulder", side: "R", day: "2026-06-02", endDay: "2026-07-10", severity: 3, note: "Wide-grip bench, moved to close grip", source: "coach" },
+  { area: "knee", side: "R", day: "2026-03-15", endDay: "2026-04-01", severity: 2, note: null, source: "athlete" },
+  { area: "hamstring", side: "L", day: "2025-11-20", endDay: "2026-01-08", severity: 4, note: "Strain on a deadlift single", source: "coach" },
+  { area: "wrist", side: "R", day: "2025-08-04", endDay: "2025-08-18", severity: 1, note: null, source: "athlete" },
+];
+
 async function main() {
   await prisma.coach.deleteMany();
 
@@ -178,6 +187,9 @@ async function main() {
       },
     },
   });
+
+  // A few injuries, open and cleared up, so the body map and its history have something to show.
+  await prisma.injury.createMany({ data: DEMO_INJURIES.map((i) => ({ ...i, athleteId: athlete.id })) });
 
   // A second athlete on the roster, in pounds, so multi-athlete views have
   // something to switch between out of the box.

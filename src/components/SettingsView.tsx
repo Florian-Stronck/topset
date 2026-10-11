@@ -244,6 +244,9 @@ function Programming({ settings, update }: Props) {
       >
         <Switch on={settings.syncWeeks} onChange={(v) => update({ syncWeeks: v })} />
       </Row>
+      <Row label="Phases in a new program">
+        <NumberField value={settings.programPhases} min={1} max={12} onCommit={(v) => update({ programPhases: v ?? 1 })} width={60} />
+      </Row>
       <Row label="Weeks in a new program">
         <NumberField value={settings.programWeeks} min={1} max={52} onCommit={(v) => update({ programWeeks: v ?? 4 })} width={60} />
       </Row>
@@ -763,7 +766,67 @@ function Tracking({ settings, update }: Props) {
       <Row label="Flag “needs a new program”" hint="On the Overview, this many weeks before a program ends.">
         <NumberField value={settings.needsProgramWeeks} min={0} max={12} width={60} suffix={t("weeks")} onCommit={(v) => update({ needsProgramWeeks: v ?? 2 })} />
       </Row>
+      <ChartTabs settings={settings} update={update} />
     </Section>
+  );
+}
+
+/** Tracking's own chart tabs: named, ordered and removed here; their charts are built in Tracking. */
+function ChartTabs({ settings, update }: Props) {
+  const tabs = settings.charts.tabs;
+  const own = Object.values(settings.charts.athletes).filter(Boolean).length;
+  const save = (next: typeof tabs) => update({ charts: { tabs: next } });
+  const move = (i: number, j: number) => {
+    if (j < 0 || j >= tabs.length) return;
+    const next = [...tabs];
+    [next[i], next[j]] = [next[j], next[i]];
+    save(next);
+  };
+  return (
+    <>
+      <Row label="Chart tabs" hint="Your own tabs in Tracking. Add charts to them there, with the + next to the tabs." stacked>
+        {tabs.length === 0 ? (
+          <div className="text-[12px] text-muted-2">{t("None yet.")}</div>
+        ) : (
+          <div className="space-y-1.5">
+            {tabs.map((tab, i) => (
+              <div key={tab.id} className="flex items-center gap-2 text-[12px]">
+                <input
+                  defaultValue={tab.name}
+                  aria-label={t("Tab name")}
+                  onBlur={(e) => {
+                    const name = e.target.value.trim();
+                    if (name && name !== tab.name) save(tabs.map((x) => (x.id === tab.id ? { ...x, name } : x)));
+                  }}
+                  className="w-48 rounded-lg border border-border bg-surface-2 px-2 py-1 outline-none focus:border-accent"
+                />
+                <span className="text-muted-2">{plural(tab.charts.length, "{n} chart", "{n} charts")}</span>
+                <button type="button" onClick={() => move(i, i - 1)} aria-label={t("Move up")} className="ml-auto px-1 text-muted-2 hover:text-foreground">↑</button>
+                <button type="button" onClick={() => move(i, i + 1)} aria-label={t("Move down")} className="px-1 text-muted-2 hover:text-foreground">↓</button>
+                <button
+                  type="button"
+                  onClick={() => window.confirm(t("Remove the tab “{name}” and its charts?", { name: tab.name })) && save(tabs.filter((x) => x.id !== tab.id))}
+                  className="px-1 text-muted-2 hover:text-accent"
+                >
+                  {t("Remove")}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Row>
+      {own > 0 && (
+        <Row label="Athletes with their own chart tabs" hint="Put them back on yours, and their own tabs are gone.">
+          <button
+            type="button"
+            onClick={() => update({ charts: { athletes: Object.fromEntries(Object.keys(settings.charts.athletes).map((id) => [id, null])) } })}
+            className="rounded-full border border-border px-3 py-1 text-[12px] text-muted hover:border-accent hover:text-accent"
+          >
+            {t("Put all {n} back", { n: own })}
+          </button>
+        </Row>
+      )}
+    </>
   );
 }
 

@@ -821,37 +821,63 @@ async function athleteMaxes(athleteId: string) {
   });
 }
 
-/** A program is a name; it is created with its first phase already in it. */
+type Maxes = { squat1RM: number | null; bench1RM: number | null; dead1RM: number | null };
+
+/**
+ * A program is a name; it is created with its phases already in it, one after the other
+ * from the start date. Every phase starts from the same maxes and then keeps its own copy.
+ * A week a meet lands in comes locked, so progression never writes over the taper.
+ */
 export async function createProgram(input: {
   athleteId: string;
   name: string;
-  phase: string;
   startDate: string;
-  weeks: number;
+  phases: { phase: string; weeks: number }[];
+  /** Left out, the athlete's current maxes. */
+  maxes?: Maxes;
 }) {
   assertCoach();
   await loadSettings();
-  const weeks = Math.min(52, Math.max(1, Math.round(input.weeks)));
-  // A phase starts from the athlete's current maxes and then keeps its own copy.
-  const maxes = await athleteMaxes(input.athleteId);
-  const startDate = new Date(snapStart(input.startDate));
+  const max = (v: number | null) => (v !== null && Number.isFinite(v) && v > 0 ? v : null);
+  const maxes = input.maxes
+    ? { squat1RM: max(input.maxes.squat1RM), bench1RM: max(input.maxes.bench1RM), dead1RM: max(input.maxes.dead1RM) }
+    : await athleteMaxes(input.athleteId);
+  const meets = await prisma.meet.findMany({ where: { athleteId: input.athleteId }, select: { date: true } });
+  const DAY = 24 * 60 * 60 * 1000;
+  let start = new Date(snapStart(input.startDate)).getTime();
+
+  const phases = (input.phases.length ? input.phases : [{ phase: "", weeks: 0 }]).map((p, order) => {
+    const weeks = Math.min(52, Math.max(1, Math.round(p.weeks) || 1));
+    const startDate = new Date(start);
+    const days = templateDays(startDate);
+    const from = start;
+    start += weeks * 7 * DAY;
+    return {
+      athleteId: input.athleteId,
+      order,
+      phase: p.phase.trim() || phaseName(order),
+      startDate,
+      ...maxes,
+      weeks: {
+        create: Array.from({ length: weeks }, (_, i) => ({
+          order: i + 1,
+          locked: meets.some((m) => {
+            const at = m.date.getTime() - (from + i * 7 * DAY);
+            return at >= 0 && at < 7 * DAY;
+          }),
+          days: { create: days },
+        })),
+      },
+    };
+  });
 
   const program = await prisma.program.create({
     data: {
       athleteId: input.athleteId,
       name: input.name.trim() || "New program",
-      phases: {
-        create: {
-          athleteId: input.athleteId,
-          order: 0,
-          phase: input.phase.trim() || phaseName(0),
-          startDate,
-          ...maxes,
-          weeks: weeksOf(weeks, templateDays(startDate)),
-        },
-      },
+      phases: { create: phases },
     },
-    include: { phases: true },
+    include: { phases: { orderBy: { order: "asc" } } },
   });
 
   revalidateAll();

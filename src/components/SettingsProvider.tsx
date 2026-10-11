@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { createContext, useContext, useEffect, useState, useTransition } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useTransition } from "react";
 import { updateSettings } from "@/app/settings/actions";
 import { resolveTheme, usePref } from "@/lib/prefs";
 import { mergeSettings, setActiveSettings, type CoachSettings, type SettingsPatch } from "@/lib/settings";
@@ -28,22 +28,34 @@ export function SettingsProvider({
   const router = useRouter();
   const [saving, startTransition] = useTransition();
   const [local, setLocal] = useState<CoachSettings | null>(null);
+  // Changes sent and not yet stored. While any are, a server copy is older than the screen.
+  const inFlight = useRef(0);
+  const [busy, setBusy] = useState(false);
 
-  // A fresh server copy supersedes whatever was shown optimistically.
+  // A fresh server copy supersedes whatever was shown optimistically — once it has everything.
   const [seen, setSeen] = useState(fromServer);
   if (seen !== fromServer) {
     setSeen(fromServer);
-    setLocal(null);
+    if (!busy) setLocal(null);
   }
 
   const settings = local ?? fromServer;
   setActiveSettings(settings);
 
   function update(patch: SettingsPatch) {
-    setLocal(mergeSettings(settings, patch));
+    // Onto the latest change, not this render's copy: two changes in a row both stick.
+    setLocal((prev) => mergeSettings(prev ?? fromServer, patch));
+    inFlight.current++;
+    setBusy(true);
     startTransition(async () => {
-      await updateSettings(patch);
-      router.refresh();
+      try {
+        await updateSettings(patch);
+      } finally {
+        if (--inFlight.current === 0) {
+          setBusy(false);
+          router.refresh();
+        }
+      }
     });
   }
 
