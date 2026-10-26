@@ -288,6 +288,19 @@ const PLAN_TABLES: Record<string, readonly string[]> = {
   ExerciseRow: [],
 };
 
+/**
+ * Columns under a unique index, and a value each can wait at that no other row holds. The
+ * desktop app moves rows into each other's places one at a time (a row inserted or moved
+ * within a day, a week put in between, a progression chain relinked); here they arrive
+ * together, so the rows a push brings first let go of their places, then take the new ones.
+ */
+const SLOTS: Record<string, Record<string, string>> = {
+  Week: { order: "-1 - rowid" },
+  Day: { index: "-1 - rowid" },
+  ExerciseRow: { order: "-1 - rowid", fromId: "NULL" },
+  Attempt: { number: "-1 - rowid" },
+};
+
 /** A stored value in one comparable form, whichever SQLite driver read it. */
 function norm(v: unknown): unknown {
   if (v === undefined || v === null) return null;
@@ -506,6 +519,14 @@ export async function applyPush(
         args: [String(row.name ?? ""), String(row.settings ?? "{}"), coachId],
       });
       continue;
+    }
+    const park = Object.entries(SLOTS[table] ?? {}).filter(([c]) => sent.includes(c));
+    for (let i = 0; park.length && i < upsert.length; i += ROWS_PER_STATEMENT) {
+      const ids = upsert.slice(i, i + ROWS_PER_STATEMENT).map((r) => String(r.id));
+      stmts.push({
+        sql: `UPDATE ${quote(table)} SET ${park.map(([c, v]) => `${quote(c)} = ${v}`).join(", ")} WHERE "id" IN (${ids.map(() => "?").join(", ")})`,
+        args: ids,
+      });
     }
     for (let i = 0; i < upsert.length; i += ROWS_PER_STATEMENT) {
       const chunk = upsert.slice(i, i + ROWS_PER_STATEMENT);
