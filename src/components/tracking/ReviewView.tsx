@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { Select } from "@/components/Select";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { deleteMessage, editMessage, markReviewed, sendMessage } from "@/app/tracking/actions";
 import { AthleteLinkButton } from "@/components/AthleteLink";
 import { Trophy } from "@/components/CheckinIcon";
@@ -9,13 +10,13 @@ import { formatAnswer, LOW_READINESS, readinessOf, type CheckinAnswerData, type 
 import { dayStatus, daySets, offPlan, rowSets, rpeDelta, type DayStatus, type OffPlan } from "@/lib/compliance";
 import { formatDate, formatMoment, weekdayOf, weekdayOfDay } from "@/lib/dates";
 import { useCommands, type Command } from "@/lib/commands";
-import { t, weekdayShort } from "@/lib/i18n";
-import { estimate1RM, rpeTableFor, formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
+import { plural, t, weekdayShort } from "@/lib/i18n";
+import { estimate1RM, rpeTableFor, formatPrescription, maxesOf, oneRepMaxFor, resolveDay } from "@/lib/intensity";
 import { setTrackingPref, usePref } from "@/lib/prefs";
 import type { AthleteCheckins, MessageData } from "@/lib/queries";
-import { dateOfDay } from "@/lib/schedule";
+import { dateOfDay, weekOn } from "@/lib/schedule";
 import { formatDuration, volumeText } from "@/lib/duration";
-import { formatEffort, formatSet } from "@/lib/setlog";
+import { formatEffort, formatSet, rpeOf } from "@/lib/setlog";
 import {
   attentionOf,
   keepRow,
@@ -74,6 +75,8 @@ const STATUS_LABEL: Record<DayStatus, string> = {
 type Line = {
   row: RowData;
   target: number | null;
+  /** The 1RM the row is trained off, for reading loads as %1RM. */
+  oneRM: number | null;
   off: OffPlan | null;
   pr: boolean;
   top: TopSet | null;
@@ -99,6 +102,7 @@ type Session = {
 };
 
 const NO_MOVES: Record<string, string> = {};
+const NO_PAUSED: string[] = [];
 
 /**
  * Review: the open week's sessions, one card each, every exercise on one line — the plan,
@@ -119,7 +123,10 @@ export function ReviewView({
   show,
   hasLink,
   readOnly = false,
+  paused = NO_PAUSED,
 }: {
+  /** Sessions not trained because another program is active on their dates. */
+  paused?: string[];
   block: BlockData;
   athlete: AthleteData;
   initialWeek: number;
@@ -211,6 +218,7 @@ export function ReviewView({
               return {
                 row,
                 target,
+                oneRM: oneRepMaxFor(row.target, row.tier, maxes, row.exercise),
                 off,
                 pr,
                 top,
@@ -252,6 +260,17 @@ export function ReviewView({
   const allSessions = sessionsByWeek.flatMap((list, i) => list.map((s) => ({ s, week: i + 1 })));
 
   const focusedSession = shown.find((s) => s.day.id === focused) ?? shown[0] ?? null;
+
+  // Open on today's session, else the next one, when the week being trained is shown.
+  const nowWeek = weekOn(block.startDate, weekCount, today);
+  const openId = nowWeek === activeWeek ? shown.find((s) => s.ymd >= today)?.day.id : undefined;
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current || !openId) return;
+    opened.current = true;
+    setFocused(openId);
+    document.getElementById(`session-${openId}`)?.scrollIntoView({ block: "start" });
+  }, [openId]);
 
   function focusSession(dayId: string, weekOf?: number) {
     if (weekOf !== undefined && weekOf !== activeWeek) setWeek(weekOf);
@@ -463,7 +482,16 @@ export function ReviewView({
         </div>
       )}
 
-      <WeekTiles weeks={sessionsByWeek} stats={stats} active={activeWeek} onSelect={setWeek} />
+      <WeekTiles weeks={sessionsByWeek} stats={stats} active={activeWeek} current={nowWeek} onSelect={setWeek} />
+      {(() => {
+        const n = (block.weeks[activeWeek - 1]?.days ?? []).filter((d) => paused.includes(d.id) && d.rows.some((r) => r.exercise.trim() !== "")).length;
+        return n > 0 ? (
+          <p className="mt-2 flex items-center gap-2 text-[12px] text-muted">
+            <span className="size-1.5 shrink-0 rounded-full bg-warn" aria-hidden />
+            {plural(n, "{n} session this week isn't trained — another program is active then.", "{n} sessions this week aren't trained — another program is active then.")}
+          </p>
+        ) : null;
+      })()}
 
       <div id="review-attention" className="mt-4 flex scroll-mt-4 flex-wrap items-center gap-2">
         {!readOnly && (
@@ -493,18 +521,13 @@ export function ReviewView({
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-y border-border/60 py-2">
         <Seg value={prefs.filter} options={filters.map((f) => ({ value: f, label: t(FILTER_LABEL[f]) }))} onChange={(f) => setTrackingPref({ filter: f })} label={t("Filter")} />
-        <select
+        <Select
           value={prefs.lifts}
           aria-label={t("Exercises")}
-          onChange={(e) => setTrackingPref({ lifts: e.target.value as LiftFilter })}
-          className="cursor-pointer rounded-full border border-border bg-surface px-2.5 py-1 text-[11px] text-muted outline-none hover:text-foreground"
-        >
-          {LIFT_FILTERS.map((f) => (
-            <option key={f} value={f}>
-              {t(LIFT_LABEL[f])}
-            </option>
-          ))}
-        </select>
+          onChange={(lifts) => setTrackingPref({ lifts })}
+          options={LIFT_FILTERS.map((f) => ({ value: f, label: t(LIFT_LABEL[f]) }))}
+          className="rounded-full border border-border bg-surface px-2.5 py-1 text-[11px] text-muted outline-none hover:text-foreground"
+        />
         <span className="ml-auto flex flex-wrap items-center gap-3">
           <Toggle on={prefs.expandAll} onChange={(v) => setTrackingPref({ expandAll: v })} label={t("Every set")} />
           <Toggle on={prefs.showCues} onChange={(v) => setTrackingPref({ showCues: v })} label={t("Coach notes")} />
@@ -613,11 +636,14 @@ function WeekTiles({
   weeks,
   stats,
   active,
+  current,
   onSelect,
 }: {
   weeks: Session[][];
   stats: ReturnType<typeof weekStats>;
   active: number;
+  /** The week being trained today, if it is in this phase. */
+  current: number | null;
   onSelect: (week: number) => void;
 }) {
   return (
@@ -637,7 +663,10 @@ function WeekTiles({
             className={`min-w-[112px] shrink-0 rounded-lg border px-3 py-2 text-left ${on ? "border-accent/60 bg-surface-2" : "border-border bg-surface hover:border-muted-2"}`}
           >
             <div className="flex items-baseline justify-between gap-2">
-              <span className={`text-[12px] ${on ? "font-medium text-foreground" : "text-muted"}`}>{t("Week {n}", { n: i + 1 })}</span>
+              <span className={`text-[12px] ${on ? "font-medium text-foreground" : "text-muted"}`}>
+                {t("Week {n}", { n: i + 1 })}
+                {i + 1 === current && <span title={t("This week")} className="ml-1.5 inline-block size-1.5 rounded-full bg-accent align-middle" />}
+              </span>
               <span className="text-[10px] tabular-nums text-muted-2">{share === null ? "—" : `${share}%`}</span>
             </div>
             <div className="mt-1.5 flex items-center gap-1">
@@ -800,6 +829,17 @@ function SessionCard({
   );
 }
 
+/** "82%" — a load as a share of the 1RM it is trained off; null without one. */
+function pctText(weight: number | null, oneRM: number | null): string | null {
+  return weight === null || !oneRM ? null : `${Math.round((weight / oneRM) * 100)}%`;
+}
+
+/** "RIR 2 (@8)" — the effort as logged, an RIR with the RPE it counts as. */
+function effortText(log: { rpe: number | null; rir: number | null }): string {
+  const logged = formatEffort(log);
+  return log.rpe === null && log.rir !== null ? `${logged} (@${rpeOf(log)})` : logged;
+}
+
 /** "180 × 5 5 5 5 @8 8 8.5 9" when every set was the same weight, else each set in turn. */
 function doneText(row: RowData, unit: string): string | null {
   const done = (row.logs ?? []).filter((l) => l.done);
@@ -837,7 +877,13 @@ function ExerciseLine({
   showCues: boolean;
   onToggle: () => void;
 }) {
-  const { row, target, off, pr, e1rm, previous } = line;
+  const { row, target, oneRM, off, pr, top, e1rm, previous } = line;
+  const targetPct = row.intensityType === "PERCENT" ? null : pctText(target, oneRM);
+  const topPct = row.duration === null && top ? pctText(top.weight, oneRM) : null;
+  // Logged as RIR, the summary reads "RIR 2"; the top set's RPE goes next to its %.
+  const doneLogs = (row.logs ?? []).filter((l) => l.done);
+  const rirOnly = doneLogs.length > 0 && doneLogs.every((l) => l.rpe === null);
+  const topIntensity = [topPct, rirOnly && top?.rpe != null ? `@${top.rpe}` : null].filter(Boolean).join(" ");
   const plan = `${volumeText(row)} @ ${formatPrescription(row, athleteUnit)}`;
   const done = doneText(row, unit);
   const delta = e1rm !== null && previous?.e1rm != null ? Math.round((e1rm - previous.e1rm) * 10) / 10 : null;
@@ -873,9 +919,20 @@ function ExerciseLine({
           <span className="text-muted-2">
             {plan}
             {target !== null && row.intensityType !== "WEIGHT" && ` · ${target} ${unit}`}
+            {targetPct && ` (${targetPct})`}
             {" → "}
           </span>
-          {done ? <span className="text-foreground">{done}</span> : <span className={off?.level === "miss" ? "text-miss" : "text-muted-2"}>{off?.level === "miss" ? t("not done") : "—"}</span>}
+          {done ? (
+            <span className="text-foreground">
+              {done}
+              {topIntensity && (
+                <span className="text-muted" title={t("The top set: its share of the 1RM and its RPE")}>
+                  {" · "}
+                  {topIntensity}
+                </span>
+              )}
+            </span>
+          ) : <span className={off?.level === "miss" ? "text-miss" : "text-muted-2"}>{off?.level === "miss" ? t("not done") : "—"}</span>}
         </span>
         <span className="flex items-center justify-end gap-2 text-[12px] tabular-nums">
           {off && off.level === "warn" && <OffChip off={off} row={row} target={target} />}
@@ -902,7 +959,8 @@ function ExerciseLine({
                       <td className="pr-4 text-muted-2">{t("Set {n}", { n: l.setIndex + 1 })}</td>
                       <td className={`pr-3 ${l.done ? "text-foreground" : "text-muted-2"}`}>{l.weight !== null ? `${l.weight} ${unit}` : l.seconds ? formatDuration(l.seconds) : "—"}</td>
                       <td className={`pr-3 ${l.done ? "text-foreground" : "text-muted-2"}`}>{l.reps === null ? "—" : `× ${l.reps}`}</td>
-                      <td className="pr-3 text-muted">{formatEffort(l) || "—"}</td>
+                      <td className="pr-3 text-muted">{effortText(l) || "—"}</td>
+                      <td className="pr-3 text-muted" title={t("Share of the 1RM")}>{(row.duration === null && pctText(l.weight, oneRM)) || ""}</td>
                       <td className={l.done ? "pr-3 text-ok" : "pr-3 text-muted-2"}>{l.done ? "✓" : t("not done")}</td>
                       <td className="text-pr">{l.pr && <span className="flex items-center gap-0.5 font-semibold"><Trophy size={10} /> {t("PR")}</span>}</td>
                     </tr>
@@ -917,6 +975,7 @@ function ExerciseLine({
                 {t("Last time ({date})", { date: formatDate(previous.ymd) })}: {previous.weight} {unit}
                 {previous.reps !== null && ` × ${previous.reps}`}
                 {previous.rpe !== null && ` @${previous.rpe}`}
+                {pctText(previous.weight, oneRM) && ` · ${pctText(previous.weight, oneRM)}`}
                 {previous.e1rm !== null && ` · ${t("e1RM")} ${previous.e1rm}`}
               </div>
             )}

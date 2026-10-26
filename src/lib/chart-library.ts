@@ -18,6 +18,8 @@ const bar = (id: string, more: Partial<ChartMetric> = {}): ChartMetric => ({ id,
 const FIXED: Preset[] = [
   { key: "e1rm", title: "Estimated 1RMs", note: "Best e1RM of the competition lifts each week", spec: { kind: "combo", by: "week", range: 182, metrics: LIFTS.map((l) => line(`e1rm:${l}`)) } },
   { key: "top", title: "Top sets", note: "Heaviest competition-lift set each week", spec: { kind: "combo", by: "week", range: 182, metrics: LIFTS.map((l) => line(`top:${l}`)) } },
+  { key: "top-pct", title: "Top-set intensity", note: "Each lift's heaviest set each week, as %1RM", spec: { kind: "combo", by: "week", range: 182, metrics: LIFTS.map((l) => line(`top-pct:${l}`)) } },
+  { key: "top-rpe", title: "Top-set RPE", note: "How hard each lift's heaviest set felt each week", spec: { kind: "combo", by: "week", range: 182, metrics: LIFTS.map((l) => line(`top-rpe:${l}`)) } },
   { key: "e1rm-tonnage", title: "Strength vs workload", note: "e1RMs as lines over weekly tonnage as bars", spec: { kind: "combo", by: "week", range: 182, metrics: [bar("tonnage", { axis: "right" }), ...LIFTS.map((l) => line(`e1rm:${l}`))] } },
   { key: "tonnage-lift", title: "Weekly tonnage by lift", note: "Weight × reps on squat, bench and deadlift", spec: { kind: "combo", by: "week", range: 84, stack: true, metrics: LIFTS.map((l) => bar(`tonnage:${l}`)) } },
   { key: "tonnage-split", title: "Tonnage split by lift", note: "Each lift's share of the work", spec: { kind: "pie", by: "week", range: 28, metrics: LIFTS.map((l) => ({ id: `tonnage:${l}` })) } },

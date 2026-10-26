@@ -1,5 +1,8 @@
 "use client";
 
+import { Select } from "@/components/Select";
+import { ProgramStatusBadge } from "@/components/ProgramStatusBadge";
+import type { ProgramStatus } from "@/lib/dates";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState, useTransition, type ReactNode } from "react";
@@ -41,7 +44,6 @@ export type RosterEntry = AthleteData & {
   /** Injuries still open today, worst first. */
   injuries: { label: string; severity: number; since: string }[];
   /** Whether every pair of overlapping programs has the active one in it. */
-  overlapsSettled: boolean;
   /** Oldest first. */
   programs: {
     id: string;
@@ -51,9 +53,11 @@ export type RosterEntry = AthleteData & {
     weeks: number;
     /** "1 Sep – 12 Oct"; null with no phases. */
     dates: string | null;
-    status: "upcoming" | "active" | "done" | null;
+    status: ProgramStatus | null;
     /** Runs on some of the same days as another of the athlete's programs, from today on. */
     overlapping: boolean;
+    /** Where it overlaps another program: whether it is the one trained then. */
+    trained: boolean | null;
   }[];
 };
 
@@ -222,12 +226,6 @@ function Band({ label, hint, aside, children }: { label: string; hint?: string; 
     </section>
   );
 }
-
-const STATUS_LOOK = {
-  active: { cls: "bg-ok/15 text-ok-text", label: "active" },
-  upcoming: { cls: "bg-surface-3 text-muted", label: "upcoming" },
-  done: { cls: "text-muted-2", label: "done" },
-} as const;
 
 /** A link's state beside its button: whether one has been handed out. */
 function LinkState({ sent }: { sent: boolean }) {
@@ -426,48 +424,25 @@ function AthleteCard({
               <span className="text-[12px] text-muted-2">{t("No program yet")}</span>
             ) : (
               <div className="flex flex-col gap-1.5">
-                {(() => {
-                  const overlapping = athlete.programs.filter((p) => p.overlapping);
-                  if (overlapping.length === 0) return null;
-                  const chosen = athlete.overlapsSettled;
-                  return (
-                    <div className="mb-1 rounded-lg border border-border bg-surface-2 px-2.5 py-2">
-                      <p className="flex items-baseline gap-1.5 text-[11px] leading-snug text-muted">
-                        {!chosen && <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-red-500" />}
-                        {chosen
-                          ? t("Programs overlap. On days both have a session, the athlete trains the active one.")
-                          : t("Programs overlap — pick the one the athlete trains on days both have a session.")}
-                      </p>
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {overlapping.map((p) => {
-                          const on = p.id === athlete.activeProgramId;
-                          return (
-                            <button
-                              key={p.id}
-                              type="button"
-                              aria-pressed={on}
-                              onClick={() => !on && patch({ activeProgramId: p.id })}
-                              className={`max-w-full truncate rounded-full border px-2.5 py-0.5 text-[11px] ${
-                                on ? "border-accent bg-accent-soft font-medium text-accent" : "border-border text-muted hover:border-accent hover:text-accent"
-                              }`}
-                            >
-                              {p.name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })()}
                 {[...athlete.programs].reverse().map((p) => (
                   <div key={p.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px]">
                     <Link href={`/programming?athlete=${athlete.id}&program=${p.id}`} className="font-medium hover:text-accent">
                       {p.name}
                     </Link>
                     {p.status && (
-                      <span className={`rounded-full px-1.5 py-px text-[10px] ${STATUS_LOOK[p.status].cls}`}>
-                        {t(STATUS_LOOK[p.status].label)}
-                      </span>
+                      <ProgramStatusBadge
+                        status={p.status}
+                        trained={p.trained}
+                        onSwitch={
+                          p.trained === null
+                            ? undefined
+                            : () => {
+                                // A paused one takes over; the trained one hands over to another it overlaps.
+                                const next = p.trained ? athlete.programs.find((x) => x.overlapping && x.id !== p.id)?.id : p.id;
+                                if (next) patch({ activeProgramId: next });
+                              }
+                        }
+                      />
                     )}
                     <span className="text-muted-2">
                       {p.dates ? `${p.dates} · ` : ""}
@@ -846,14 +821,15 @@ export function NewAthleteButton({
             className={`mt-2 ${field}`}
           />
 
-          <select
+          <Select<AthleteData["unit"]>
             value={form.unit}
-            onChange={(e) => setForm({ ...form, unit: e.target.value as AthleteData["unit"] })}
-            className={`mt-1.5 cursor-pointer ${field}`}
-          >
-            <option value="KG">{t("kg")}</option>
-            <option value="LB">{t("lb")}</option>
-          </select>
+            onChange={(unit) => setForm({ ...form, unit })}
+            options={[
+              { value: "KG", label: t("kg") },
+              { value: "LB", label: t("lb") },
+            ]}
+            className={`mt-1.5 w-full ${field}`}
+          />
 
           <div className="mt-1.5 flex gap-1.5">
             {(["squat1RM", "bench1RM", "dead1RM"] as const).map((k, i) => (

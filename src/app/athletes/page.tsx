@@ -1,8 +1,8 @@
 import { Roster, type RosterEntry } from "@/components/Roster";
 import { Sidebar } from "@/components/Sidebar";
 import { getActiveInjuries, getNextMeets, getRoster } from "@/lib/queries";
-import { formatDate, overlapsSettled, phaseOverlaps, today as calendarToday, ymdOf } from "@/lib/dates";
-import { addDays, daysBetween } from "@/lib/schedule";
+import { formatDate, overlapWinner, phaseOverlaps, programStatus, today as calendarToday, ymdOf } from "@/lib/dates";
+import { addDays, daysBetween, programOn } from "@/lib/schedule";
 import { injuryLabel } from "@/lib/injuries";
 import { questionData } from "@/lib/checkins";
 import { loadSettings } from "@/lib/coach-settings";
@@ -37,6 +37,9 @@ export default async function AthletesPage({
       calendarToday(),
     );
     const overlapping = new Set(pairs.flatMap((o) => [o.earlier, o.later]));
+    const spans = a.programs.map((p) => ({ id: p.id, phases: p.phases.map((x) => ({ startDate: x.startDate, weeks: x._count.weeks })) }));
+    const winner = overlapWinner(spans, overlapping, a.activeProgramId);
+    const owner = programOn(spans.flatMap((p) => p.phases.map((x) => ({ programId: p.id, ...x }))), today, a.activeProgramId);
     return {
     id: a.id,
     name: a.name,
@@ -49,7 +52,6 @@ export default async function AthletesPage({
     rpeTable: a.rpeTable,
     sex: a.sex,
     activeProgramId: a.activeProgramId,
-    overlapsSettled: overlapsSettled(pairs, a.activeProgramId),
     hasLink: a.accessToken !== null,
     hasViewLink: a.viewToken !== null,
     checkin: checkinStatus(lastCheckin.get(a.id) ?? null, { hasLink: a.accessToken !== null, linksOn }),
@@ -64,7 +66,7 @@ export default async function AthletesPage({
       return m ? { name: m.name, date: formatDate(m.date), days: daysBetween(today, ymdOf(m.date)), weightClass: m.weightClass } : null;
     })(),
     injuries: (injuries.get(a.id) ?? []).map((i) => ({ label: injuryLabel(i), severity: i.severity, since: formatDate(i.day) })),
-    programs: a.programs.map((p) => {
+    programs: a.programs.map((p, i) => {
       const first = p.phases[0];
       const last = p.phases[p.phases.length - 1];
       const start = first ? ymdOf(first.startDate) : null;
@@ -77,7 +79,10 @@ export default async function AthletesPage({
         phases: p.phases.length,
         weeks: p.phases.reduce((n, phase) => n + phase._count.weeks, 0),
         dates: start && end ? `${formatDate(start)} – ${formatDate(addDays(end, -1))}` : null,
-        status: !start || !end ? null : today < start ? "upcoming" : today < end ? "active" : "done",
+        // Only one program trains at a time; one that loses an overlap is paused.
+        status: programStatus(spans[i], today, overlapping, winner, owner),
+        // Where it overlaps another: whether it is the one trained then.
+        trained: overlapping.has(p.id) ? p.id === winner : null,
         overlapping: overlapping.has(p.id),
       } as const;
     }),

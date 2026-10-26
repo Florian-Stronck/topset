@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/Select";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import {
@@ -315,13 +316,7 @@ function MeetingForm({
         </label>
         <label className="block text-[11px] text-muted">
           {t("Length")}
-          <select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} className={`${field} mt-0.5`}>
-            {MEETING_LENGTHS.map((n) => (
-              <option key={n} value={n}>
-                {t("{n} min", { n })}
-              </option>
-            ))}
-          </select>
+          <Select value={minutes} onChange={setMinutes} options={MEETING_LENGTHS.map((n) => ({ value: n, label: t("{n} min", { n }) }))} className={`${field} mt-0.5`} />
         </label>
       </div>
       <label className="block text-[11px] text-muted">

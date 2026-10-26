@@ -3,7 +3,7 @@ import { LOW_READINESS, type ReadinessDay } from "@/lib/checkins";
 import { completionPct, dayStatus, daySets, DRIFT_MIN_ROWS, DRIFT_WARN, rpeDrift, type ComplianceRow, type DayStatus } from "@/lib/compliance";
 import { liftOf } from "@/lib/intensity";
 import { formatDate, overlapsSettled, phaseOverlaps, ymdOf } from "@/lib/dates";
-import { addDays } from "@/lib/schedule";
+import { addDays, programOn } from "@/lib/schedule";
 import { activeSettings } from "@/lib/settings";
 import { t } from "@/lib/i18n";
 
@@ -68,13 +68,14 @@ export function blockWindow(block: { startDate: Date; weeks: number }, today: Da
 }
 
 /**
- * The block an athlete is training right now — one of the active program's, where
+ * The block an athlete is training right now — of the program that owns today, where
  * programs overlap — else the next one, else the last one.
  */
 export function currentBlock(blocks: BlockSummary[], today: Date, activeProgramId?: string | null): BlockSummary | null {
   if (blocks.length === 0) return null;
   const running = blocks.filter((b) => blockWindow(b, today).status === "active");
-  const active = running.find((b) => b.programId === activeProgramId) ?? running[0];
+  const owner = programOn(blocks, ymdOf(startOfDay(today)), activeProgramId);
+  const active = running.find((b) => b.programId === owner) ?? running[0];
   if (active) return active;
 
   const upcoming = blocks

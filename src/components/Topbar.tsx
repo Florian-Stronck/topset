@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/Select";
 import { useRouter } from "next/navigation";
 import { Fragment, useRef, useState, useTransition } from "react";
 import { copyProgram, updateAthleteProfile } from "@/app/athletes/actions";
@@ -22,7 +23,9 @@ import { Confirm } from "@/components/Confirm";
 import { Popover } from "@/components/Popover";
 import { PhaseSettings, ProgramSettings } from "@/components/ProgramSettings";
 import { GridTools } from "@/components/ProgrammingGrid";
-import { describeGap, formatDate, overlapsSettled, phaseGaps, programOverlaps, snapStart, today, weekdayOf, type ProgramOverlap } from "@/lib/dates";
+import { describeGap, formatDate, overlapsSettled, overlapWinner, phaseGaps, programOverlaps, programStatus, snapStart, today, weekdayOf, ymdOf, type ProgramOverlap } from "@/lib/dates";
+import { addDays, programOn } from "@/lib/schedule";
+import { ProgramStatusBadge } from "@/components/ProgramStatusBadge";
 import { activeSettings, phaseName, type ExportKind } from "@/lib/settings";
 import { useSettings } from "@/components/SettingsProvider";
 import { WEEKDAYS } from "@/lib/types";
@@ -197,6 +200,16 @@ export function Topbar({
   const [deletingPhaseId, setDeletingPhaseId] = useState<string | null>(null);
   const gaps = phaseGaps(program.phases);
   const { pairs, overlapping, chosen } = programOverlap(programs, athlete);
+  // Only one program trains at a time: which wins the overlap, and where each one is today.
+  const winner = overlapWinner(
+    programs.map((p) => ({ id: p.id, phases: p.phases })),
+    overlapping,
+    athlete.activeProgramId,
+  );
+  const todayYmd = ymdOf(today());
+  const spans = programs.map((p) => ({ id: p.id, phases: p.phases.map((x) => ({ startDate: x.startDate, weeks: x.weeks.length })) }));
+  const owner = programOn(spans.flatMap((p) => p.phases.map((x) => ({ programId: p.id, ...x }))), todayYmd, athlete.activeProgramId);
+  const statuses = new Map(spans.map((p) => [p.id, programStatus(p, todayYmd, overlapping, winner, owner)]));
   const phaseMenu = useContextMenu();
   const programMenu = useContextMenu();
   const history = useHistory();
@@ -360,7 +373,7 @@ export function Topbar({
             );
           })()}
 
-          <Popover open={programsOpen} onClose={() => setProgramsOpen(false)} anchorRef={programButtonRef} width={320}>
+          <Popover open={programsOpen} onClose={() => setProgramsOpen(false)} anchorRef={programButtonRef} width={380}>
             <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("PROGRAMS")}</div>
             <div className="mt-1.5 space-y-0.5">
               {programs.map((p) => {
@@ -370,26 +383,41 @@ export function Topbar({
                 const earlier = overlap && programs.find((x) => x.id === overlap.earlier);
                 return (
                   <Fragment key={p.id}>
-                    {overlap && earlier && (
-                      <div className="py-0.5">
-                        <ProgramOverlapChip overlap={overlap} earlier={earlier} later={p} athlete={athlete} chosen={chosen} />
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => openProgram(p)}
+                    <div
                       onContextMenu={(e) => programMenuFor(e, p)}
-                      title={first ? t("From {date}", { date: formatDate(first.startDate) }) : undefined}
-                      className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left text-[12px] ${
+                      className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[12px] ${
                         p.id === program.id ? "bg-surface-3" : "hover:bg-surface-2"
                       }`}
                     >
-                      <span className="min-w-0 truncate">{p.name}</span>
-                      <span className="ml-auto shrink-0 text-[11px] text-muted-2">
-                        {t(p.phases.length === 1 ? "{n} phase" : "{n} phases", { n: p.phases.length })} ·{" "}
-                        {t(weeks === 1 ? "{n} week" : "{n} weeks", { n: weeks })}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => openProgram(p)}
+                        title={first ? t("From {date}", { date: formatDate(first.startDate) }) : undefined}
+                        className="flex min-w-0 flex-1 items-baseline gap-2 text-left"
+                      >
+                        <span className="min-w-0 truncate">{p.name}</span>
+                        <span className="ml-auto shrink-0 text-[11px] text-muted-2">
+                          {t(p.phases.length === 1 ? "{n} phase" : "{n} phases", { n: p.phases.length })} ·{" "}
+                          {t(weeks === 1 ? "{n} week" : "{n} weeks", { n: weeks })}
+                        </span>
+                      </button>
+                      {overlap && earlier && <ProgramOverlapChip overlap={overlap} earlier={earlier} later={p} />}
+                      {statuses.get(p.id) && (
+                        <ProgramStatusBadge
+                          status={statuses.get(p.id)!}
+                          trained={overlapping.has(p.id) ? p.id === winner : null}
+                          onSwitch={
+                            overlapping.has(p.id)
+                              ? () => {
+                                  // A paused one takes over; the trained one hands over to another it overlaps.
+                                  const next = p.id === winner ? programs.find((x) => overlapping.has(x.id) && x.id !== p.id)?.id : p.id;
+                                  if (next) void setActiveProgramUndoable(history, athlete, next);
+                                }
+                              : undefined
+                          }
+                        />
+                      )}
+                    </div>
                   </Fragment>
                 );
               })}
@@ -1018,17 +1046,12 @@ function CopyProgramButton({
         <div onKeyDown={formKeys(submit, () => onOpenChange(false), pending)}>
           <div className="text-[11px] tracking-[0.14em] text-muted-2">{t("COPY “{name}”", { name: program.name })}</div>
 
-          <select
+          <Select
             value={form.athleteId}
-            onChange={(e) => setForm({ ...form, athleteId: e.target.value })}
-            className={`mt-2 cursor-pointer ${field}`}
-          >
-            {roster.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.id === athlete.id ? `${a.name} (${t("duplicate here")})` : a.name}
-              </option>
-            ))}
-          </select>
+            onChange={(athleteId) => setForm({ ...form, athleteId })}
+            options={roster.map((a) => ({ value: a.id, label: a.id === athlete.id ? `${a.name} (${t("duplicate here")})` : a.name }))}
+            className={`mt-2 w-full ${field}`}
+          />
 
           <input
             autoFocus
@@ -1146,33 +1169,22 @@ function GapChip({
 }
 
 /**
- * Two programs running on the same days: the program-level twin of `GapChip`. Red until
- * the coach moves one or picks which is trained where both have a session.
+ * Two programs running on the same days: the program-level twin of `GapChip`. Which one
+ * is trained is switched on the status badges; this offers the other fix — moving the
+ * later program to start when the earlier ends.
  */
-function ProgramOverlapChip({
-  overlap,
-  earlier,
-  later,
-  athlete,
-  chosen,
-}: {
-  overlap: ProgramOverlap;
-  earlier: ProgramSummary;
-  later: ProgramSummary;
-  athlete: AthleteData;
-  chosen: string | null;
-}) {
+function ProgramOverlapChip({ overlap, earlier, later }: { overlap: ProgramOverlap; earlier: ProgramSummary; later: ProgramSummary }) {
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const ref = useRef<HTMLButtonElement>(null);
   const history = useHistory();
-  const settled = chosen === earlier.id || chosen === later.id;
-  const text = t("“{phase}” starts before “{previous}” ends — both would run at once.", { previous: earlier.name, phase: later.name });
-  const run = (fn: () => Promise<unknown>) =>
-    startTransition(async () => {
-      await fn();
-      setOpen(false);
-    });
+  const starts = later.phases.map((p) => ymdOf(p.startDate)).sort()[0];
+  // `days` is negative: the earlier program runs that many days past the later one's start.
+  const freeFrom = addDays(starts, -overlap.days);
+  const rows = [
+    { name: earlier.name, when: t("ends {date}", { date: formatDate(addDays(freeFrom, -1)) }) },
+    { name: later.name, when: t("starts {date}", { date: formatDate(starts) }) },
+  ];
 
   return (
     <>
@@ -1180,53 +1192,39 @@ function ProgramOverlapChip({
         ref={ref}
         type="button"
         onClick={() => setOpen((o) => !o)}
-        title={text}
-        className={`rounded px-1.5 py-0.5 text-[11px] ${
-          settled
-            ? "border border-dashed border-amber-500/40 text-amber-400/90 hover:bg-amber-500/10"
-            : "border border-red-500/50 bg-red-500/10 text-red-400 hover:bg-red-500/20"
-        } ${pending ? "opacity-60" : ""}`}
+        className={`shrink-0 rounded-full bg-warn/15 px-1.5 py-px text-[10px] text-warn ring-1 ring-transparent transition hover:ring-current ${pending ? "opacity-60" : ""}`}
       >
-        {describeGap(overlap.days)}
+        {describeGap(overlap.shared)}
       </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={280}>
-        <p className="text-[11px] leading-snug text-muted">{text}</p>
-        <div className="mt-2.5 flex flex-col gap-1.5">
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => run(() => moveProgramUndoable(history, later, -overlap.days))}
-            className="rounded bg-accent px-2.5 py-1.5 text-[11px] font-medium text-white disabled:opacity-60"
-          >
-            {t("Start “{phase}” when “{previous}” ends", { phase: later.name, previous: earlier.name })}
-          </button>
-          {[earlier, later].map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              disabled={pending}
-              aria-pressed={chosen === p.id}
-              onClick={() => run(async () => {
-                if (chosen !== p.id) await setActiveProgramUndoable(history, athlete, p.id);
-              })}
-              className={`rounded border px-2.5 py-1.5 text-[11px] ${
-                chosen === p.id ? "border-accent bg-accent-soft font-medium text-accent" : "border-border text-muted hover:text-foreground"
-              }`}
-            >
-              {t("Keep both — train “{name}” on shared days", { name: p.name })}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            className="rounded border border-border px-2.5 py-1.5 text-[11px] text-muted hover:text-foreground"
-          >
-            {t("Leave it")}
-          </button>
+      <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={264}>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-warn">
+          <span className="size-1.5 rounded-full bg-warn" aria-hidden />
+          {describeGap(overlap.shared)}
         </div>
-        <p className="mt-2 text-[11px] leading-snug text-muted-2">
-          {t("Every phase of “{name}” moves by the same amount, keeping their spacing.", { name: later.name })}
-        </p>
+        <div className="mt-2 space-y-1">
+          {rows.map((r) => (
+            <div key={r.name} className="flex items-baseline gap-2 text-[12px]">
+              <span className="min-w-0 truncate text-foreground">{r.name}</span>
+              <span className="ml-auto shrink-0 tabular-nums text-[11px] text-muted-2">{r.when}</span>
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 text-[11px] leading-snug text-muted">{t("Only one is trained while they overlap.")}</p>
+        <button
+          type="button"
+          disabled={pending}
+          title={t("Every phase of “{name}” moves by the same amount, keeping their spacing.", { name: later.name })}
+          onClick={() =>
+            startTransition(async () => {
+              await moveProgramUndoable(history, later, -overlap.days);
+              setOpen(false);
+            })
+          }
+          className="mt-2.5 flex w-full items-center gap-2 border-t border-border pt-2 text-left text-[12px] text-accent hover:text-foreground disabled:opacity-60"
+        >
+          <span className="min-w-0">{t("Start “{name}” on {date}", { name: later.name, date: formatDate(freeFrom) })}</span>
+          <span aria-hidden className="ml-auto">→</span>
+        </button>
       </Popover>
     </>
   );

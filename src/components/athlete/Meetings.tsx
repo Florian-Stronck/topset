@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/Select";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { answerMeeting, cancelMeeting, changeMeeting, requestMeeting } from "@/app/a/schedule-actions";
@@ -227,13 +228,7 @@ function MeetingForm({
       </div>
       <label className="block">
         <span className="mb-1 block text-[13px] text-muted">{t("Length")}</span>
-        <select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} className={`${field} h-12`}>
-          {MEETING_LENGTHS.map((n) => (
-            <option key={n} value={n}>
-              {t("{n} min", { n })}
-            </option>
-          ))}
-        </select>
+        <Select value={minutes} onChange={setMinutes} options={MEETING_LENGTHS.map((n) => ({ value: n, label: t("{n} min", { n }) }))} className={`${field} h-12`} />
       </label>
       <label className="block">
         <span className="mb-1 block text-[13px] text-muted">{t("Where (place or video link)")}</span>

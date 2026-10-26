@@ -29,7 +29,7 @@ import {
   injuriesFor,
   toBlockData,
 } from "@/lib/queries";
-import { addDays } from "@/lib/schedule";
+import { addDays, sessionsOf } from "@/lib/schedule";
 import { previousLogs, REVIEW_FILTERS, sessionDrift, unreviewedDays, type ReviewFilter } from "@/lib/tracking";
 import type { BlockData } from "@/lib/types";
 import { loadSettings } from "@/lib/coach-settings";
@@ -174,9 +174,20 @@ export default async function TrackingPage({
   } else {
     const messages = await getMessages(athlete.id);
     const rowIds = blockData.weeks.flatMap((w) => w.days.flatMap((d) => d.rows.map((r) => r.id)));
+    // Only one program is trained at a time: sessions another program's dates took, and
+    // nothing was logged on, are left out like rest days.
+    const scheduled = new Set(sessionsOf(phases, moveMap, athlete.activeProgramId).map((s) => s.day.id));
+    const paused = new Set(
+      blockData.weeks
+        .flatMap((w) => w.days)
+        .filter((d) => !d.rest && !scheduled.has(d.id) && !d.rows.some((r) => r.actualWeight !== null || (r.logs?.length ?? 0) > 0))
+        .map((d) => d.id),
+    );
+    const trained = { ...blockData, weeks: blockData.weeks.map((w) => ({ ...w, days: w.days.map((d) => (paused.has(d.id) ? { ...d, rest: true } : d)) })) };
     body = (
       <ReviewView
-        block={blockData}
+        block={trained}
+        paused={[...paused]}
         athlete={athlete}
         initialWeek={initialWeek}
         today={today}

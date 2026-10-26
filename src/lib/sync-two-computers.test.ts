@@ -207,3 +207,13 @@ test("a restored backup takes over: what isn't in it goes from the server", asyn
   assert.equal(await onServer(`SELECT 1 FROM "Program" WHERE "id" = 'p1'`), null);
   assert.equal(fs.existsSync(path.join(path.dirname(a().db), "topset-sync-reset")), false);
 });
+
+test("a fresh database beside an old sign-in takes the account's coach, not a placeholder", async () => {
+  const c = computer("reinstalled");
+  // What a first start leaves when topset.db is gone but the sign-in file says it was seeded.
+  sql(c, `UPDATE "Coach" SET "id" = 'placeholder', "username" = 'coach', "name" = 'Coach'`);
+  await sync(c);
+  assert.deepEqual(one(c.db, `SELECT "id", "username" FROM "Coach"`), { id: "me", username: "me" });
+  assert.ok(one(c.db, `SELECT 1 FROM "Athlete" WHERE "id" = 'a1' AND "coachId" = 'me'`));
+  assert.deepEqual(await onServer(`SELECT "name" FROM "Coach" WHERE "id" = 'me'`), { name: "Me" }, "the placeholder never goes up");
+});

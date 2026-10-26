@@ -61,6 +61,22 @@ function dropLegacyCloudKey() {
   } catch {}
 }
 
+/**
+ * The Topset server sleeps when nobody has used it for a while, and its first answer then
+ * takes seconds. Knocking as the app launches wakes it while the database and the local
+ * server get ready, so the first sync gets a quick answer. The reply doesn't matter.
+ */
+function wakeServer() {
+  try {
+    const { server, token } = JSON.parse(fs.readFileSync(cloudFile(), "utf8"));
+    if (!server || !token) return;
+    fetch(`${String(server).replace(/\/+$/, "")}/api/coach/sync?part=access`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15000),
+    }).catch(() => {});
+  } catch {}
+}
+
 /** Zoom is remembered beside the database, so the app opens the size it was left at. */
 function zoomFile() {
   return path.join(path.dirname(databaseFile()), "topset-settings.json");
@@ -164,6 +180,29 @@ function waitForServer(port, child, output, timeoutMs = 60000) {
   });
 }
 
+/** How long the splash waits for the first sync before opening on what this computer has. */
+const FIRST_SYNC_WAIT_MS = 6000;
+
+/**
+ * The server says when its first sync with the Topset server is through. Opening before
+ * then shows the plan as it was at last close and lets athletes' logs pop in seconds
+ * later; a slow or missing connection only delays the window by a few seconds.
+ */
+function firstSync(child) {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      child.off("message", onMessage);
+      child.off("exit", done);
+      resolve();
+    };
+    const onMessage = (m) => m === "synced" && done();
+    const timer = setTimeout(done, FIRST_SYNC_WAIT_MS);
+    child.on("message", onMessage);
+    child.once("exit", done);
+  });
+}
+
 const BACKUP_DEFAULTS = { enabled: true, everyDays: 1, keep: 14, folder: null };
 
 /**
@@ -192,7 +231,14 @@ function stamp() {
 function snapshotTo(db, dest) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.rmSync(dest, { force: true });
-  db.prepare("VACUUM INTO ?").run(dest);
+  try {
+    db.prepare("VACUUM INTO ?").run(dest);
+  } catch (error) {
+    // A damaged database fails part way and leaves an empty file, which would pass for
+    // today's backup and push a good one out of the rotation.
+    fs.rmSync(dest, { force: true });
+    throw error;
+  }
 }
 
 /**
@@ -393,6 +439,7 @@ function openWindow() {
 }
 
 async function start() {
+  wakeServer();
   openWindow();
 
   // Window is on screen (backgroundColor painted) the instant it's created; the splash
@@ -439,6 +486,7 @@ async function start() {
   });
 
   await waitForServer(port, server, () => output);
+  await firstSync(server);
   await window.loadURL(`http://127.0.0.1:${port}/programming`);
 
   watchForUpdates();

@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { addDays, dateOfDay, nextSession, previousSession, sessionOn, sessionsOf } from "@/lib/schedule";
+import { addDays, dateOfDay, nextSession, previousSession, sessionOn, sessionsOf, weekOn } from "@/lib/schedule";
 
 const day = (id: string, index: number, rest = false) => ({ id, index, rest });
+
+describe("weekOn", () => {
+  test("the week a phase is in, null outside it", () => {
+    const start = "2026-09-21T00:00:00Z";
+    assert.equal(weekOn(start, 4, "2026-09-20"), null);
+    assert.equal(weekOn(start, 4, "2026-09-21"), 1);
+    assert.equal(weekOn(start, 4, "2026-09-28"), 2);
+    assert.equal(weekOn(start, 4, "2026-10-18"), 4);
+    assert.equal(weekOn(start, 4, "2026-10-19"), null);
+  });
+});
 
 describe("dateOfDay", () => {
   test("counts weeks and days from the start", () => {
@@ -49,6 +60,24 @@ describe("sessionsOf", () => {
     const peak = { id: "peak", programId: "other", startDate: "2026-09-28T00:00:00Z", weeks: [{ order: 1, days: [day("p", 0)] }] };
     const s = sessionsOf([peak, { ...base, programId: "main" }], undefined, "main");
     assert.equal(sessionOn(s, "2026-09-28")?.day.id, "c");
+  });
+
+  test("only one program trains at a time: the other does nothing, even on the active one's rest days", () => {
+    // "other" trains Tuesday 22nd, a rest day of "main"; it still runs after "main" ends.
+    const other = { id: "o", programId: "other", startDate: "2026-09-22T00:00:00Z", weeks: [{ order: 1, days: [day("o1", 0), day("o2", 13)] }, { order: 2, days: [] }] };
+    const s = sessionsOf([{ ...base, programId: "main" }, other], undefined, "main");
+    assert.equal(sessionOn(s, "2026-09-22"), null);
+    assert.equal(sessionOn(s, "2026-09-23")?.day.id, "b");
+    assert.equal(sessionOn(s, "2026-10-05")?.day.id, "o2");
+  });
+
+  test("with none picked, the newer program owns the overlap, rest days included", () => {
+    const newer = { id: "n", programId: "newer", startDate: "2026-09-22T00:00:00Z", weeks: [{ order: 1, days: [day("n1", 6)] }] };
+    const s = sessionsOf([{ ...base, programId: "main" }, newer]);
+    assert.equal(sessionOn(s, "2026-09-21")?.day.id, "a");
+    assert.equal(sessionOn(s, "2026-09-23"), null);
+    assert.equal(sessionOn(s, "2026-09-28")?.day.id, "n1");
+    assert.equal(sessionOn(s, "2026-09-30")?.day.id, "d");
   });
 
   test("finds today, the next and the previous session", () => {

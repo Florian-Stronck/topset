@@ -342,7 +342,7 @@ export function ProgressView({
                   <tr key={w.week} className="border-t border-border/60">
                     <td className="px-4 py-1.5 text-muted">{t("Week {n}", { n: w.week })}</td>
                     <td className="px-4 py-1.5">
-                      {w.top ? `${w.top.weight} ${unit} × ${w.top.reps ?? "—"}${w.top.rpe !== null ? ` @${w.top.rpe}` : ""}` : <span className="text-muted-2">—</span>}
+                      {w.top ? `${w.top.weight} ${unit} × ${w.top.reps ?? "—"}${w.top.rpe !== null ? ` @${w.top.rpe}` : ""}${w.topPct !== null ? ` · ${w.topPct}%` : ""}` : <span className="text-muted-2">—</span>}
                     </td>
                     <td className="px-4 py-1.5 text-right">
                       {w.e1rm ?? <span className="text-muted-2">—</span>}

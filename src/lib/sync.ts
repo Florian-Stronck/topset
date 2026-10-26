@@ -821,7 +821,10 @@ async function cycle(forcePull: boolean): Promise<void> {
   const config = readConfig();
   if (!config) return;
   try {
-    if (!config.seeded) {
+    // A database without the account's coach was never matched up with it, whatever the sign-in
+    // says: a fresh one beside an old sign-in would otherwise keep its placeholder coach.
+    const matched = local().prepare(`SELECT 1 FROM "Coach" WHERE "id" = ?`).get(config.coachId);
+    if (!config.seeded || !matched) {
       await seed(config);
       forcePull = true;
     }
@@ -972,16 +975,19 @@ function run(forcePull: boolean): Promise<void> {
   return state().queue.run(() => cycle(forcePull));
 }
 
-/** Starts the background sync; safe to call again (after signing in, say). */
-export function startSync(): void {
+/**
+ * Starts the background sync; safe to call again (after signing in, say). Resolves once the
+ * first sync is through (or has failed), so the app can open on fresh data.
+ */
+export function startSync(): Promise<void> {
   const s = state();
-  if (!syncEnabled()) return;
+  if (!syncEnabled()) return Promise.resolve();
   if (!s.timer) {
     s.timer = setInterval(() => {
       if (!s.queue.busy() && syncEnabled()) void run(false);
     }, TICK_MS);
   }
-  void run(true);
+  return run(true);
 }
 
 /** Stops syncing and forgets this session's bookkeeping, on signing out. */

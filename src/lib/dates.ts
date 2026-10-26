@@ -7,8 +7,10 @@ export type ProgramOverlap = {
   /** The program that started first, and the one that started inside it. */
   earlier: string;
   later: string;
-  /** Negative, like an overlap in `phaseGaps`: days from `earlier`'s end back to `later`'s start. */
+  /** Negative, like an overlap in `phaseGaps`: days from `earlier`'s end back to `later`'s start — how far `later` moves to start when `earlier` ends. */
   days: number;
+  /** Negative too: the days both run, for saying how long the overlap is. */
+  shared: number;
 };
 
 /**
@@ -38,7 +40,10 @@ export function programOverlaps(
       const shared = a.phases.some(([as, ae]) =>
         b.phases.some(([bs, be]) => Math.max(as, bs) < Math.min(ae, be) && Math.min(ae, be) > from),
       );
-      if (shared) out.push({ earlier: a.id, later: b.id, days: Math.round((b.start - a.end) / DAY_MS) });
+      if (shared) {
+        const both = Math.min(a.end, b.end) - Math.max(a.start, b.start);
+        out.push({ earlier: a.id, later: b.id, days: Math.round((b.start - a.end) / DAY_MS), shared: -Math.round(both / DAY_MS) });
+      }
     }
   }
   return out;
@@ -52,6 +57,50 @@ export function phaseOverlaps(
   const byProgram = new Map<string, { startDate: Date | string; weeks: number }[]>();
   for (const p of phases) byProgram.set(p.programId, [...(byProgram.get(p.programId) ?? []), p]);
   return programOverlaps([...byProgram].map(([id, list]) => ({ id, phases: list })), today);
+}
+
+/**
+ * Of the programs that overlap, the one trained while they do: the picked one, else the
+ * one that started last — the same rule `programOn` applies date by date.
+ */
+export function overlapWinner(
+  programs: { id: string; phases: { startDate: Date | string }[] }[],
+  overlapping: Set<string>,
+  picked: string | null | undefined,
+): string | null {
+  if (picked && overlapping.has(picked)) return picked;
+  let winner: string | null = null;
+  let latest = "";
+  for (const p of programs) {
+    if (!overlapping.has(p.id) || p.phases.length === 0) continue;
+    const start = p.phases.map((x) => ymdOf(x.startDate)).sort()[0];
+    if (start > latest) [winner, latest] = [p.id, start];
+  }
+  return winner;
+}
+
+export type ProgramStatus = "upcoming" | "active" | "paused" | "done";
+
+/**
+ * Where a program is on `today` (`YYYY-MM-DD`). Running, it is paused when another program
+ * owns today (`owner`, from `programOn`); not started yet, when it loses its overlap.
+ */
+export function programStatus(
+  program: { id: string; phases: { startDate: Date | string; weeks: number }[] },
+  today: string,
+  overlapping: Set<string>,
+  winner: string | null,
+  owner: string | undefined,
+): ProgramStatus | null {
+  if (program.phases.length === 0) return null;
+  const start = program.phases.map((x) => ymdOf(x.startDate)).sort()[0];
+  const end = program.phases
+    .map((x) => new Date(Date.parse(`${ymdOf(x.startDate)}T00:00:00Z`) + x.weeks * 7 * DAY_MS).toISOString().slice(0, 10))
+    .sort()
+    .at(-1)!;
+  if (today >= end) return "done";
+  if (today >= start) return owner === undefined || owner === program.id ? "active" : "paused";
+  return overlapping.has(program.id) && program.id !== winner ? "paused" : "upcoming";
 }
 
 /** Whether every overlap has a winner: the active program is one of each pair. */

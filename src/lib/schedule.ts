@@ -53,10 +53,42 @@ export function dateOfDay(startDate: Date | string, week: number, dayIndex: numb
   return addDays(ymdOf(startDate), (week - 1) * 7 + dayIndex);
 }
 
+/** The 1-based week a phase is in on `today` (`YYYY-MM-DD`), null before or after it. */
+export function weekOn(startDate: Date | string, weeks: number, today: string): number | null {
+  const elapsed = daysBetween(ymdOf(startDate), today);
+  return elapsed >= 0 && elapsed < weeks * 7 ? Math.floor(elapsed / 7) + 1 : null;
+}
+
 /**
- * Every training day of every phase, in date order. Where two phases overlap on a date,
- * a phase of the `active` program wins; otherwise the one that started later — it is the
- * plan the coach wrote most recently. `moves`
+ * The program a date belongs to, of those with a phase running on it: the `active` one,
+ * else the one that started last — the plan the coach wrote most recently. Only one
+ * program is ever trained at a time; on its days the others do nothing, rest days included.
+ */
+export function programOn(
+  phases: { programId?: string; startDate: Date | string; weeks: number }[],
+  ymd: string,
+  active?: string | null,
+): string | undefined {
+  const starts = new Map<string, string>();
+  for (const p of phases) {
+    const id = p.programId ?? "";
+    const start = ymdOf(p.startDate);
+    const first = starts.get(id);
+    if (first === undefined || start < first) starts.set(id, start);
+  }
+  let owner: string | undefined;
+  for (const p of phases) {
+    const id = p.programId ?? "";
+    if (weekOn(p.startDate, p.weeks, ymd) === null || id === owner || (active && owner === active)) continue;
+    if (owner === undefined || id === active || starts.get(id)! > starts.get(owner)!) owner = id;
+  }
+  return owner;
+}
+
+/**
+ * Every training day of every phase, in date order. Only the program that owns a date
+ * (`programOn`) puts a session on it. Where two of its phases overlap, the one that
+ * started later wins — it is the plan the coach wrote most recently. `moves`
  * maps a session to the date the athlete moved it to; a moved session wins its new date
  * over anything the plan puts there, since the athlete chose it knowing what was there.
  */
@@ -69,12 +101,14 @@ export function sessionsOf<D extends ScheduledDay, B extends ScheduledBlock<D>>(
   type Held = Session<B, D> & { start: string };
   const byDate = new Map<string, Held>();
   const moved: Held[] = [];
+  const spans = blocks.map((b) => ({ programId: b.programId, startDate: b.startDate, weeks: b.weeks.length }));
   for (const block of blocks) {
     const start = (active && block.programId === active ? "1" : "0") + ymdOf(block.startDate);
     for (const week of block.weeks) {
       for (const day of week.days) {
         if (day.rest) continue;
         const planned = dateOfDay(block.startDate, week.order, day.index);
+        if (programOn(spans, planned, active) !== (block.programId ?? "")) continue;
         const to = moves.get(day.id);
         if (to !== undefined && to !== planned) {
           moved.push({ ymd: to, block, week: week.order, day, start, movedFrom: planned });

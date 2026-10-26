@@ -29,6 +29,7 @@ import {
   type RowTemplate,
 } from "@/app/programming/actions";
 import { inputBase, NumberInput, TextInput } from "@/components/cells";
+import { MenuOptions } from "@/components/Select";
 import { Popover } from "@/components/Popover";
 import { Confirm } from "@/components/Confirm";
 import { ExerciseInput } from "@/components/ExerciseInput";
@@ -42,7 +43,8 @@ import { maxesOf, resolveDay } from "@/lib/intensity";
 import { dayName } from "@/lib/days";
 import { formatDuration, parseDuration } from "@/lib/duration";
 import { parseReps, repsText } from "@/lib/reps";
-import { formatDate, weekdayOf, weekdayOfDay } from "@/lib/dates";
+import { formatDate, today as calendarToday, weekdayOf, weekdayOfDay, ymdOf } from "@/lib/dates";
+import { weekOn } from "@/lib/schedule";
 import { GRID_MIN_WIDTH, SHELL_MAX_WIDTH } from "@/lib/layout";
 import { colorOfTarget, setPref, tierShade, usePref, togglePref, type Column } from "@/lib/prefs";
 import { activeSettings, TIERS, tierLabel } from "@/lib/settings";
@@ -252,6 +254,7 @@ export function ProgrammingGrid({
   onDeletingWeek,
   weekLabel = "tabs",
   readOnly = false,
+  pausedBy,
 }: {
   block: BlockData;
   athlete: AthleteData;
@@ -267,6 +270,8 @@ export function ProgrammingGrid({
   weekLabel?: "tabs" | "static";
   /** Shared with this coach to view or review: the weeks switch, nothing else moves. */
   readOnly?: boolean;
+  /** The program trained on a date instead of this one, where they overlap. */
+  pausedBy?: (ymd: string) => string | null;
 }) {
   const [block, setBlock] = useState(initialBlock);
   const [synced, setSynced] = useState(initialBlock);
@@ -342,6 +347,17 @@ export function ProgrammingGrid({
     days.find((d) => !d.rest) ??
     days[0]
   )?.id;
+
+  // The week and day being trained today, and the day to open on: today, else the next one.
+  const todayYmd = ymdOf(calendarToday());
+  const nowWeek = weekOn(block.startDate, block.weeks.length, todayYmd);
+  const openDayId = nowWeek === activeWeek ? days.find((d) => dayYmd(block.startDate, activeWeek, d.index) >= todayYmd)?.id : undefined;
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current || !openDayId) return;
+    opened.current = true;
+    document.getElementById(`day-${openDayId}`)?.scrollIntoView({ block: "start" });
+  }, [openDayId]);
 
   /** Which of this week's days a meet lands on. */
   const meetByDay = useMemo(() => {
@@ -1111,6 +1127,7 @@ export function ProgrammingGrid({
         <WeekTabs
           weeks={block.weeks}
           active={activeWeek}
+          current={nowWeek}
           blockId={block.id}
           onSelect={onWeek}
           onAdded={() => onWeek(block.weeks.length + 1)}
@@ -1225,13 +1242,14 @@ export function ProgrammingGrid({
                   ]
                 : []),
             ]);
+          const paused = day.rest ? null : (pausedBy?.(dayYmd(block.startDate, activeWeek, day.index)) ?? null);
           return (
             <section
               key={day.id}
               data-tour={tourDay ? "day" : undefined}
               id={`day-${day.id}`}
               onContextMenu={dayMenu}
-              className={compact ? "mt-1" : "mt-2"}
+              className={`scroll-mt-12 ${compact ? "mt-1" : "mt-2"} ${paused ? "opacity-50" : ""}`}
             >
               {/* One slim line per day, rest days included, so the dates line up down the week. */}
               <div className="group/day sticky left-0 z-10 flex w-fit items-center gap-2 px-4 py-1">
@@ -1260,6 +1278,17 @@ export function ProgrammingGrid({
                 <span title={fullDate(block.startDate, activeWeek, day.index)} className="cursor-help text-[11px] text-muted-2">
                   · {weekdayShort(weekdayOfDay(block.startDate, day.index))} {formatDate(dayOf(block.startDate, activeWeek, day.index))}
                 </span>
+                {dayYmd(block.startDate, activeWeek, day.index) === todayYmd && (
+                  <span className="text-[11px] font-medium text-accent">{t("Today")}</span>
+                )}
+                {paused && (
+                  <span
+                    title={t("Only one program is trained at a time. Make this one active to train it here.")}
+                    className="cursor-help rounded-full border border-border px-2 py-0.5 text-[11px] text-muted"
+                  >
+                    {t("Not trained — “{name}” is active", { name: paused })}
+                  </span>
+                )}
                 {meet && (
                   <span
                     title={t("{name} — competition day", { name: meet.name })}
@@ -1695,31 +1724,16 @@ function TierPicker({
         {badge(tier)}
       </button>
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={176}>
-        <div role="menu" className="-m-1">
-          {offered.map((option) => (
-            <button
-              key={option}
-              type="button"
-              role="menuitemradio"
-              aria-checked={option === tier}
-              onClick={() => {
-                setOpen(false);
-                onPick(option);
-              }}
-              className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] ${
-                option === tier ? "bg-surface-3 text-foreground" : "text-muted hover:bg-surface-3 hover:text-foreground"
-              }`}
-            >
-              {badge(option)}
-              <span className="flex-1">{tierLabel(option)}</span>
-              {option === tier && (
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M5 12.5l4.5 4.5L19 7.5" />
-                </svg>
-              )}
-            </button>
-          ))}
-        </div>
+        <MenuOptions
+          autoFocus={false}
+          value={tier}
+          options={offered.map((option) => ({ value: option, label: <>{badge(option)}<span className="truncate">{tierLabel(option)}</span></> }))}
+          onPick={(option) => {
+            setOpen(false);
+            onPick(option);
+          }}
+          className="-m-1"
+        />
       </Popover>
     </>
   );
@@ -1866,6 +1880,7 @@ function GhostRow({
 function WeekTabs({
   weeks,
   active,
+  current,
   blockId,
   onSelect,
   onAdded,
@@ -1880,6 +1895,8 @@ function WeekTabs({
   readOnly?: boolean;
   weeks: { id: string; order: number; locked: boolean }[];
   active: number;
+  /** The week being trained today, if it is in this phase. */
+  current?: number | null;
   blockId: string;
   onSelect: (week: number) => void;
   onAdded: () => void;
@@ -2006,6 +2023,7 @@ function WeekTabs({
             }`}
           >
             {t("Week {n}", { n: w })}
+            {w === current && <span title={t("This week")} className="ml-1.5 inline-block size-1.5 rounded-full bg-accent align-middle" />}
           </button>
           {locked && (
             <span title={t("Week {n} is locked", { n: w })} className="pl-1 text-accent">

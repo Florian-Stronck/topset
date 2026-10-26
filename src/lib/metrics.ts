@@ -95,6 +95,8 @@ export function computeMetrics(input: MetricInput): Metrics {
     const name = t(LIFT_LABEL[lift]);
     def(`e1rm:${lift}`, t("{lift} e1RM", { lift: name }), unit, "Strength", "max", LIFT_COLOR[lift]);
     def(`top:${lift}`, t("{lift} top set", { lift: name }), unit, "Strength", "max", LIFT_COLOR[lift]);
+    def(`top-pct:${lift}`, t("{lift} top set intensity", { lift: name }), "%1RM", "Strength", "max", LIFT_COLOR[lift]);
+    def(`top-rpe:${lift}`, t("{lift} top set, RPE", { lift: name }), "RPE", "Strength", "max", LIFT_COLOR[lift]);
     def(`tonnage:${lift}`, t("{lift} tonnage", { lift: name }), unit, "Training load", "sum", LIFT_COLOR[lift]);
   }
 
@@ -135,22 +137,29 @@ export function computeMetrics(input: MetricInput): Metrics {
           put("prs", ymd, (row.logs ?? []).filter((l) => l.done && l.pr).length);
 
           const top = topSetOf(row);
+          const max = oneRepMaxFor(row.target, row.tier, maxes, row.exercise);
           if (top) {
             const e1rm = top.reps === null ? null : estimate1RM(top.weight, top.reps, top.rpe, athlete.unit, table);
             const ex = keyOf(row.exercise);
             const name = row.exercise.trim().replace(/\s+/g, " ");
             def(`top-ex:${ex}`, t("{exercise} top set", { exercise: name }), unit, "Exercises", "max");
             def(`e1rm-ex:${ex}`, t("{exercise} e1RM", { exercise: name }), unit, "Exercises", "max");
+            def(`top-pct-ex:${ex}`, t("{exercise} top set intensity", { exercise: name }), "%1RM", "Exercises", "max");
+            def(`top-rpe-ex:${ex}`, t("{exercise} top set, RPE", { exercise: name }), "RPE", "Exercises", "max");
+            const pct = max && max > 0 ? round((top.weight / max) * 100) : null;
             put(`top-ex:${ex}`, ymd, top.weight);
             put(`e1rm-ex:${ex}`, ymd, e1rm);
+            put(`top-pct-ex:${ex}`, ymd, pct);
+            put(`top-rpe-ex:${ex}`, ymd, top.rpe);
             // The competition lifts' lines count only the competition lift itself, as Progress does.
             if (lift && row.tier === "PRIMARY") {
               put(`top:${lift}`, ymd, top.weight);
               put(`e1rm:${lift}`, ymd, e1rm);
+              put(`top-pct:${lift}`, ymd, pct);
+              put(`top-rpe:${lift}`, ymd, top.rpe);
             }
           }
 
-          const max = oneRepMaxFor(row.target, row.tier, maxes, row.exercise);
           if (max && max > 0) {
             const logged = (row.logs ?? []).filter((l) => l.done && l.weight !== null).map((l) => l.weight as number);
             const weights = logged.length > 0 ? logged : row.actualWeight === null ? [] : Array.from({ length: done }, () => row.actualWeight as number);

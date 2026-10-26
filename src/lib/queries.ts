@@ -6,7 +6,8 @@ import { photosHere } from "@/lib/photos";
 import { byWhen, meetingData, type MeetingData } from "@/lib/meetings";
 import { moveData, movesMap, type MoveData } from "@/lib/moves";
 import { injuryData, type InjuryData } from "@/lib/injuries";
-import { sessionsOf } from "@/lib/schedule";
+import { programOn, sessionsOf, weekOn } from "@/lib/schedule";
+import { today as calendarToday, ymdOf } from "@/lib/dates";
 import { prisma } from "@/lib/prisma";
 import type { BlockData } from "@/lib/types";
 import { myCoach } from "@/lib/me";
@@ -65,16 +66,28 @@ export type PhaseSummary = ProgramSummary["phases"][number];
  * from it — so a link does not have to carry both.
  */
 export async function getWorkspace(athleteId: string, programId?: string, phaseId?: string) {
-  const programs = await getProgramsForAthlete(athleteId);
+  const [programs, athlete] = await Promise.all([
+    getProgramsForAthlete(athleteId),
+    prisma.athlete.findUnique({ where: { id: athleteId }, select: { activeProgramId: true } }),
+  ]);
+  // With nothing asked for, open on the phase being trained today.
+  const today = ymdOf(calendarToday());
+  const running = (p: ProgramSummary) => p.phases.find((phase) => weekOn(phase.startDate, phase.weeks.length, today) !== null);
+  const owner = programOn(
+    programs.flatMap((p) => p.phases.map((phase) => ({ programId: p.id, startDate: phase.startDate, weeks: phase.weeks.length }))),
+    today,
+    athlete?.activeProgramId,
+  );
 
   const program =
     programs.find((p) => p.id === programId) ??
     programs.find((p) => p.phases.some((phase) => phase.id === phaseId)) ??
+    programs.find((p) => p.id === owner) ??
     programs[0] ??
     null;
 
   const summary =
-    program?.phases.find((phase) => phase.id === phaseId) ?? program?.phases[0] ?? null;
+    program?.phases.find((phase) => phase.id === phaseId) ?? (program && running(program)) ?? program?.phases[0] ?? null;
 
   const phase = summary
     ? await prisma.block.findUniqueOrThrow({ where: { id: summary.id }, include: BLOCK_INCLUDE })

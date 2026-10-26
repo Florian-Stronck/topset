@@ -1,5 +1,6 @@
 "use client";
 
+import { Select, type SelectOption } from "@/components/Select";
 import { useRef, useState, useTransition } from "react";
 import type { IntensityType, ProgField, ProgOp } from "@prisma/client";
 import { addRule, deleteRule, restoreRule, updateRule } from "@/app/programming/actions";
@@ -43,15 +44,13 @@ function fromSign(sign: Sign, size: number): { op: ProgOp; amount: number } {
   return { op: "ADD", amount: sign === "SUB" ? -Math.abs(size) : Math.abs(size) };
 }
 
-function SignOptions() {
-  return (
-    <>
-      <option value="ADD">+</option>
-      <option value="SUB">−</option>
-      <option value="MULTIPLY">×</option>
-    </>
-  );
-}
+const signOptions = (): SelectOption<Sign>[] => [
+  { value: "ADD", label: "+" },
+  { value: "SUB", label: "−" },
+  { value: "MULTIPLY", label: "×" },
+];
+
+const fieldOptions = (): SelectOption<ProgField>[] => FIELDS.map((f) => ({ value: f.value, label: t(f.label) }));
 
 function stepOf(field: ProgField, op: ProgOp): string {
   if (op === "MULTIPLY") return "0.05";
@@ -208,20 +207,8 @@ function RuleRow({
           onChange={(e) => patch("enabled", e.target.checked)}
           className="accent-[var(--accent)]"
         />
-        <select value={rule.field} onChange={(e) => patch("field", e.target.value as ProgField)} className={control}>
-          {FIELDS.map((f) => (
-            <option key={f.value} value={f.value}>
-              {t(f.label)}
-            </option>
-          ))}
-        </select>
-        <select
-          value={signOf(rule.op, rule.amount)}
-          onChange={(e) => patchMany(fromSign(e.target.value as Sign, rule.amount))}
-          className={control}
-        >
-          <SignOptions />
-        </select>
+        <Select value={rule.field} onChange={(v) => patch("field", v)} options={fieldOptions()} className={control} />
+        <Select value={signOf(rule.op, rule.amount)} onChange={(v) => patchMany(fromSign(v, rule.amount))} options={signOptions()} minWidth={72} className={control} />
         <RuleNumber
           key={`${rule.field}:${signOf(rule.op, rule.amount)}`}
           min={0}
@@ -294,24 +281,8 @@ function CustomRule({ rowId, weeks, intensityType }: { rowId: string; weeks: num
 
   return (
     <div className="mt-2 flex items-center gap-1 border-t border-border pt-2">
-      <select
-        value={draft.field}
-        onChange={(e) => setDraft({ ...draft, field: e.target.value as ProgField })}
-        className={control}
-      >
-        {FIELDS.map((f) => (
-          <option key={f.value} value={f.value}>
-            {t(f.label)}
-          </option>
-        ))}
-      </select>
-      <select
-        value={draft.sign}
-        onChange={(e) => setDraft({ ...draft, sign: e.target.value as Sign })}
-        className={control}
-      >
-        <SignOptions />
-      </select>
+      <Select value={draft.field} onChange={(field) => setDraft({ ...draft, field })} options={fieldOptions()} className={control} />
+      <Select value={draft.sign} onChange={(sign) => setDraft({ ...draft, sign })} options={signOptions()} minWidth={72} className={control} />
       <input
         type="number"
         min={0}

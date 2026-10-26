@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/Select";
 import Body, { type ExtendedBodyPart, type Slug } from "react-muscle-highlighter";
 import { t } from "@/lib/i18n";
 import { AREAS, areaOf, areasIn, injuryLabel, regionMarks, type AreaId, type Side } from "@/lib/injuries";
@@ -99,24 +100,20 @@ export function BodyMap({
       </div>
       {onPick && (
         // The same choice for a keyboard, or for a spot too small to hit.
-        <label className="mt-2 flex items-center justify-center gap-2 text-[12px] text-muted-2">
+        <div className="mt-2 flex items-center justify-center gap-2 text-[12px] text-muted-2">
           {t("or pick")}
-          <select
+          <Select<string>
             value=""
-            onChange={(e) => {
-              const area = areaOf(e.target.value);
+            placeholder={t("an area…")}
+            aria-label={t("an area…")}
+            onChange={(id) => {
+              const area = areaOf(id);
               if (area) onPick(area.id, area.sided ? "R" : null);
             }}
+            options={AREAS.map((a) => ({ value: a.id, label: injuryLabel({ area: a.id, side: null }) }))}
             className="rounded border border-border bg-surface-2 px-1.5 py-1 text-[12px] text-foreground outline-none focus:border-accent"
-          >
-            <option value="">{t("an area…")}</option>
-            {AREAS.map((a) => (
-              <option key={a.id} value={a.id}>
-                {injuryLabel({ area: a.id, side: null })}
-              </option>
-            ))}
-          </select>
-        </label>
+          />
+        </div>
       )}
     </div>
   );

@@ -62,3 +62,6 @@ next-env.d.ts
 
 # Personal Claude Code settings
 .claude/settings.local.json
+
+# launch video project (own node_modules, venv, renders)
+/launch-video/

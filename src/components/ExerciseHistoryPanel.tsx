@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/Select";
 import { useEffect, useState } from "react";
 import { formatDate } from "@/lib/dates";
 import type { ExerciseHistory } from "@/lib/exercise-history";
@@ -29,20 +30,14 @@ export function ExerciseHistoryPanel({ history, unit }: { history: ExerciseHisto
     <section className="mt-7">
       <div className="flex flex-wrap items-center gap-3">
         <h2 className="text-[11px] tracking-[0.16em] text-muted-2">{t("EXERCISE HISTORY")}</h2>
-        <div className="flex items-center rounded-full border border-border bg-surface px-3 py-1">
-          <select
-            value={current.name}
-            onChange={(e) => setName(e.target.value)}
-            aria-label={t("Exercise")}
-            className="cursor-pointer bg-transparent text-[12px] outline-none"
-          >
-            {history.map((h) => (
-              <option key={h.name} value={h.name}>
-                {h.name} ({h.logs.length})
-              </option>
-            ))}
-          </select>
-        </div>
+        <Select
+          value={current.name}
+          onChange={setName}
+          aria-label={t("Exercise")}
+          minWidth={220}
+          options={history.map((h) => ({ value: h.name, label: `${h.name} (${h.logs.length})` }))}
+          className="rounded-full border border-border bg-surface px-3 py-1 text-[12px] outline-none hover:border-accent"
+        />
         <span className="text-[11px] text-muted-2">{t("every logged session, across all programs")}</span>
       </div>
 
@@ -73,6 +68,7 @@ export function ExerciseHistoryPanel({ history, unit }: { history: ExerciseHisto
                     {log.weight} {unit}
                     {log.reps !== null && ` × ${log.reps}`}
                     {log.rpe !== null && <span className="text-muted"> @{log.rpe}</span>}
+                    {log.pct != null && <span className="text-muted"> · {log.pct}%</span>}
                   </td>
                   <td className="px-4 py-1.5 text-right">{log.e1rm === null ? "—" : `${log.e1rm} ${unit}`}</td>
                 </tr>

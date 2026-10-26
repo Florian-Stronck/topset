@@ -20,6 +20,7 @@ import { addPhaseUndoable, closeGapUndoable, moveProgramUndoable, pastePhaseUndo
 import { WholeProgramSheet, type ProgramPosition } from "@/components/WholeProgramSheet";
 import type { MeetSummary } from "@/lib/competition";
 import { describeGap, phaseGaps } from "@/lib/dates";
+import { dateOfDay, programOn } from "@/lib/schedule";
 import { pickFile, restoreBackup } from "@/lib/pick-file";
 import { fresh, useCommands, type Command } from "@/lib/commands";
 import { setPref, togglePref, usePref, type Column } from "@/lib/prefs";
@@ -120,6 +121,17 @@ export function ProgrammingWorkspace({
     url.searchParams.set("week", String(activeWeek));
     window.history.replaceState(null, "", url);
   }, [block.id, activeWeek]);
+  // Only one program is trained at a time: where another owns a date, this one does nothing.
+  const pausedBy = useMemo(() => {
+    const spans = programs.flatMap((p) => p.phases.map((x) => ({ programId: p.id, startDate: x.startDate, weeks: x.weeks.length })));
+    return (ymd: string) => {
+      const owner = programOn(spans, ymd, athlete.activeProgramId);
+      return owner && owner !== program.id ? (programs.find((p) => p.id === owner)?.name ?? null) : null;
+    };
+  }, [programs, program.id, athlete.activeProgramId]);
+  const trainingDays = (block.weeks[activeWeek - 1]?.days ?? []).filter((d) => !d.rest);
+  const pausedNow = trainingDays.map((d) => pausedBy(dateOfDay(block.startDate, activeWeek, d.index))).filter(Boolean);
+
   const tightIntensity = usePref("tightIntensity");
   const columns = usePref("columns");
   const hideRest = usePref("hideRestDays");
@@ -508,7 +520,7 @@ export function ProgrammingWorkspace({
       list.push({
         id: `program-gap-${o.later}`,
         group: "Program",
-        title: t("Fix the {gap}: start {phase} when {previous} ends", { gap: describeGap(o.days), phase: later.name, previous: earlier.name }),
+        title: t("Fix the {gap}: start {phase} when {previous} ends", { gap: describeGap(o.shared), phase: later.name, previous: earlier.name }),
         keywords: "overlap programs both dates start move",
         run: () => moveProgramUndoable(history, later, -o.days),
       });
@@ -711,6 +723,26 @@ export function ProgrammingWorkspace({
         </p>
       )}
 
+      {view === "phase" && pausedNow.length > 0 && (
+        <div className="mx-6 mt-2 flex w-fit flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-[12px]">
+          <span className="flex items-center gap-2 text-muted">
+            <span className="size-1.5 shrink-0 rounded-full bg-warn" aria-hidden />
+            {pausedNow.length === trainingDays.length
+              ? t("“{name}” is the active program this week — this one isn't trained.", { name: pausedNow[0]! })
+              : t("“{name}” is the active program on some days this week — this one isn't trained on them.", { name: pausedNow[0]! })}
+          </span>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => void setActiveProgramUndoable(history, athlete, program.id)}
+              className="rounded-full border border-border px-2.5 py-0.5 text-[11px] text-muted hover:border-accent hover:text-accent"
+            >
+              {t("Make “{name}” active", { name: program.name })}
+            </button>
+          )}
+        </div>
+      )}
+
       {view === "program" ? (
         <WholeProgramSheet
           phases={wholeProgram}
@@ -731,6 +763,7 @@ export function ProgrammingWorkspace({
           deletingWeek={deletingWeek}
           onDeletingWeek={setDeletingWeek}
           readOnly={readOnly}
+          pausedBy={pausedBy}
         />
       )}
       <SaveFailed />

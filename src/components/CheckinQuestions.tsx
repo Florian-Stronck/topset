@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/Select";
 import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
 import {
@@ -445,21 +446,15 @@ function KindSettings({ q, onConfig }: { q: CheckinQuestionInput; onConfig: (con
     return (
       <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-muted">
         {t("Goes to")}
-        <select
+        <Select<Nutrient | "">
           value={q.config.nutrient ?? ""}
-          onChange={(e) => {
-            const n = e.target.value as Nutrient | "";
-            onConfig(n ? { nutrient: n, unit: NUTRIENT_UNIT[n] } : {});
-          }}
+          onChange={(n) => onConfig(n ? { nutrient: n, unit: NUTRIENT_UNIT[n] } : {})}
+          options={[
+            { value: "", label: t("Its own answers") },
+            ...NUTRIENTS.map((n) => ({ value: n, label: t("Nutrition log: {what}", { what: nutrientName[n] }) })),
+          ]}
           className={`${field} w-48`}
-        >
-          <option value="">{t("Its own answers")}</option>
-          {NUTRIENTS.map((n) => (
-            <option key={n} value={n}>
-              {t("Nutrition log: {what}", { what: nutrientName[n] })}
-            </option>
-          ))}
-        </select>
+        />
         {q.config.nutrient ? (
           <span className="text-[11px] text-muted-2">{t("In {unit}. Shows in the nutrition panel on Tracking.", { unit: NUTRIENT_UNIT[q.config.nutrient] })}</span>
         ) : (
@@ -474,13 +469,7 @@ function KindSettings({ q, onConfig }: { q: CheckinQuestionInput; onConfig: (con
   if (q.kind === "SCALE") {
     const { min = 1, max = 5 } = q.config;
     const pick = (value: number, set: (n: number) => void, from: number, to: number) => (
-      <select value={value} onChange={(e) => set(Number(e.target.value))} className={`${field} w-16`}>
-        {Array.from({ length: to - from + 1 }, (_, i) => from + i).map((n) => (
-          <option key={n} value={n}>
-            {n}
-          </option>
-        ))}
-      </select>
+      <Select value={value} onChange={set} minWidth={64} options={Array.from({ length: to - from + 1 }, (_, i) => ({ value: from + i, label: from + i }))} className={`${field} w-16`} />
     );
     return (
       <div className="mt-3 grid grid-cols-[auto_1fr] items-center gap-2 text-[12px] text-muted">

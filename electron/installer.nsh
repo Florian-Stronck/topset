@@ -20,6 +20,19 @@ LangString finishText 1033 "New versions install themselves in the background."
 LangString finishText 1031 "Neue Versionen installieren sich im Hintergrund."
 LangString finishText 1036 "Les nouvelles versions s'installent en arrière-plan."
 
+# Running the setup over an installed copy: same wizard, but it says so.
+LangString upgradeTitle 1033 "Update Topset"
+LangString upgradeTitle 1031 "Topset aktualisieren"
+LangString upgradeTitle 1036 "Mettre à jour Topset"
+
+LangString upgradeText 1033 "Topset is already installed. This replaces it with version ${VERSION}.$\r$\n$\r$\nYour athletes, programs and settings stay as they are.$\r$\n$\r$\nClick Next to continue."
+LangString upgradeText 1031 "Topset ist bereits installiert. Es wird durch Version ${VERSION} ersetzt.$\r$\n$\r$\nDeine Athleten, Programme und Einstellungen bleiben erhalten.$\r$\n$\r$\nKlicke auf Weiter, um fortzufahren."
+LangString upgradeText 1036 "Topset est déjà installé. Il sera remplacé par la version ${VERSION}.$\r$\n$\r$\nVos athlètes, programmes et réglages restent tels quels.$\r$\n$\r$\nCliquez sur Suivant pour continuer."
+
+LangString upgradedTitle 1033 "Topset is updated"
+LangString upgradedTitle 1031 "Topset ist aktualisiert"
+LangString upgradedTitle 1036 "Topset est à jour"
+
 LangString tutorialCheckbox 1033 "Show the tutorial on first start"
 LangString tutorialCheckbox 1031 "Tutorial beim ersten Start zeigen"
 LangString tutorialCheckbox 1036 "Afficher le tutoriel au premier démarrage"
@@ -37,6 +50,23 @@ LangString tutorialCheckbox 1036 "Afficher le tutoriel au premier démarrage"
 !macroend
 
 !macro customWelcomePage
+  # "1" when setup runs over an installed copy, read from the key electron-builder writes.
+  Var upgrade
+  Var welcomeTitle
+  Var welcomeText
+
+  Function DetectUpgrade
+    StrCpy $upgrade "0"
+    StrCpy $welcomeTitle "$(welcomeTitle)"
+    StrCpy $welcomeText "$(welcomeText)"
+    ReadRegStr $0 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
+    ${if} $0 != ""
+      StrCpy $upgrade "1"
+      StrCpy $welcomeTitle "$(upgradeTitle)"
+      StrCpy $welcomeText "$(upgradeText)"
+    ${endif}
+  FunctionEnd
+
   # Called as each page shows, since MUI shows the window's own controls again per page:
   # the strip behind the buttons, the title bar (Windows 10 2004 and later), the buttons,
   # and hidden, the light etched lines and the version stamp, which ignore colours.
@@ -59,9 +89,10 @@ LangString tutorialCheckbox 1036 "Afficher le tutoriel au premier démarrage"
     ShowWindow $0 ${SW_HIDE}
   FunctionEnd
 
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE DetectUpgrade
   !define MUI_PAGE_CUSTOMFUNCTION_SHOW DarkWindow
-  !define MUI_WELCOMEPAGE_TITLE "$(welcomeTitle)"
-  !define MUI_WELCOMEPAGE_TEXT "$(welcomeText)"
+  !define MUI_WELCOMEPAGE_TITLE "$welcomeTitle"
+  !define MUI_WELCOMEPAGE_TEXT "$welcomeText"
   !insertmacro MUI_PAGE_WELCOME
 !macroend
 
@@ -101,20 +132,41 @@ LangString tutorialCheckbox 1036 "Afficher le tutoriel au premier démarrage"
   Function TutorialChecked
   FunctionEnd
 
-  !define MUI_FINISHPAGE_TITLE "$(finishTitle)"
+  # Set before the page is built, since MUI reads the title then.
+  Var finishTitle
+  Function FinishPre
+    StrCpy $finishTitle "$(finishTitle)"
+    ${if} $upgrade == "1"
+      StrCpy $finishTitle "$(upgradedTitle)"
+    ${endif}
+  FunctionEnd
+
+  !define MUI_FINISHPAGE_TITLE "$finishTitle"
   !define MUI_FINISHPAGE_TEXT "$(finishText)"
   !define MUI_FINISHPAGE_RUN
   !define MUI_FINISHPAGE_RUN_FUNCTION "StartApp"
   !define MUI_FINISHPAGE_SHOWREADME ""
   !define MUI_FINISHPAGE_SHOWREADME_TEXT "$(tutorialCheckbox)"
   !define MUI_FINISHPAGE_SHOWREADME_FUNCTION "TutorialChecked"
-  !define MUI_PAGE_CUSTOMFUNCTION_SHOW DarkWindow
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE FinishPre
+  !define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShow
   !define MUI_PAGE_CUSTOMFUNCTION_LEAVE "FinishLeave"
   !insertmacro MUI_PAGE_FINISH
 
-  # After the page, which declares the checkbox variable. Picked up and deleted by
-  # applyInstallerChoices in electron/main.js on the next start.
+  # After the page, which declares the checkbox variable. An update keeps the tutorial
+  # setting the coach already has, so the checkbox is hidden and nothing is written.
+  Function FinishShow
+    Call DarkWindow
+    ${if} $upgrade == "1"
+      ShowWindow $mui.FinishPage.ShowReadme ${SW_HIDE}
+    ${endif}
+  FunctionEnd
+
+  # Picked up and deleted by applyInstallerChoices in electron/main.js on the next start.
   Function FinishLeave
+    ${if} $upgrade == "1"
+      Return
+    ${endif}
     ${NSD_GetState} $mui.FinishPage.ShowReadme $0
     ${if} $0 == ${BST_CHECKED}
       StrCpy $0 "1"

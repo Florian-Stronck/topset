@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/Select";
 import { useEffect, useMemo, useState } from "react";
 import { Segmented } from "@/components/charts/charts";
 import { ChartView } from "@/components/tracking/ChartBoard";
@@ -181,13 +182,7 @@ export function ChartBuilder({
               <div className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2">
                   <span className="text-muted-2">{t("Range")}</span>
-                  <select value={String(spec.range)} onChange={(e) => set({ range: e.target.value === "phase" || e.target.value === "all" ? e.target.value : Number(e.target.value) })} className={field}>
-                    {RANGES.map((r) => (
-                      <option key={r} value={String(r)}>
-                        {rangeLabel(r)}
-                      </option>
-                    ))}
-                  </select>
+                  <Select value={spec.range} onChange={(range) => set({ range })} options={RANGES.map((r) => ({ value: r, label: rangeLabel(r) }))} className={field} />
                 </label>
                 {!pie && <Segmented value={spec.by} label={t("Points")} options={[{ value: "day", label: t("Daily") }, { value: "week", label: t("Weekly") }]} onChange={(by) => set({ by })} />}
               </div>
@@ -209,18 +204,15 @@ export function ChartBuilder({
                             onChange={(e) => setMetric(i, { color: e.target.value })}
                             className="size-6 shrink-0 cursor-pointer rounded border-0 bg-transparent p-0"
                           />
-                          <select value={m.id} onChange={(e) => setMetric(i, { id: e.target.value, color: undefined, agg: undefined, label: undefined })} className={`${field} min-w-0 flex-1`} aria-label={t("Measure")}>
-                            {!def && <option value={m.id}>{t("{id} (not logged)", { id: m.id })}</option>}
-                            {groups.map((g) => (
-                              <optgroup key={g.group} label={t(g.group)}>
-                                {g.defs.map((d) => (
-                                  <option key={d.id} value={d.id}>
-                                    {d.label}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            ))}
-                          </select>
+                          <Select
+                            value={m.id}
+                            onChange={(id) => setMetric(i, { id, color: undefined, agg: undefined, label: undefined })}
+                            placeholder={t("{id} (not logged)", { id: m.id })}
+                            options={groups.flatMap((g) => g.defs.map((d) => ({ value: d.id, label: d.label, group: t(g.group) })))}
+                            minWidth={220}
+                            className={`${field} min-w-0 flex-1`}
+                            aria-label={t("Measure")}
+                          />
                           <button type="button" aria-label={t("Move up")} onClick={() => move(i, i - 1)} className="px-0.5 text-muted-2 hover:text-foreground">↑</button>
                           <button type="button" aria-label={t("Move down")} onClick={() => move(i, i + 1)} className="px-0.5 text-muted-2 hover:text-foreground">↓</button>
                           <button
@@ -236,13 +228,7 @@ export function ChartBuilder({
                         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 pl-7 text-[11px] text-muted">
                           {!pie && !scatter && (
                             <>
-                              <select value={type} onChange={(e) => setMetric(i, { type: e.target.value as ChartMetric["type"] })} className={field} aria-label={t("Draw as")}>
-                                {TYPES.map((x) => (
-                                  <option key={x.value} value={x.value}>
-                                    {t(x.label)}
-                                  </option>
-                                ))}
-                              </select>
+                              <Select value={type} onChange={(type) => setMetric(i, { type })} options={TYPES.map((x) => ({ value: x.value, label: t(x.label) }))} className={field} aria-label={t("Draw as")} />
                               <Segmented
                                 value={m.axis ?? "left"}
                                 label={t("Axis")}
@@ -258,13 +244,7 @@ export function ChartBuilder({
                           {!pie && !(scatter && i === 0) && check(m.trend, (trend) => setMetric(i, { trend }), t("Trend line"))}
                           <label className="flex items-center gap-1">
                             {pie ? t("Over the range:") : spec.by === "week" ? t("Each week:") : t("Several in a day:")}
-                            <select value={m.agg ?? def?.agg ?? "avg"} onChange={(e) => setMetric(i, { agg: e.target.value as Agg })} className={field}>
-                              {AGGS.map((a) => (
-                                <option key={a} value={a}>
-                                  {t(AGG_LABEL[a])}
-                                </option>
-                              ))}
-                            </select>
+                            <Select value={m.agg ?? def?.agg ?? "avg"} onChange={(agg) => setMetric(i, { agg })} options={AGGS.map((a) => ({ value: a, label: t(AGG_LABEL[a]) }))} className={field} />
                           </label>
                           <input value={m.label ?? ""} placeholder={def?.label ?? t("Name")} onChange={(e) => setMetric(i, { label: e.target.value || undefined })} className={`${field} w-40`} aria-label={t("Name")} />
                         </div>

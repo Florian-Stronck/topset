@@ -7,6 +7,9 @@ type Anchor = { top: number; left: number; maxHeight: number };
 
 const noop = () => () => {};
 
+/** Open popovers, newest last: Escape closes only the top one, not the one it was opened from. */
+const stack: object[] = [];
+
 // Position before paint on the client; fall back to useEffect during SSR.
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
@@ -70,6 +73,14 @@ export function Popover({
     };
   }, [open, anchorRef, width, align, hydrated]);
 
+  // Its own effect: the one below re-runs whenever a caller passes a fresh onClose.
+  const [me] = useState(() => ({}));
+  useEffect(() => {
+    if (!open) return;
+    stack.push(me);
+    return () => void stack.splice(stack.indexOf(me), 1);
+  }, [open, me]);
+
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
@@ -80,7 +91,7 @@ export function Popover({
       onClose();
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && stack.at(-1) === me) onClose();
     }
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -88,7 +99,7 @@ export function Popover({
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open, onClose, anchorRef]);
+  }, [open, onClose, anchorRef, me]);
 
   if (!open || !hydrated) return null;
 

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
+import { Select } from "@/components/Select";
 import { syncNow } from "@/app/sync-actions";
 import { fresh, useCommands, type Command } from "@/lib/commands";
 import { t } from "@/lib/i18n";
@@ -275,39 +276,27 @@ export function TrackingShell({
               {ago === null ? (autoSync ? t("Refreshes on its own") : t("Refresh")) : ago < 1 ? t("Updated just now") : t("Updated {n} min ago", { n: ago })}
             </button>
             {programs.length > 0 && block && (
-              <div className="flex items-center rounded-full border border-border bg-surface px-3 py-1.5">
-                <select
-                  value={block.programId}
-                  aria-label={t("Program")}
-                  onChange={(e) => {
-                    const next = programs.find((p) => p.id === e.target.value);
-                    if (next?.firstPhaseId) router.push(href({ block: next.firstPhaseId, week: null }));
-                  }}
-                  className="cursor-pointer bg-transparent text-[12px] outline-none"
-                >
-                  {programs.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <Select
+                aria-label={t("Program")}
+                value={block.programId}
+                options={programs.filter((p) => p.firstPhaseId).map((p) => ({ value: p.id, label: p.name }))}
+                minWidth={200}
+                className="rounded-full border border-border bg-surface px-3 py-1.5 text-[12px] hover:border-accent"
+                onChange={(id) => {
+                  const next = programs.find((p) => p.id === id);
+                  if (next?.firstPhaseId) router.push(href({ block: next.firstPhaseId, week: null }));
+                }}
+              />
             )}
             {phases.length > 0 && block && (
-              <div className="flex items-center rounded-full border border-border bg-surface px-3 py-1.5">
-                <select
-                  value={block.id}
-                  aria-label={t("Phase")}
-                  onChange={(e) => router.push(href({ block: e.target.value, week: null }))}
-                  className="cursor-pointer bg-transparent text-[12px] outline-none"
-                >
-                  {phases.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.phase}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <Select
+                aria-label={t("Phase")}
+                value={block.id}
+                options={phases.map((p) => ({ value: p.id, label: p.phase }))}
+                minWidth={200}
+                className="rounded-full border border-border bg-surface px-3 py-1.5 text-[12px] hover:border-accent"
+                onChange={(id) => router.push(href({ block: id, week: null }))}
+              />
             )}
             {block && (
               <Link

@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import type { IntensityType } from "@prisma/client";
 import { NumberInput } from "@/components/cells";
+import { MenuOptions } from "@/components/Select";
 import { Popover } from "@/components/Popover";
 import { t } from "@/lib/i18n";
 
@@ -77,30 +78,13 @@ export function IntensityEditor({
 
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={196}>
         <div>
-          <div role="menu" className="rounded-md border border-border bg-surface-2 p-1">
-            {KINDS.map((k) => {
-              const on = k.value === value.intensityType;
-              return (
-                <button
-                  key={k.value}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={on}
-                  onClick={() => onCommit({ intensityType: k.value })}
-                  className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-[12px] ${
-                    on ? "bg-surface-3 text-foreground" : "text-muted hover:bg-surface-3 hover:text-foreground"
-                  }`}
-                >
-                  {t(k.label)}
-                  {on && (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                      <path d="M5 12.5l4.5 4.5L19 7.5" />
-                    </svg>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          <MenuOptions
+            autoFocus={false}
+            value={value.intensityType}
+            options={KINDS.map((k) => ({ value: k.value, label: t(k.label) }))}
+            onPick={(intensityType) => onCommit({ intensityType })}
+            className="rounded-md border border-border bg-surface-2 p-1"
+          />
           {value.load != null && (
             <button
               type="button"

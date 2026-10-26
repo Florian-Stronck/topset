@@ -257,6 +257,8 @@ export function intensityZones(block: PhaseBlock, athlete: AthleteData, lift: Li
 export type LiftWeek = {
   week: number;
   top: { weight: number; reps: number | null; rpe: number | null } | null;
+  /** The top set as %1RM of the phase's max for the lift. */
+  topPct: number | null;
   e1rm: number | null;
   rpeDelta: number | null;
   setsDone: number;
@@ -269,9 +271,11 @@ export type LiftWeek = {
  * it implies, how far RPE ran from plan, and the work done on every row of that lift.
  */
 export function liftWeekTable(block: PhaseBlock, athlete: AthleteData, lift: LiftKey): LiftWeek[] {
+  const maxes = maxesOf(block, athlete);
   return block.weeks.map((week) => {
     const rows = rowsOfWeek(week).filter((r) => liftOf(r.target) === lift);
     let top: LiftWeek["top"] = null;
+    let topPct: number | null = null;
     let e1rm: number | null = null;
     for (const row of rows) {
       if (row.tier !== "PRIMARY") continue;
@@ -279,12 +283,17 @@ export function liftWeekTable(block: PhaseBlock, athlete: AthleteData, lift: Lif
       if (!set) continue;
       const estimate = estimate1RM(set.weight, set.reps, set.rpe, athlete.unit, rpeTableFor(athlete));
       if (estimate !== null && (e1rm === null || estimate > e1rm)) e1rm = estimate;
-      if (!top || set.weight > top.weight) top = set;
+      if (!top || set.weight > top.weight) {
+        top = set;
+        const max = oneRepMaxFor(row.target, row.tier, maxes);
+        topPct = max ? Math.round((set.weight / max) * 100) : null;
+      }
     }
     const sets = daySets(rows);
     return {
       week: week.order,
       top,
+      topPct,
       e1rm,
       rpeDelta: rpeDrift(rows).mean,
       setsDone: sets.done,

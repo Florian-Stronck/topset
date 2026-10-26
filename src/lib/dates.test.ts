@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { describeGap, formatDate, mondayOf, overlapsSettled, phaseGaps, phaseOverlaps, programOverlaps, snapStart, weekdayOf, weekStartOf } from "@/lib/dates";
+import { describeGap, formatDate, mondayOf, overlapsSettled, overlapWinner, programStatus, phaseGaps, phaseOverlaps, programOverlaps, snapStart, weekdayOf, weekStartOf } from "@/lib/dates";
 import { DEFAULTS, setActiveSettings } from "@/lib/settings";
 
 describe("mondayOf", () => {
@@ -154,14 +154,41 @@ describe("programOverlaps", () => {
       new Date("2026-10-05T00:00:00Z"),
     );
     // main runs to 26 Oct; peak starts 19 Oct — a week in.
-    assert.deepEqual(got, [{ earlier: "main", later: "peak", days: -7 }]);
+    assert.deepEqual(got, [{ earlier: "main", later: "peak", days: -7, shared: -7 }]);
+  });
+
+  test("a short program inside a long one overlaps for its own length, not the long one's tail", () => {
+    const got = programOverlaps(
+      [
+        { id: "worlds", phases: [{ startDate: "2026-08-24", weeks: 13 }] },
+        { id: "new", phases: [{ startDate: "2026-10-12", weeks: 1 }] },
+      ],
+      new Date("2026-10-14T00:00:00Z"),
+    );
+    assert.deepEqual(got, [{ earlier: "worlds", later: "new", days: -42, shared: -7 }]);
   });
 
   test("settled only once the active program is in every pair", () => {
-    const pairs = [{ earlier: "a", later: "b", days: -7 }, { earlier: "a", later: "c", days: -14 }];
+    const pairs = [{ earlier: "a", later: "b", days: -7, shared: -7 }, { earlier: "a", later: "c", days: -14, shared: -14 }];
     assert.equal(overlapsSettled(pairs, "a"), true);
     assert.equal(overlapsSettled(pairs, "b"), false);
     assert.equal(overlapsSettled(pairs, null), false);
     assert.equal(overlapsSettled([], null), true);
+  });
+
+  test("the picked program wins an overlap, else the newer one; the other is paused", () => {
+    const old = { id: "old", phases: [{ startDate: "2026-09-01", weeks: 8 }] };
+    const fresh = { id: "new", phases: [{ startDate: "2026-10-12", weeks: 4 }] };
+    const both = new Set(["old", "new"]);
+    assert.equal(overlapWinner([old, fresh], both, null), "new");
+    assert.equal(overlapWinner([old, fresh], both, "old"), "old");
+    assert.equal(overlapWinner([old, fresh], both, "elsewhere"), "new");
+    assert.equal(programStatus(old, "2026-10-14", both, "new", "new"), "paused");
+    assert.equal(programStatus(fresh, "2026-10-14", both, "new", "new"), "active");
+    // Before the overlap the old one still trains; the new one waits.
+    assert.equal(programStatus(old, "2026-10-01", both, "new", "old"), "active");
+    assert.equal(programStatus(fresh, "2026-10-01", both, "new", "old"), "upcoming");
+    assert.equal(programStatus(fresh, "2026-10-01", both, "old", "old"), "paused");
+    assert.equal(programStatus(old, "2026-11-01", both, "new", undefined), "done");
   });
 });

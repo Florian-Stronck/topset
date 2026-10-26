@@ -1,5 +1,6 @@
 "use client";
 
+import { Select as AppSelect } from "@/components/Select";
 import { RpeChartEditor } from "@/components/RpeChartEditor";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
@@ -1726,15 +1727,7 @@ function Select({
   options: (readonly [string, string] | string[])[];
   onChange: (v: string) => void;
 }) {
-  return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} className={`${fieldClass} cursor-pointer`}>
-      {options.map(([v, text]) => (
-        <option key={v} value={v}>
-          {text}
-        </option>
-      ))}
-    </select>
-  );
+  return <AppSelect value={value} onChange={onChange} options={options.map(([v, text]) => ({ value: v, label: text }))} className={fieldClass} />;
 }
 
 function Switch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {

@@ -59,6 +59,8 @@ test("every source lands on the calendar, by name", () => {
   assert.deepEqual(points.compliance, [["2026-09-21", 67]]);
   assert.deepEqual(points["top:squat"], [["2026-09-21", 160]]);
   assert.deepEqual(points["top-ex:squat"], [["2026-09-21", 160]]);
+  assert.deepEqual(points["top-pct:squat"], [["2026-09-21", 80]]);
+  assert.deepEqual(points["top-rpe:squat"], [["2026-09-21", 8]]);
   assert.deepEqual(points.prs, [["2026-09-21", 1]]);
   assert.deepEqual(points.bw, [["2026-09-21", 80.4]]);
   assert.deepEqual(points.kcal, [["2026-09-22", 3000]]);

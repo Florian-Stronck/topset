@@ -102,6 +102,7 @@ test("the lift table takes the top set off competition rows but the work off eve
   const b = block([[[row({ logs: [log(0, 170, 5), log(1, 175, 5)] }), row({ tier: "VARIATION", exercise: "Pause squat", actualWeight: 150, performedRpe: 9, sets: 2, reps: 3 })]]]);
   const [week] = liftWeekTable(b, athlete, "squat");
   assert.deepEqual(week.top, { weight: 175, reps: 5, rpe: 8 });
+  assert.equal(week.topPct, 88);
   assert.ok(week.e1rm !== null && week.e1rm > 175);
   assert.equal(week.setsDone, 4);
   assert.equal(week.setsPrescribed, 5);

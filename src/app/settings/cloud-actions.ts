@@ -70,7 +70,7 @@ async function begin(server: string, session: Session): Promise<Result> {
   };
   stopSync();
   writeConfig(config);
-  startSync();
+  void startSync();
   const { error } = await syncNow();
   // Athlete links point at the same site. Set after the first sync, which may have
   // brought this account's settings down from the server.

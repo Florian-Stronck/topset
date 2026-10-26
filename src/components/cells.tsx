@@ -103,7 +103,9 @@ export function useEscape<T>(value: T) {
  */
 export function formKeys(submit: () => void, cancel: () => void, disabled = false) {
   return (e: React.KeyboardEvent) => {
-    if ((e.target as HTMLElement).tagName === "BUTTON") return;
+    // A button takes its own Enter; Escape still cancels, unless it is closing a dropdown's menu.
+    const el = e.target as HTMLElement;
+    if (el.tagName === "BUTTON" && (e.key !== "Escape" || el.closest('[role="menu"]'))) return;
 
     if (e.key === "Enter" && !disabled) {
       e.preventDefault();

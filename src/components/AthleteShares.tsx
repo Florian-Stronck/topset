@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/Select";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { sharedWithOf } from "@/app/athletes/actions";
 import { listShareCodes, manageShare, type ShareCodeListing } from "@/app/settings/cloud-actions";
@@ -20,13 +21,14 @@ const LASTS = [1, 7, 30, null] as const;
 
 function RoleSelect({ value, onChange, disabled }: { value: Role; onChange: (role: Role) => void; disabled?: boolean }) {
   return (
-    <select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as Role)} title={t(ROLE_HINT[value])} className={`min-w-0 cursor-pointer ${field}`}>
-      {ROLES.map((r) => (
-        <option key={r} value={r}>
-          {t(ROLE_LABEL[r])}
-        </option>
-      ))}
-    </select>
+    <Select
+      value={value}
+      disabled={disabled}
+      onChange={onChange}
+      title={t(ROLE_HINT[value])}
+      options={ROLES.map((r) => ({ value: r, label: t(ROLE_LABEL[r]) }))}
+      className={`min-w-0 ${field}`}
+    />
   );
 }
 
@@ -181,25 +183,21 @@ export function ShareDialog({
           <div className="mt-3 flex flex-col gap-1.5" onKeyDown={formKeys(makeCode, onClose, pending)}>
             <div className="flex items-center gap-1.5">
               <RoleSelect value={form.role} onChange={(role) => setForm({ ...form, role })} />
-              <select
+              <Select
                 value={form.reusable ? "many" : "once"}
-                onChange={(e) => setForm({ ...form, reusable: e.target.value === "many" })}
-                className={`min-w-0 flex-1 cursor-pointer ${field}`}
-              >
-                <option value="once">{t("One coach")}</option>
-                <option value="many">{t("Any number")}</option>
-              </select>
-              <select
+                onChange={(v) => setForm({ ...form, reusable: v === "many" })}
+                options={[
+                  { value: "once", label: t("One coach") },
+                  { value: "many", label: t("Any number") },
+                ]}
+                className={`min-w-0 flex-1 ${field}`}
+              />
+              <Select<number | "never">
                 value={form.days ?? "never"}
-                onChange={(e) => setForm({ ...form, days: e.target.value === "never" ? null : Number(e.target.value) })}
-                className={`min-w-0 flex-1 cursor-pointer ${field}`}
-              >
-                {LASTS.map((d) => (
-                  <option key={d ?? "never"} value={d ?? "never"}>
-                    {d === null ? t("Never expires") : d === 1 ? t("1 day") : t("{n} days", { n: d })}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => setForm({ ...form, days: v === "never" ? null : v })}
+                options={LASTS.map((d) => ({ value: d ?? "never", label: d === null ? t("Never expires") : d === 1 ? t("1 day") : t("{n} days", { n: d }) }))}
+                className={`min-w-0 flex-1 ${field}`}
+              />
             </div>
             <p className="text-[11px] text-muted-2">{t(ROLE_HINT[form.role])}</p>
             <button

@@ -1,4 +1,4 @@
-import { estimate1RM, rpeTableFor, formatPrescription, maxesOf, resolveDay } from "@/lib/intensity";
+import { estimate1RM, rpeTableFor, formatPrescription, maxesOf, oneRepMaxFor, resolveDay } from "@/lib/intensity";
 import type { ProgressBlock } from "@/lib/progress";
 import { NO_MOVES, sessionDate } from "@/lib/schedule";
 import type { AthleteData } from "@/lib/types";
@@ -18,6 +18,8 @@ export type ExerciseLog = {
   weight: number;
   reps: number | null;
   rpe: number | null;
+  /** The load as %1RM of the max the row is trained off. */
+  pct?: number | null;
   e1rm: number | null;
 };
 
@@ -40,6 +42,7 @@ export function exerciseHistory(blocks: HistoryBlock[], athlete: AthleteData, mo
         for (const row of day.rows) {
           if (row.exercise.trim() === "" || row.actualWeight === null) continue;
           const key = keyOf(row.exercise);
+          const max = oneRepMaxFor(row.target, row.tier, maxes, row.exercise);
           const entry = out.get(key) ?? { name: row.exercise.trim().replace(/\s+/g, " "), logs: [] };
           entry.logs.push({
             ymd: sessionDate(block.startDate, week.order, day, moves),
@@ -50,6 +53,7 @@ export function exerciseHistory(blocks: HistoryBlock[], athlete: AthleteData, mo
             weight: row.actualWeight,
             reps: row.reps,
             rpe: row.performedRpe,
+            pct: max ? Math.round((row.actualWeight / max) * 100) : null,
             e1rm: row.reps === null ? null : estimate1RM(row.actualWeight, row.reps, row.performedRpe, athlete.unit, rpeTableFor(athlete)),
           });
           out.set(key, entry);

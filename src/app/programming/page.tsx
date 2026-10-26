@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { canEdit } from "@/lib/share";
 import { today as calendarToday, ymdOf } from "@/lib/dates";
 import { isActive, sortInjuries } from "@/lib/injuries";
+import { weekOn } from "@/lib/schedule";
 import { HistoryProvider } from "@/components/history";
 import { ProgrammingWorkspace } from "@/components/ProgrammingWorkspace";
 import { Sidebar } from "@/components/Sidebar";
@@ -35,6 +36,11 @@ export default async function ProgrammingPage({
   const athlete = coach.athletes.find((a) => a.id === params.athlete) ?? coach.athletes[0];
 
   const { programs, program, phase } = await getWorkspace(athlete.id, params.program, params.phase);
+  // Pin what opened in the link, so a refresh after switching the active program stays on it.
+  if (phase && params.phase !== phase.id) {
+    const week = Math.trunc(Number(params.week)) || weekOn(phase.startDate, phase.weeks.length, ymdOf(calendarToday())) || 1;
+    redirect(`/programming?athlete=${athlete.id}&phase=${phase.id}&week=${week}`);
+  }
 
   const [exerciseHistory, meets, programBlocks, injuries] = await Promise.all([
     getExerciseHistory(coach.id),
