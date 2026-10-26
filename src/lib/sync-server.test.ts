@@ -279,3 +279,28 @@ test("a push says which meetings the athlete should hear about", async () => {
     "A Meeting row is missing something.",
   );
 });
+
+test("rows that trade places in one push don't trip over each other's slots", async () => {
+  await client.executeMultiple(`
+    INSERT INTO "Day" ("id", "weekId", "index", "label") VALUES ('d2', 'w1', 1, 'Tue'), ('d3', 'w1', 2, 'Wed');
+    INSERT INTO "ExerciseRow" ("id", "dayId", "order", "target", "exercise") VALUES ('s1', 'd2', 0, 'Squat', 'Squat'), ('s2', 'd2', 1, 'Bench', 'Bench');
+    INSERT INTO "ExerciseRow" ("id", "dayId", "order", "target", "exercise", "fromId") VALUES ('s3', 'd3', 0, 'Squat', 'Squat', 's1');
+  `);
+  const row = (id: string, order: number, exercise: string, fromId: string | null = null) => ({ id, dayId: id === "s3" ? "d3" : "d2", order, target: exercise, exercise, fromId });
+  // A row inserted above the others, as the desktop app sends it: every row one place down.
+  const inserted = [row("s1", 1, "Squat"), row("s2", 2, "Bench"), row("s0", 0, "Deadlift")];
+  assert.equal(await applyPush(client, "me", { tables: { ExerciseRow: { upsert: inserted, remove: [] } }, athlete: [] }), null);
+  // Two days swapped, and the chain handed from one row to another.
+  const days = [
+    { id: "d2", weekId: "w1", index: 2, label: "Tue" },
+    { id: "d3", weekId: "w1", index: 1, label: "Wed" },
+  ];
+  const relinked = [row("s3", 0, "Squat", "s0")];
+  assert.equal(await applyPush(client, "me", { tables: { Day: { upsert: days, remove: [] }, ExerciseRow: { upsert: relinked, remove: [] } }, athlete: [] }), null);
+
+  const order = await client.execute(`SELECT "id", "order" FROM "ExerciseRow" WHERE "dayId" = 'd2' ORDER BY "order"`);
+  assert.deepEqual(order.rows.map((r) => [r.id, r.order]), [["s0", 0], ["s1", 1], ["s2", 2]]);
+  const index = await client.execute(`SELECT "id", "index" FROM "Day" WHERE "id" IN ('d2', 'd3') ORDER BY "index"`);
+  assert.deepEqual(index.rows.map((r) => [r.id, r.index]), [["d3", 1], ["d2", 2]]);
+  assert.equal((await client.execute(`SELECT "fromId" FROM "ExerciseRow" WHERE "id" = 's3'`)).rows[0].fromId, "s0");
+});
