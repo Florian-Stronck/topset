@@ -94,6 +94,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "quick-place", group: "General", title: "Go to…" },
   { id: "quick-athlete", group: "General", title: "Go to athlete…" },
   { id: "quick-week", group: "General", title: "Go to week…" },
+  { id: "go-today", group: "Go", title: "Go to today", keys: ["alt+t"] },
   { id: "shortcuts", group: "General", title: "Keyboard shortcuts", keys: ["alt+/"] },
   { id: "keybindings", group: "General", title: "Customise keyboard shortcuts…" },
 
@@ -212,6 +213,11 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "row-copy", group: "Row", title: "Copy the row's prescription", keys: ["alt+c"], when: "grid" },
   { id: "row-paste", group: "Row", title: "Paste it onto this row", keys: ["alt+v"], when: "grid" },
   { id: "day-rest", group: "Row", title: "Training day / rest day", keys: ["alt+r"], when: "grid" },
+  { id: "day-copy", group: "Row", title: "Copy day", when: "grid" },
+  { id: "day-move", group: "Row", title: "Move day", when: "grid" },
+  { id: "day-paste", group: "Row", title: "Paste day here", when: "grid" },
+  { id: "day-rename", group: "Row", title: "Rename the day", when: "grid" },
+  { id: "row-recalc", group: "Row", title: "Recalculate the weight", when: "grid" },
   { id: "meet-fill", group: "Row", title: "Fill a meet day with its attempts", keys: ["alt+m"], when: "grid" },
 
   { id: "view-tight-intensity", group: "View", title: "Intensity beside reps / across the week" },
@@ -229,6 +235,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "view-text-large", group: "View", title: "Large text" },
   { id: "view-sidebar", group: "View", title: "Collapse / expand the sidebar" },
   { id: "view-theme", group: "View", title: "Dark / light theme" },
+  { id: "view-theme-system", group: "View", title: "Match the system theme" },
 
   { id: "export-xlsx", group: "Export", title: "Export whole program .xlsx" },
   { id: "print-week", group: "Export", title: "Print this week" },
@@ -250,7 +257,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "athlete-prev", group: "Athlete", title: "Previous athlete" },
   { id: "athlete-next", group: "Athlete", title: "Next athlete" },
 
-  { id: "refresh", group: "Sync", title: "Refresh what athletes logged" },
+  { id: "refresh", group: "Sync", title: "Sync now", keys: ["mod+s"] },
 
 
   { id: "go-overview", group: "Go", title: "Overview" },
@@ -261,6 +268,26 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "go-chat", group: "Go", title: "Chat", keys: ["alt+5"] },
   { id: "go-competition", group: "Go", title: "Competition" },
   { id: "go-settings", group: "Go", title: "Settings" },
+  { id: "pr-highlight", group: "Settings", title: "Highlight PRs: on / off" },
+  { id: "language-en", group: "Settings", title: "Language: English" },
+  { id: "language-de", group: "Settings", title: "Language: Deutsch" },
+  { id: "language-fr", group: "Settings", title: "Language: Français" },
+  { id: "language-lb", group: "Settings", title: "Language: Lëtzebuergesch" },
+  { id: "start-programming", group: "Settings", title: "Open on start: Programming" },
+  { id: "start-overview", group: "Settings", title: "Open on start: Overview" },
+  { id: "start-last", group: "Settings", title: "Open on start: Where I left off" },
+  { id: "settings-account", group: "Settings", title: "Settings: Profile" },
+  { id: "settings-units", group: "Settings", title: "Settings: Units and numbers" },
+  { id: "settings-programming", group: "Settings", title: "Settings: Programming defaults" },
+  { id: "settings-calendar", group: "Settings", title: "Settings: Calendar and dates" },
+  { id: "settings-exercises", group: "Settings", title: "Settings: Exercises" },
+  { id: "settings-view", group: "Settings", title: "Settings: Grid and view" },
+  { id: "settings-keyboard", group: "Settings", title: "Settings: Keyboard" },
+  { id: "settings-exports", group: "Settings", title: "Settings: Exports and print" },
+  { id: "settings-tracking", group: "Settings", title: "Settings: Tracking and competition" },
+  { id: "settings-athlete-app", group: "Settings", title: "Settings: Account and athlete app" },
+  { id: "settings-sign-in", group: "Settings", title: "Settings: Password and sign-in" },
+  { id: "settings-data", group: "Settings", title: "Settings: Backup and data" },
 
   { id: "tutorial", group: "Help", title: "Start the tutorial" },
   { id: "check-updates", group: "Help", title: "Check for updates" },

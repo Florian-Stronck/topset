@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { OverviewBoard, type BoardRow, type Issue, type IssueCategory } from "@/components/OverviewBoard";
-import { RefreshButton } from "@/components/RefreshButton";
 import { Sidebar } from "@/components/Sidebar";
 import { bodyweightSummary, dailyWeights, projectWeight, weightToMake } from "@/lib/bodyweight";
 import { loadSettings } from "@/lib/coach-settings";
@@ -94,7 +93,6 @@ export default async function OverviewPage({ searchParams }: { searchParams: Pro
                 })}
               </p>
             </div>
-            <RefreshButton />
           </div>
           <OverviewTabs tab={tab} news={news} />
           {body}

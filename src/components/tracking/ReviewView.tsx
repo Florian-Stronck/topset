@@ -2,6 +2,7 @@
 
 import { Select } from "@/components/Select";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { deleteMessage, editMessage, markReviewed, sendMessage } from "@/app/tracking/actions";
 import { AthleteLinkButton } from "@/components/AthleteLink";
 import { Trophy } from "@/components/CheckinIcon";
@@ -150,6 +151,7 @@ export function ReviewView({
   const [messages, setMessages] = useState(initialMessages);
   const [synced, setSynced] = useState({ block: initialBlock, messages: initialMessages });
   const [week, setWeekState] = useState(initialWeek);
+  const router = useRouter();
   const [focused, setFocused] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());
@@ -323,6 +325,19 @@ export function ReviewView({
     const list: Command[] = [
       { id: "week-prev", group: "Week", title: t("Previous week"), run: () => setWeek((w) => w - 1) },
       { id: "week-next", group: "Week", title: t("Next week"), run: () => setWeek((w) => w + 1) },
+      {
+        id: "go-today",
+        group: "Go",
+        title: t("Go to today"),
+        keywords: "now current this week",
+        run: () => {
+          // Another phase holds today: the page opens on it, at today's week.
+          if (!nowWeek) return router.push(`/tracking?athlete=${athlete.id}`);
+          const s = sessionsByWeek[nowWeek - 1]?.find((x) => x.ymd >= today);
+          if (s) focusSession(s.day.id, nowWeek);
+          else setWeek(nowWeek);
+        },
+      },
       ...Array.from({ length: weekCount }, (_, i): Command => ({
         id: `week-${i + 1}`,
         group: "Week",
@@ -454,7 +469,7 @@ export function ReviewView({
     ];
     return readOnly ? list.filter((c) => !["session-review", "session-feedback", "session-next-unreviewed", "week-review-all", "track-filter-unreviewed"].includes(c.id)) : list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allSessions, collapsed, focusedSession, prefs, sessions, shown, videos, weekCount, activeWeek, readOnly]);
+  }, [allSessions, collapsed, focusedSession, prefs, sessions, shown, videos, weekCount, activeWeek, readOnly, nowWeek, sessionsByWeek, today, athlete.id, router]);
   useCommands("tracking-review", commands, 1);
 
   const sendFor = (s: Session) => async (body: string) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { flushSync } from "react-dom";
 import type { Tier } from "@prisma/client";
 import {
@@ -109,6 +109,18 @@ const COL_FIELDS: Record<NavKey, readonly (keyof RowTemplate)[]> = {
  */
 type RowClip = { rows: RowTemplate[]; cols: NavKey[] | null; text: string };
 let rowClip: RowClip | null = null;
+/** A day picked up from its menu — outlives the grid, so it pastes into another athlete or phase. */
+type DayClip = { id: string; label: string; move: boolean; dayLabel: string; rows: RowTemplate[] };
+let dayClipStore: DayClip | null = null;
+const dayClipListeners = new Set<() => void>();
+function setDayClip(clip: DayClip | null) {
+  dayClipStore = clip;
+  dayClipListeners.forEach((l) => l());
+}
+function subscribeDayClip(l: () => void) {
+  dayClipListeners.add(l);
+  return () => void dayClipListeners.delete(l);
+}
 
 /**
  * The grid's columns for the coach's view settings. The left four are sticky and fixed
@@ -286,7 +298,9 @@ export function ProgrammingGrid({
   const rowMenu = useContextMenu();
   const history = useHistory();
   /** A day picked up from its menu, waiting to be copied or moved onto another. */
-  const [dayClip, setDayClip] = useState<{ id: string; label: string; move: boolean } | null>(null);
+  const dayClip = useSyncExternalStore(subscribeDayClip, () => dayClipStore, () => null);
+  const pickDay = (day: DayData, label: string, move: boolean) =>
+    setDayClip({ id: day.id, label, move, dayLabel: day.label, rows: day.rows.filter((r) => !isBlank(r)).map(rowTemplate) });
 
   /** Runs an edit and records how to take it back. */
   function edit(label: string, run: () => Promise<unknown>, undo: () => Promise<unknown>, key?: string) {
@@ -304,20 +318,20 @@ export function ProgrammingGrid({
 
   /** Copies or moves the picked-up day onto `target`. A copy adds its rows after any there. */
   function dropDay(target: DayData) {
-    const source = block.weeks.flatMap((w) => w.days).find((d) => d.id === dayClip?.id);
-    if (!dayClip || !source) return;
+    const source = dayClip;
+    if (!source) return;
     setDayClip(null);
-    if (dayClip.move) {
+    if (source.move) {
       edit("move day", () => swapDays(source.id, target.id), () => swapDays(source.id, target.id));
       return;
     }
-    const create = source.rows.filter((r) => !isBlank(r)).map((r) => ({ id: crypto.randomUUID(), template: rowTemplate(r) }));
+    const create = source.rows.map((template) => ({ id: crypto.randomUUID(), template }));
     // An empty or rest day takes the copied day's name too.
     const takeName = target.rest || target.rows.every(isBlank);
     edit(
       "copy day",
       async () => {
-        if (takeName) await updateDay(target.id, { label: source.label, rest: false });
+        if (takeName) await updateDay(target.id, { label: source.dayLabel, rest: false });
         await pasteRows(target.id, { create });
       },
       async () => {
@@ -770,6 +784,38 @@ export function ProgrammingGrid({
           () => updateDay(day.id, { rest: day.rest }),
         );
 
+      case "day-copy":
+      case "day-move": {
+        if (id === "day-copy" && day.rows.every(isBlank)) return false;
+        handled();
+        const weekday = t(WEEKDAYS[weekdayOfDay(block.startDate, day.index)]);
+        pickDay(day, `${t("Week {n}", { n: activeWeek })} · ${weekday}`, id === "day-move");
+        return true;
+      }
+
+      case "day-paste": {
+        if (!dayClip || dayClip.id === day.id) return false;
+        handled();
+        dropDay(day);
+        return true;
+      }
+
+      case "day-rename": {
+        if (day.rest) return false;
+        handled();
+        const input = document.querySelector<HTMLInputElement>(`#day-${day.id} [data-day-name] input`);
+        input?.focus();
+        input?.select();
+        return true;
+      }
+
+      case "row-recalc": {
+        if (!row || row.load === null) return false;
+        handled();
+        patchCell(row.id, { load: null });
+        return true;
+      }
+
       case "row-insert": {
         if (!row) {
           handled();
@@ -1187,11 +1233,11 @@ export function ProgrammingGrid({
             {
               label: t("Copy day"),
               disabled: day.rows.every(isBlank),
-              onSelect: () => setDayClip({ id: day.id, label: `${t("Week {n}", { n: activeWeek })} · ${weekday}`, move: false }),
+              onSelect: () => pickDay(day, `${t("Week {n}", { n: activeWeek })} · ${weekday}`, false),
             },
             {
               label: t("Move day"),
-              onSelect: () => setDayClip({ id: day.id, label: `${t("Week {n}", { n: activeWeek })} · ${weekday}`, move: true }),
+              onSelect: () => pickDay(day, `${t("Week {n}", { n: activeWeek })} · ${weekday}`, true),
             },
             {
               label: !dayClip

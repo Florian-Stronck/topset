@@ -19,8 +19,8 @@ import { addWeekUndoable, ProgrammingGrid } from "@/components/ProgrammingGrid";
 import { addPhaseUndoable, closeGapUndoable, moveProgramUndoable, pastePhaseUndoable, programOverlap, setActiveProgramUndoable, Topbar, type Panel } from "@/components/Topbar";
 import { WholeProgramSheet, type ProgramPosition } from "@/components/WholeProgramSheet";
 import type { MeetSummary } from "@/lib/competition";
-import { describeGap, phaseGaps } from "@/lib/dates";
-import { dateOfDay, programOn } from "@/lib/schedule";
+import { describeGap, phaseGaps, today, ymdOf } from "@/lib/dates";
+import { dateOfDay, programOn, weekOn } from "@/lib/schedule";
 import { pickFile, restoreBackup } from "@/lib/pick-file";
 import { fresh, useCommands, type Command } from "@/lib/commands";
 import { setPref, togglePref, usePref, type Column } from "@/lib/prefs";
@@ -232,6 +232,22 @@ export function ProgrammingWorkspace({
         kind: "week" as const,
         run: () => setWeek(i + 1),
       })),
+      {
+        id: "go-today",
+        group: "Go",
+        title: t("Go to today"),
+        keywords: "now current this week",
+        run: () => {
+          const todayYmd = ymdOf(today());
+          const now = weekOn(block.startDate, block.weeks.length, todayYmd);
+          // Another phase or program holds today: the server opens on it, at today's week.
+          if (!now) return router.push(`/programming?athlete=${athlete.id}`);
+          setView("phase");
+          setWeek(now);
+          const day = block.weeks[now - 1]?.days.find((d) => dateOfDay(block.startDate, now, d.index) >= todayYmd);
+          if (day) setTimeout(() => document.getElementById(`day-${day.id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }), 50);
+        },
+      },
       {
         id: "progressions",
         group: "Program",

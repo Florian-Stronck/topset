@@ -13,6 +13,7 @@ import { startTutorial, Tutorial } from "@/components/Tutorial";
 import { plural, t } from "@/lib/i18n";
 import { ROLE_LABEL, ShareCodeDialog, ShareDialog } from "@/components/AthleteShares";
 import type { AthleteShareInfo } from "@/lib/share";
+import { SyncLight } from "@/components/SyncLight";
 
 declare global {
   interface Window {
@@ -339,6 +340,8 @@ export function Sidebar({
       </nav>
 
       <div className={`mt-auto ${collapsed ? "px-2" : "px-3"} pb-2`}>
+        {/* Sits fixed at the window's top right; mounted here so every coach screen has it. */}
+        <SyncLight />
         <button
           type="button"
           onClick={startTutorial}

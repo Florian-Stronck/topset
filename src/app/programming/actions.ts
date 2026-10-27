@@ -1544,9 +1544,11 @@ const RULED: Record<ProgField, readonly (typeof PLAN_FIELDS)[number][]> = {
 };
 
 /**
- * Makes every other unlocked week of the phase the same as this one — before it and
- * after it: day names and rest days, the rows in each day, and everything written on
- * them. Locked weeks keep their own, and an edit inside a locked week stays there.
+ * Makes every unlocked week after this one the same as it: day names and rest days, the
+ * rows in each day, and everything written on them. Weeks before it keep what they were
+ * planned — an injury swap or intensity change in week 3 holds from week 3 on, and the
+ * weeks already trained still show what was prescribed. Locked weeks keep their own, and
+ * an edit inside a locked week stays there.
  * Fields a progression rule drives are left to the rule, which runs again at the end,
  * and meet-attempt rows stay on the day of their meet. Logged results are never touched.
  */
@@ -1566,7 +1568,7 @@ async function syncWeeks(weekId: string) {
   if (!source || source.locked) return;
 
   const weeks = await prisma.week.findMany({
-    where: { blockId: source.blockId, locked: false, id: { not: source.id } },
+    where: { blockId: source.blockId, locked: false, order: { gt: source.order } },
     include: { days: { include: { rows: { include: { rules: true } } } } },
   });
   if (weeks.length === 0) return;

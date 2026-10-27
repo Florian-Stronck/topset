@@ -240,8 +240,8 @@ function Programming({ settings, update }: Props) {
         </datalist>
       </Row>
       <Row
-        label="Keep every week the same"
-        hint="An edit in one week is made in all the other weeks of the phase — before and after it. Locked weeks keep their own, and rule-driven sets, reps and intensity still follow their rules."
+        label="Carry edits into later weeks"
+        hint="An edit in one week is made in every week after it. Weeks before it keep what was planned, locked weeks keep their own, and rule-driven sets, reps and intensity still follow their rules."
       >
         <Switch on={settings.syncWeeks} onChange={(v) => update({ syncWeeks: v })} />
       </Row>

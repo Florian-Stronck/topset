@@ -15,7 +15,31 @@ import {
   matchStroke,
   migrateOldHotkeys,
 } from "@/lib/shortcuts";
-import { t } from "@/lib/i18n";
+import { LANGUAGES, t } from "@/lib/i18n";
+import { useSettings } from "@/components/SettingsProvider";
+
+/** Settings' screens to open on start, for the palette. */
+const START_SCREENS = [
+  ["programming", "Programming"],
+  ["overview", "Overview"],
+  ["last", "Where I left off"],
+] as const;
+
+/** Settings' sections the palette jumps to. Coaches is the admin's only, so it is left out. */
+const SETTINGS_SECTIONS = [
+  ["account", "Profile"],
+  ["units", "Units and numbers"],
+  ["programming", "Programming defaults"],
+  ["calendar", "Calendar and dates"],
+  ["exercises", "Exercises"],
+  ["view", "Grid and view"],
+  ["keyboard", "Keyboard"],
+  ["exports", "Exports and print"],
+  ["tracking", "Tracking and competition"],
+  ["athlete-app", "Account and athlete app"],
+  ["sign-in", "Password and sign-in"],
+  ["data", "Backup and data"],
+] as const;
 
 /** How long the first stroke of a chord waits for the second. */
 const CHORD_WAIT = 1500;
@@ -70,6 +94,7 @@ export function CommandCenter() {
 
   // The athlete's phone app shares the layout, and has no use for any of this.
   const athleteApp = pathname.startsWith("/a/");
+  const { settings, update } = useSettings();
 
   useEffect(() => {
     // Keys used to be kept per default combo; bring them over once.
@@ -154,12 +179,62 @@ export function CommandCenter() {
           keywords: "font size zoom bigger smaller text",
           run: () => setPref("fontSize", size),
         })),
+      ...(getPref("theme") === "system"
+        ? []
+        : [
+            {
+              id: "view-theme-system",
+              group: "View",
+              title: t("Match the system theme"),
+              keywords: "dark light auto os device",
+              run: () => setPref("theme", "system"),
+            },
+          ]),
+      {
+        id: "pr-highlight",
+        group: "Settings",
+        title: settings.pr.highlight ? t("Stop highlighting PRs") : t("Highlight PRs"),
+        keywords: "personal record best",
+        run: () => update({ pr: { ...settings.pr, highlight: !settings.pr.highlight } }),
+      },
+      ...LANGUAGES.filter((l) => l.id !== settings.language).map(
+        (l): Command => ({
+          id: `language-${l.id}`,
+          group: "Settings",
+          title: t("Language: {name}", { name: l.name }),
+          keywords: "language sprache langue sprooch translate",
+          run: () => {
+            update({ language: l.id });
+            // Every screen reads its text once; a reload redraws them all in the new language.
+            setTimeout(() => location.reload(), 400);
+          },
+        }),
+      ),
+      ...START_SCREENS.filter(([id]) => id !== settings.startScreen).map(
+        ([id, label]): Command => ({
+          id: `start-${id}`,
+          group: "Settings",
+          title: t("Open on start: {screen}", { screen: t(label) }),
+          keywords: "startup launch first screen",
+          run: () => update({ startScreen: id }),
+        }),
+      ),
+      ...SETTINGS_SECTIONS.map(
+        ([id, label]): Command => ({
+          id: `settings-${id}`,
+          group: "Settings",
+          title: t("Settings: {section}", { section: t(label) }),
+          kind: "place",
+          keywords: "preferences options",
+          run: () => router.push(`/settings#${id}`),
+        }),
+      ),
     ],
     // Titles follow the prefs they toggle; the palette re-reads commands each opening.
     // openPalette is new every render and only reads what is listed here — depending on
     // it would re-register these on every render, which re-renders this, and so on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [router, paletteOpen, paletteQuery],
+    [router, paletteOpen, paletteQuery, settings, update],
   );
   useCommands("core", athleteApp ? EMPTY : core, -1);
 

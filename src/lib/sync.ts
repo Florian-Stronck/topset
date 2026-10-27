@@ -45,7 +45,10 @@ import { newVideoPath, readLedger, writeLedger } from "@/lib/videos";
  * Offline is fine: sync fails quietly and catches up when the connection is back.
  */
 
-const TICK_MS = 2000;
+/** Short, so an edit goes up at once; a tick with nothing changed is one local pragma. */
+const TICK_MS = 250;
+/** After a failed sync, how long the ticks wait before trying again. */
+const RETRY_MS = 2000;
 const PULL_EVERY_MS = 8000;
 /** Rows per request, well under the server's body limit. */
 const ROWS_PER_REQUEST = 3000;
@@ -86,6 +89,7 @@ type State = {
   lastPull: number;
   lastSync: number | null;
   error: string | null;
+  failedAt: number;
   timer: ReturnType<typeof setInterval> | null;
 };
 
@@ -105,6 +109,7 @@ function state(): State {
     lastPull: 0,
     lastSync: null,
     error: null,
+    failedAt: 0,
     timer: null,
   };
   return g.__topsetSync;
@@ -144,6 +149,17 @@ export function syncEnabled(): boolean {
 export function syncStatus(): { lastSync: number | null; error: string | null } {
   const s = state();
   return { lastSync: s.lastSync, error: s.error };
+}
+
+/**
+ * For the sync light: off when not signed in, else whether edits made here are still on their
+ * way up (a write the last push hasn't seen, or a sync running now) and the last error.
+ */
+export function syncLight(): { enabled: boolean; pending: boolean; error: string | null } {
+  if (!syncEnabled()) return { enabled: false, pending: false, error: null };
+  const s = state();
+  const version = Number(local().pragma("data_version", { simple: true }));
+  return { enabled: true, pending: s.queue.busy() || version !== s.dataVersion, error: s.error };
 }
 
 // --- talking to the server ------------------------------------------------------------
@@ -845,6 +861,7 @@ async function cycle(forcePull: boolean): Promise<void> {
     void fetchPhotos(config);
   } catch (error) {
     s.error = error instanceof Error ? error.message : String(error);
+    s.failedAt = Date.now();
   }
 }
 
@@ -984,6 +1001,7 @@ export function startSync(): Promise<void> {
   if (!syncEnabled()) return Promise.resolve();
   if (!s.timer) {
     s.timer = setInterval(() => {
+      if (s.error && Date.now() - s.failedAt < RETRY_MS) return;
       if (!s.queue.busy() && syncEnabled()) void run(false);
     }, TICK_MS);
   }
