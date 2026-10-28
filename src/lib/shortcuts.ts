@@ -405,6 +405,7 @@ export const FIXED_GROUPS: { title: string; items: Shortcut[] }[] = [
       { combo: "tab", what: "Next exercise suggestion" },
       { combo: "shift+tab", what: "Previous one" },
       { combo: "escape", what: "Undo the edit in progress" },
+      { combo: "f2", what: "Edit the cell (or double-click)" },
     ],
   },
   {
@@ -414,6 +415,7 @@ export const FIXED_GROUPS: { title: string; items: Shortcut[] }[] = [
       { combo: "mod+c", what: "Copy the selected cells or rows" },
       { combo: "mod+v", what: "Paste them from here down" },
       { combo: "mod+d", what: "Fill down" },
+      { combo: "mod+enter", what: "Write the active cell into all selected" },
       { combo: "backspace", what: "Clear the selected cells" },
     ],
   },

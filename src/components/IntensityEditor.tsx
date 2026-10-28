@@ -26,12 +26,21 @@ const KINDS: { value: IntensityType; chip: string; label: string }[] = [
   { value: "BACKOFF", chip: "−%", label: "Backoff" },
 ];
 
+/** The kind a cell's text names — its chip, its menu name or its own name, as typed or pasted. */
+export function parseKind(text: string): IntensityType | null {
+  const want = text.trim().toLowerCase();
+  if (want === "") return null;
+  const hit = KINDS.find((k) =>
+    [k.value, k.chip, k.label, t(k.chip), t(k.label)].some((name) => name.toLowerCase() === want),
+  );
+  return hit?.value ?? null;
+}
+
 /**
- * The intensity cell in two: what kind (a chip that opens the kinds, the range's top and
- * the ramp) and how much, typed straight into the cell. The weight it comes to has its
- * own column.
+ * The intensity's kind, a cell of its own: a chip that opens the kinds, the ramp and the
+ * weight's recalculation. How much is the next cell, so either fills down without the other.
  */
-export function IntensityEditor({
+export function IntensityKind({
   value,
   onCommit,
 }: {
@@ -41,10 +50,9 @@ export function IntensityEditor({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
   const kind = KINDS.find((k) => k.value === value.intensityType) ?? KINDS[0];
-  const range = value.intensityType === "RANGE";
 
   return (
-    <div className="flex h-full w-full min-w-0 items-center justify-center gap-1 px-1">
+    <div className="flex h-full w-full min-w-0 items-center justify-center px-1">
       <button
         ref={ref}
         type="button"
@@ -61,20 +69,6 @@ export function IntensityEditor({
           <path d="M6 9l6 6 6-6" />
         </svg>
       </button>
-
-      <div className={`shrink-0 ${range ? "w-[32px]" : "w-[40px]"}`}>
-        <NumberInput value={value.intensity} align="center" placeholder="—" onCommit={(v) => onCommit({ intensity: v })} />
-      </div>
-      {range && (
-        <>
-          <span className="text-[11px] text-muted-2">–</span>
-          <div className="w-[32px] shrink-0">
-            <NumberInput value={value.intensityMax} align="center" placeholder="—" onCommit={(v) => onCommit({ intensityMax: v })} />
-          </div>
-        </>
-      )}
-
-      {value.rampStep !== null && <span className="text-[11px] text-muted-2">+{value.rampStep}</span>}
 
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={196}>
         <div>
@@ -129,6 +123,35 @@ export function IntensityEditor({
           </div>
         </div>
       </Popover>
+    </div>
+  );
+}
+
+/** How much: the number, typed straight into the cell, a range's top beside it, and the ramp. */
+export function IntensityAmount({
+  value,
+  onCommit,
+}: {
+  value: IntensityValue;
+  onCommit: (v: Partial<IntensityValue>) => void;
+}) {
+  const range = value.intensityType === "RANGE";
+  // The whole cell lights up as selected, not each box in it, the way a one-field cell does.
+  const quiet = "focus:!bg-transparent focus:!ring-0";
+  return (
+    <div className="flex h-full w-full min-w-0 items-center rounded-[3px] focus-within:bg-surface-3 focus-within:ring-1 focus-within:ring-accent/60">
+      <div className="h-full min-w-0 flex-1">
+        <NumberInput value={value.intensity} align="center" placeholder="—" className={quiet} onCommit={(v) => onCommit({ intensity: v })} />
+      </div>
+      {range && (
+        <>
+          <span className="text-[11px] text-muted-2">–</span>
+          <div className="h-full min-w-0 flex-1">
+            <NumberInput value={value.intensityMax} align="center" placeholder="—" className={quiet} onCommit={(v) => onCommit({ intensityMax: v })} />
+          </div>
+        </>
+      )}
+      {value.rampStep !== null && <span className="pr-1.5 text-[11px] text-muted-2">+{value.rampStep}</span>}
     </div>
   );
 }

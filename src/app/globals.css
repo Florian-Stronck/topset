@@ -114,6 +114,15 @@ body {
 .quiet-placeholders .group input::placeholder {
   color: transparent;
 }
+
+/* A grid cell that is selected but not being edited, as in a sheet: no caret, and the
+   select-all that lets typing replace it stays out of sight. */
+[data-nav] input:not([data-editing]) {
+  caret-color: transparent;
+}
+[data-nav] input:not([data-editing])::selection {
+  background: transparent;
+}
 .quiet-placeholders .group:hover input::placeholder,
 .quiet-placeholders .group:focus-within input::placeholder,
 .quiet-placeholders .group input.keep-placeholder::placeholder {

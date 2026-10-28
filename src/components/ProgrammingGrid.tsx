@@ -35,7 +35,7 @@ import { Confirm } from "@/components/Confirm";
 import { ExerciseInput } from "@/components/ExerciseInput";
 import { useHistory, type History } from "@/components/history";
 import { useSettings } from "@/components/SettingsProvider";
-import { IntensityEditor } from "@/components/IntensityEditor";
+import { IntensityAmount, IntensityKind, parseKind } from "@/components/IntensityEditor";
 import { ProgressionRules } from "@/components/ProgressionRules";
 import { meetOn, type MeetSummary } from "@/lib/competition";
 import { classifyExercise, isBackoff, resolveAlias } from "@/lib/exercises";
@@ -64,12 +64,13 @@ import { t, weekdayShort } from "@/lib/i18n";
 import { tutorialDid } from "@/components/Tutorial";
 
 /** The week's columns in the order they sit, left to right. */
-type WeekCol = "sets" | "reps" | "time" | "intensity" | "load" | "tempo" | "rest" | "video" | "notes";
+type WeekCol = "sets" | "reps" | "time" | "kind" | "intensity" | "load" | "tempo" | "rest" | "video" | "notes";
 
 const WEEK_COL_LABEL: Record<WeekCol, string> = {
   sets: "SETS",
   reps: "REPS",
   time: "TIME",
+  kind: "TYPE",
   intensity: "INTENSITY",
   load: "WEIGHT",
   tempo: "TEMPO",
@@ -91,7 +92,8 @@ const COL_FIELDS: Record<NavKey, readonly (keyof RowTemplate)[]> = {
   sets: ["sets"],
   reps: ["reps", "repsMax"],
   time: ["duration"],
-  intensity: ["intensityType", "intensity", "intensityMax", "rampStep"],
+  kind: ["intensityType", "rampStep"],
+  intensity: ["intensity", "intensityMax"],
   load: ["load"],
   tempo: ["tempo"],
   rest: ["restTime"],
@@ -130,7 +132,7 @@ function subscribeDayClip(l: () => void) {
  */
 function gridLayout(columns: Record<Column, boolean>, tight: boolean, timed: boolean) {
   // TIME shows when switched on, or on its own once any row of the phase is timed.
-  const cols: WeekCol[] = ["sets", "reps", ...(columns.time || timed ? (["time"] as const) : []), "intensity"];
+  const cols: WeekCol[] = ["sets", "reps", ...(columns.time || timed ? (["time"] as const) : []), "kind", "intensity"];
   if (columns.weight) cols.push("load");
   if (columns.tempo) cols.push("tempo");
   if (columns.rest) cols.push("rest");
@@ -141,8 +143,9 @@ function gridLayout(columns: Record<Column, boolean>, tight: boolean, timed: boo
     sets: "56px",
     reps: "56px",
     time: "64px",
-    // The kind, the number and the weight they come to, side by side.
-    intensity: "128px",
+    // The kind and the number are cells of their own, so each fills down without the other.
+    kind: "56px",
+    intensity: "72px",
     // The weight it all comes to, or a ramp ("90→100 kg").
     load: tight || !columns.notes ? "112px" : "minmax(112px,1fr)",
     tempo: "76px",
@@ -150,7 +153,7 @@ function gridLayout(columns: Record<Column, boolean>, tight: boolean, timed: boo
     video: "140px",
     notes: tight ? "minmax(202px,1fr)" : "minmax(236px,2fr)",
   };
-  if (!columns.notes && !tight) width.intensity = "minmax(200px,1fr)";
+  if (!columns.notes && !tight) width.intensity = "minmax(144px,1fr)";
 
   const progression = columns.progression ? 164 : 0;
   return {
@@ -407,6 +410,10 @@ export function ProgrammingGrid({
   const spans = rect !== null && (rect.r1 !== rect.r2 || rect.c1 !== rect.c2);
   /** Whole rows are selected, as clicking the row numbers does. */
   const wholeRows = rect !== null && rect.c1 === 0 && rect.c2 === NAV_COLS - 1;
+  /** A drag of the fill handle: the block it started from, and the row it has reached. */
+  const fillFrom = useRef<ReturnType<typeof rectOf> | null>(null);
+  const [fillTo, setFillTo] = useState<number | null>(null);
+  const fillHandle = useRef<HTMLDivElement>(null);
 
   // Painted on the DOM rather than threaded through six cell call sites, the same way
   // the rest of this grid reaches cells by their nav coordinates.
@@ -417,7 +424,22 @@ export function ProgrammingGrid({
       const [r, c] = el.dataset.nav!.split("-").map(Number);
       const on =
         spans && rect !== null && r >= rect.r1 && r <= rect.r2 && c >= rect.c1 && c <= rect.c2;
-      el.classList.toggle("bg-accent-soft", on);
+      const filling =
+        fillTo !== null && rect !== null && r > rect.r2 && r <= fillTo && c >= rect.c1 && c <= rect.c2;
+      el.classList.toggle("bg-accent-soft", on || filling);
+    }
+    // The fill handle sits on the corner of the selection, or of where a fill has dragged it.
+    const handle = fillHandle.current;
+    if (handle) {
+      const corner =
+        rect && !readOnly ? root.querySelector<HTMLElement>(`[data-nav="${fillTo ?? rect.r2}-${rect.c2}"]`) : null;
+      handle.classList.toggle("hidden", !corner);
+      if (corner) {
+        const g = root.getBoundingClientRect();
+        const b = corner.getBoundingClientRect();
+        handle.style.left = `${b.right - g.left - 4}px`;
+        handle.style.top = `${b.bottom - g.top - 4}px`;
+      }
     }
     for (const el of root.querySelectorAll<HTMLElement>("[data-row-head]")) {
       const r = Number(el.dataset.rowHead);
@@ -429,6 +451,7 @@ export function ProgrammingGrid({
 
   useEffect(() => {
     function stop() {
+      latestEndFill.current();
       anchor.current = null;
       rowAnchor.current = null;
       setDragging(false);
@@ -466,13 +489,58 @@ export function ProgrammingGrid({
       setSel({ a: sel.a, b: at });
       return;
     }
+    // A click selects the cell, as in a sheet: the text is not to be dragged across or
+    // put a caret in until a double-click or F2 starts editing it.
+    const input = e.target instanceof HTMLInputElement ? e.target : null;
+    if (input && !("editing" in input.dataset) && e.button === 0) {
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
     // Not a selection yet — a drag only becomes one once it reaches another cell, so
-    // click-dragging inside a cell still selects its text.
+    // click-dragging inside a cell being edited still selects its text.
     anchor.current = at;
     setSel({ a: at, b: at });
   }
 
+  /** Copies the block the fill handle was dragged from down over the rows it reached, repeating. */
+  function endFill() {
+    const box = fillFrom.current;
+    fillFrom.current = null;
+    if (!box) return;
+    setFillTo(null);
+    if (fillTo === null || fillTo <= box.r2) return;
+    const height = box.r2 - box.r1 + 1;
+    const writes: CellWrite[] = [];
+    for (let r = box.r2 + 1; r <= fillTo; r++) {
+      const from = box.r1 + ((r - box.r1) % height);
+      for (let c = box.c1; c <= box.c2; c++) writes.push({ r, c, text: readCell(from, c), from });
+    }
+    writeCells("fill down", writes);
+    setSel({ a: [box.r1, box.c1], b: [fillTo, box.c2] });
+  }
+  const latestEndFill = useRef(endFill);
+  useEffect(() => {
+    latestEndFill.current = endFill;
+  });
+
+  function onFillHandleDown(e: React.MouseEvent) {
+    if (!rect || e.button !== 0) return;
+    // Not the grid's: a drag from here fills rather than selects, and the focus stays put.
+    e.preventDefault();
+    e.stopPropagation();
+    fillFrom.current = rect;
+    setFillTo(rect.r2);
+    setDragging(true);
+  }
+
   function onGridMouseOver(e: React.MouseEvent) {
+    const box = fillFrom.current;
+    if (box && e.buttons === 1) {
+      const at = coordOf(e.target);
+      if (at) setFillTo(Math.max(at[0], box.r2));
+      return;
+    }
     const fromRow = rowAnchor.current;
     if (fromRow !== null && e.buttons === 1) {
       const at = coordOf(e.target);
@@ -488,6 +556,18 @@ export function ProgrammingGrid({
     window.getSelection()?.removeAllRanges();
     setDragging(true);
     setSel({ a: from, b: at });
+  }
+
+  /** Puts a selected cell into editing, caret at the end, as a double-click or F2 does in a sheet. */
+  function startEditing(input: HTMLInputElement) {
+    input.dataset.editing = "";
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  }
+
+  function onGridDoubleClick(e: React.MouseEvent) {
+    const input = e.target instanceof HTMLInputElement ? e.target : null;
+    if (input && !input.readOnly && coordOf(input)) startEditing(input);
   }
 
   /** What a cell shows right now, read off the DOM so it includes uncommitted typing. */
@@ -522,8 +602,19 @@ export function ProgrammingGrid({
 
       if (col === undefined) continue;
       const entry = cellPatches.get(row.id) ?? { next: {}, prev: {} };
+      const source = from === undefined ? undefined : nav.slots.get(from)?.row;
 
-      if (col === "notes" || col === "tempo" || col === "rest" || col === "video") {
+      if (col === "kind") {
+        // A kind is only ever replaced, never cleared; filled from a row, its ramp comes too.
+        const kind = parseKind(text);
+        if (!kind) continue;
+        entry.next.intensityType = kind;
+        entry.prev.intensityType = row.intensityType;
+        if (source) {
+          entry.next.rampStep = source.rampStep;
+          entry.prev.rampStep = row.rampStep;
+        }
+      } else if (col === "notes" || col === "tempo" || col === "rest" || col === "video") {
         const field = TEXT_FIELD[col];
         entry.next[field] = text || null;
         entry.prev[field] = row[field] ?? null;
@@ -545,13 +636,16 @@ export function ProgrammingGrid({
         if (n !== null && !Number.isFinite(n)) continue;
         entry.next[key] = n;
         entry.prev[key] = row[key] ?? null;
-        // Filled from another row, intensity brings its kind, range and ramp — not the number alone.
-        const source = from === undefined ? undefined : nav.slots.get(from)?.row;
+        // Filled from another row, intensity brings a range's top too — its kind is the
+        // next cell over and stays. The top is read off the DOM like the number, so one
+        // just typed and not yet in state comes along.
         if (col === "intensity" && source) {
-          for (const f of ["intensityType", "intensity", "intensityMax", "rampStep"] as const) {
-            (entry.next as Record<string, unknown>)[f] = source[f];
-            (entry.prev as Record<string, unknown>)[f] = row[f];
-          }
+          const max = gridRef.current
+            ?.querySelectorAll<HTMLInputElement>(`[data-nav="${from}-${c}"] input`)[1]
+            ?.value.trim();
+          entry.next.intensityMax =
+            max === undefined ? source.intensityMax : max === "" ? null : Number(max.replace(",", "."));
+          entry.prev.intensityMax = row.intensityMax;
         }
       }
       cellPatches.set(row.id, entry);
@@ -948,6 +1042,19 @@ export function ProgrammingGrid({
       return true;
     }
 
+    if (mod && e.key === "Enter" && spans && rect) {
+      e.preventDefault();
+      // What was typed in the active cell goes into every selected cell, as in a sheet.
+      // The cell's own Enter has already committed it; this writes the rest.
+      const text = readCell(at[0], at[1]);
+      const writes: CellWrite[] = [];
+      for (let r = rect.r1; r <= rect.r2; r++)
+        for (let c = rect.c1; c <= rect.c2; c++) writes.push({ r, c, text, from: at[0] });
+      writeCells("fill selection", writes);
+      focusNav(`${at[0]}-${at[1]}`);
+      return true;
+    }
+
     if (e.shiftKey && e.key.startsWith("Arrow")) {
       const head = sel ? sel.b : at;
       const d =
@@ -1004,15 +1111,28 @@ export function ProgrammingGrid({
 
     const [r, c] = holder.dataset.nav.split("-").map(Number);
     const input = el instanceof HTMLInputElement ? el : null;
+    // Only a cell being edited has a caret for left and right to move.
+    const editing = input !== null && "editing" in input.dataset;
     let next: [number, number];
+
+    if (input && !editing && !input.readOnly) {
+      if (e.key === "F2") {
+        e.preventDefault();
+        startEditing(input);
+        return;
+      }
+      // Typing over a selected cell replaces what is there, and edits from then on.
+      const typing = (e.key.length === 1 || e.key === "Backspace") && !e.ctrlKey && !e.metaKey && !e.altKey;
+      if (typing) input.dataset.editing = "";
+    }
 
     if (e.key === "ArrowDown" || e.key === "Enter") next = [r + 1, c];
     else if (e.key === "ArrowUp") next = [r - 1, c];
     else if (e.key === "ArrowLeft") {
-      if (input && (input.selectionStart ?? 0) > 0) return;
+      if (editing && (input.selectionStart ?? 0) > 0) return;
       next = [r, c - 1];
     } else if (e.key === "ArrowRight") {
-      if (input && (input.selectionEnd ?? 0) < input.value.length) return;
+      if (editing && (input.selectionEnd ?? 0) < input.value.length) return;
       next = [r, c + 1];
     } else return;
 
@@ -1189,12 +1309,23 @@ export function ProgrammingGrid({
           ref={gridRef}
           inert={readOnly}
           style={{ minWidth: GRID_MIN_WIDTH, maxWidth: SHELL_MAX_WIDTH }}
-          className={`quiet-placeholders mx-auto w-full pb-24 ${dragging ? "select-none" : ""}`}
+          className={`quiet-placeholders relative mx-auto w-full pb-24 ${dragging ? "select-none" : ""}`}
           onKeyDown={onNavKey}
           onFocus={() => focusSession.current++}
+          // Leaving a cell ends its editing; coming back selects it again.
+          onBlur={(e) => {
+            if (e.target instanceof HTMLInputElement) delete e.target.dataset.editing;
+          }}
           onMouseDown={onGridMouseDown}
           onMouseOver={onGridMouseOver}
+          onDoubleClick={onGridDoubleClick}
         >
+          <div
+            ref={fillHandle}
+            onMouseDown={onFillHandleDown}
+            title={t("Drag to fill down")}
+            className="absolute z-20 hidden h-[7px] w-[7px] cursor-crosshair border border-surface bg-accent"
+          />
           <Header
             template={template}
             week={activeWeek}
@@ -1637,15 +1768,16 @@ export function ProgrammingGrid({
                                     </GridCell>
                                   );
                                 }
-                                if (col === "intensity") {
+                                if (col === "kind" || col === "intensity") {
+                                  const Part = col === "kind" ? IntensityKind : IntensityAmount;
                                   return (
                                     <GridCell
                                       key={col}
                                       nav={at}
-                                      tour={tourDay && i === 0 ? "intensity" : undefined}
+                                      tour={tourDay && i === 0 && col === "kind" ? "intensity" : undefined}
                                       className={`${ghostHide} ${last}`}
                                     >
-                                      <IntensityEditor
+                                      <Part
                                         value={cell}
                                         onCommit={(v) => {
                                           patchCell(row.id, v);
