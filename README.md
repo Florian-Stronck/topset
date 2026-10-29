@@ -8,6 +8,16 @@ Available in English, Deutsch, Français and Lëtzebuergesch (**Settings → App
 
 ![The programming grid: a week of squat, bench and deadlift sessions with target weights calculated from the 1RMs](docs/screenshots/programming.png)
 
+## What's new in 0.12
+
+[![What's new in Topset 0.12 (48 s video): the Overview inbox and the grid's spreadsheet keys](docs/videos/whats-new-0.12.jpg)](docs/videos/whats-new-0.12.mp4)
+
+- **The Overview is an inbox.** Everything waiting on you, across every athlete, in one list: sessions to review, messages, moved sessions, meeting requests, roster flags and PRs. Review, reply or snooze it where it is, with `J` / `K` / `E` / `S`. Under it, the whole roster in one table, plus new **Today**, **Season** and **Insights** tabs.
+- **The grid works like a spreadsheet.** `Ctrl+X`, `Ctrl+R`, `Ctrl+arrows`, `Home` / `End`, `PgUp` / `PgDn`, `Shift+Enter`, and `Ctrl+A` for the whole day. `Ctrl+Shift+V` pastes just the prescription onto other lifts, and `Alt+PgDn` jumps to the next day. See [Keyboard](#keyboard).
+- **Everything works from the keyboard**, the intensity type and the PROGRESSION column included.
+
+Full notes on [the release page](https://github.com/Florian-Stronck/topset/releases/tag/v0.12.0).
+
 ---
 
 ## Getting started
@@ -25,7 +35,9 @@ The screenshots show made-up demo athletes.
 
 ### Overview
 
-One table for the whole roster this week: each day done, partly done or missed, completion, bodyweight against the next meet's class, and days left in the phase. Above it, one feed: warnings first (missed sessions, RPE drifting off plan, over the weight class, a program running out), then PRs the athletes flagged, then the latest check-ins, each with one button to act on it.
+An inbox of everything waiting on you, across every athlete, urgent first: sessions logged since your last review, unread messages, moved sessions, meeting requests, warnings (missed sessions, RPE drifting off plan, low readiness, over the weight class, a program running out, a bad injury) and the week's PRs. The picked item opens beside the list, so you act on it in place: review a session against the plan and send a note, reply to a message, accept a meeting. `J` / `K` move through it, `E` marks it done, `S` snoozes it till tomorrow.
+
+Under it, the whole roster in one table: six weeks of sets done, RPE against plan, readiness, squat/bench/deadlift e1RM with its trend, bodyweight against the meet class and the meet countdown. **Today** shows who is training now and who is up next, **Season** the next 16 weeks of phases and meets, and **Insights** this week against the last, with suggestions like raising a max.
 
 ![Overview: warnings and check-ins above a week table for the whole roster](docs/screenshots/overview.png)
 
@@ -86,7 +98,9 @@ A **program** is one whole plan ("Nationals Prep"). It is made of **phases** ("V
 - Whole rows are copied exactly: tier, intensity type, ramp and progression rules included. The copy stays available when you switch week, program or athlete.
 - A range of columns (say SETS to INTENSITY) fills just those columns.
 - Text from Excel or Google Sheets pastes cell by cell.
-- `Ctrl+D` fills down, `Backspace` clears the selected cells, and a paste is one step of undo.
+- `Ctrl+D` fills down, `Ctrl+R` fills right, `Ctrl+X` cuts, `Backspace` / `Delete` clear, and a paste is one step of undo.
+- `Ctrl+A` selects the day (press it again for the whole week), `Shift+Space` the row, `Ctrl+Space` the column. `Enter` and `Tab` walk the cells of a selection.
+- `Ctrl+Shift+V` pastes only the prescription (sets, reps, intensity, rules and so on) and keeps the exercises that are there, to put one scheme onto other lifts.
 - Right-click a row for the same actions: insert, duplicate, copy, paste, move, delete.
 
 Whole **weeks** and **phases** are copied from their tab's right-click menu, and **Copy program** puts a whole program onto any athlete. Logged results are never copied.
@@ -113,14 +127,22 @@ Each exercise can carry rules in its PROGRESSION column, e.g. `+1 rep / week`, `
 | `Alt+N` | New program |
 | `Alt+Enter` | Insert a row below |
 | `Alt+D` | Duplicate the row |
-| `Alt+↑` / `Alt+↓` | Move the row |
+| `Alt+↑` / `Alt+↓` | Move the row (or every selected row) |
 | `Alt+Backspace` | Delete the row |
 | `Alt+C` / `Alt+V` | Copy the row (or the selected rows) / paste them here |
 | `Alt+R` | Switch between training day and rest day |
 | `Alt+M` | Fill a meet day with its nine attempts |
-| `Ctrl+C` / `Ctrl+V` | Copy / paste the selected cells or rows |
+| `Alt+PgDn` / `Alt+PgUp` | Next / previous day |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste the selected cells or rows |
+| `Ctrl+Shift+V` | Paste only the prescription, keeping the exercises |
 | `⇧+arrows` | Grow the selection |
-| `Ctrl+D` | Fill down |
+| `Ctrl+arrows` | Jump to the edge of the filled cells (with `⇧`: select to it) |
+| `Home` / `End`, `Ctrl+Home` / `Ctrl+End` | First / last column of the row, first / last cell of the week |
+| `PgUp` / `PgDn` | Up / down a screen |
+| `Shift+Enter` | Move up |
+| `Ctrl+A` | Select the day, press again for the week |
+| `Ctrl+D` / `Ctrl+R` | Fill down / fill right |
+| `J` / `K` / `E` / `S` | Overview inbox: next / previous / done / snooze |
 
 ## Handing the plan out
 
