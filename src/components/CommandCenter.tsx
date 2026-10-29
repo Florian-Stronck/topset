@@ -315,6 +315,8 @@ export function CommandCenter() {
       }
       // Second stroke of a chord that isn't bound: swallow it rather than type it.
       if (first) e.preventDefault();
+      // Outside a text field Ctrl+A would select the whole page's text, which nothing wants.
+      if (!first && stroke === "mod+a" && !isEditable(document.activeElement)) e.preventDefault();
       if (e.key === "Escape" && sheetOpen) setSheetOpen(false);
     }
 

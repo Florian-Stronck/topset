@@ -49,7 +49,8 @@ export function MenuOptions<V>({
       onKeyDown={walk}
       // Lands on the current choice when it opens, so arrows and Enter work straight away.
       ref={(el) => {
-        if (autoFocus && el && !el.contains(document.activeElement)) (el.querySelector<HTMLElement>('[aria-checked="true"]') ?? el.querySelector<HTMLElement>("button"))?.focus({ preventScroll: true });
+        // Not while the focus is elsewhere in its popover (a field beside the list), or each render would pull it back.
+        if (autoFocus && el && !(el.closest("[data-popover]") ?? el).contains(document.activeElement)) (el.querySelector<HTMLElement>('[aria-checked="true"]') ?? el.querySelector<HTMLElement>("button"))?.focus({ preventScroll: true });
       }}
       className={className}
     >

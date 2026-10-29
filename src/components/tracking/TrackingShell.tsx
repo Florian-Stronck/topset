@@ -369,7 +369,13 @@ export function TrackingShell({
                     e.preventDefault();
                     setRenaming(tab.id);
                   }}
-                  title={t("Double-click to rename")}
+                  onKeyDown={(e) => {
+                    if (e.key === "F2") {
+                      e.preventDefault();
+                      setRenaming(tab.id);
+                    }
+                  }}
+                  title={t("Double-click or F2 to rename")}
                   className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 pb-2 pt-1 text-[13px] ${
                     on ? "border-accent font-medium text-foreground" : "border-transparent text-muted hover:text-foreground"
                   }`}

@@ -505,7 +505,7 @@ export function Topbar({
                           setPhasesOpen(false);
                           setDeletingPhaseId(p.id);
                         }}
-                        className="rounded-full p-1 text-muted-2 opacity-0 hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100"
+                        className="rounded-full p-1 text-muted-2 opacity-0 hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100 focus-visible:opacity-100"
                       >
                         <svg viewBox="0 0 14 14" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
                           <path d="M2 2l10 10M12 2L2 12" strokeLinecap="round" />

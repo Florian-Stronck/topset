@@ -59,19 +59,36 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
     startTransition(() => reorderCheckinQuestions(athleteId, ids));
   }
 
+  /** One place left or right, from the keyboard; the chip keeps the focus as it moves. */
+  function move(id: string, by: -1 | 1) {
+    const ids = order.map((q) => q.id);
+    const at = ids.indexOf(id);
+    if (at + by < 0 || at + by >= ids.length) return;
+    [ids[at], ids[at + by]] = [ids[at + by], ids[at]];
+    setOrder(ids.map((x) => order.find((q) => q.id === x)!));
+    startTransition(() => reorderCheckinQuestions(athleteId, ids));
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-question="${id}"]`)?.focus());
+  }
+
   return (
     <div title={t("What the athlete app asks before training.")}>
       <div className="flex flex-wrap items-center gap-1.5">
         {order.map((q) => (
           <button
             key={q.id}
+            data-question={q.id}
             type="button"
             draggable
             onDragStart={() => setDragging(q.id)}
             onDragOver={(e) => e.preventDefault()}
             onDrop={() => drop(q.id)}
             onClick={() => setEditing(q)}
-            title={t("Click to edit, drag to reorder")}
+            onKeyDown={(e) => {
+              if (!e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+              e.preventDefault();
+              move(q.id, e.key === "ArrowLeft" ? -1 : 1);
+            }}
+            title={t("Click to edit, drag or Alt+←/→ to reorder")}
             className={`flex items-center gap-1.5 rounded-lg border border-border bg-surface-2 py-1 pl-1 pr-2 text-[12px] hover:border-muted-2 ${
               dragging === q.id ? "opacity-50" : ""
             }`}

@@ -6,6 +6,8 @@ import { formatDate, overlapsSettled, phaseOverlaps, ymdOf } from "@/lib/dates";
 import { addDays, programOn } from "@/lib/schedule";
 import { activeSettings } from "@/lib/settings";
 import { t } from "@/lib/i18n";
+import type { SetLogData } from "@/lib/setlog";
+import type { Tier } from "@prisma/client";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -35,6 +37,10 @@ export type AthleteSummary = {
   dead1RM: number | null;
   /** The program picked to win where two overlap; null lets the later start win. */
   activeProgramId?: string | null;
+  /** Their own RPE chart as JSON, for e1RMs; null uses the coach's. */
+  rpeTable?: string | null;
+  /** "M" or "F", for meet scores. */
+  sex?: string | null;
   blocks: BlockSummary[];
 };
 
@@ -88,6 +94,8 @@ export function currentBlock(blocks: BlockSummary[], today: Date, activeProgramI
 export type FlagAction = "program" | "review" | "link" | "checkins" | "sessions" | "weight";
 
 export type Flag = {
+  /** Stays the same while the problem does, so the coach can snooze it. */
+  key: string;
   text: string;
   action: FlagAction;
   /** Worth doing today rather than this week: nothing to train on, nothing logged, a class missed. */
@@ -112,11 +120,11 @@ export function flagsFor(
   const flags: Flag[] = [];
 
   if (athlete.blocks.length === 0) {
-    return [{ text: t("No program yet"), action: "program", urgent: true }];
+    return [{ key: "no-program", text: t("No program yet"), action: "program", urgent: true }];
   }
 
   if (!overlapsSettled(phaseOverlaps(athlete.blocks, today), athlete.activeProgramId)) {
-    flags.push({ text: t("Programs overlap — pick the one to train"), action: "program", urgent: true });
+    flags.push({ key: "overlap", text: t("Programs overlap — pick the one to train"), action: "program", urgent: true });
   }
 
   const block = currentBlock(athlete.blocks, today, athlete.activeProgramId);
@@ -125,13 +133,14 @@ export function flagsFor(
   const window = blockWindow(block, today);
 
   if (block.rows === 0) {
-    flags.push({ text: t("“{name}” has no exercises yet", { name: block.name }), action: "program" });
+    flags.push({ key: `empty-${block.id}`, text: t("“{name}” has no exercises yet", { name: block.name }), action: "program" });
   }
 
   if (window.status === "active" && window.daysLeft <= endingSoonDays()) {
     const later = athlete.blocks.some((b) => b.startDate.getTime() >= window.end.getTime());
     if (!later) {
       flags.push({
+        key: `ending-${block.id}`,
         text:
           window.daysLeft <= 0
             ? t("Program has run out — nothing programmed next")
@@ -143,7 +152,7 @@ export function flagsFor(
   }
 
   if (window.status === "done") {
-    flags.push({ text: t("No program running today"), action: "program", urgent: true });
+    flags.push({ key: "not-running", text: t("No program running today"), action: "program", urgent: true });
   }
 
   // The block's own maxes are what its target weights resolve against.
@@ -157,6 +166,7 @@ export function flagsFor(
   );
   if (missing.length > 0) {
     flags.push({
+      key: `no-1rm-${block.id}`,
       text: t("No 1RM for {lifts} — those rows show no target weight", { lifts: missing.join(", ") }),
       action: "program",
     });
@@ -199,6 +209,29 @@ export type WindowSession = {
   ymd: string;
   label: string;
   rows: ComplianceRow[];
+};
+
+/**
+ * A training day as the Overview reads it: where it sits in the plan, when it was last
+ * reviewed, and its rows with every set logged.
+ */
+export type TrainingSession = Omit<WindowSession, "rows"> & {
+  dayId: string;
+  blockId: string;
+  phase: string;
+  week: number;
+  /** ISO, or null if never reviewed. */
+  reviewedAt: string | null;
+  rows: (Omit<ComplianceRow, "logs"> & {
+    id: string;
+    tier: Tier;
+    target: string;
+    reps: number | null;
+    repsMax: number | null;
+    load: number | null;
+    athleteNotes: string | null;
+    logs: SetLogData[];
+  })[];
 };
 
 export type WeekCell = { ymd: string; status: DayStatus; label: string | null; done: number; prescribed: number };
@@ -305,16 +338,17 @@ export function trainingFlags(
   if (training.due14 >= 2 && training.lastDone === null) {
     flags.push(
       linksOn && !hasLink
-        ? { text: t("Nothing logged in two weeks, and no check-in link yet"), action: "link", urgent: true }
-        : { text: t("Nothing logged in the last two weeks"), action: "review", urgent: true },
+        ? { key: "silent-no-link", text: t("Nothing logged in two weeks, and no check-in link yet"), action: "link", urgent: true }
+        : { key: "silent", text: t("Nothing logged in the last two weeks"), action: "review", urgent: true },
     );
   } else if (training.missed7 >= 2) {
-    flags.push({ text: t("Missed {n} sessions in the last 7 days", { n: training.missed7 }), action: "review" });
+    flags.push({ key: "missed", text: t("Missed {n} sessions in the last 7 days", { n: training.missed7 }), action: "review" });
   }
 
   const { mean, n } = training.drift;
   if (mean !== null && n >= DRIFT_MIN_ROWS && Math.abs(mean) >= DRIFT_WARN) {
     flags.push({
+      key: mean > 0 ? "rpe-over" : "rpe-under",
       text:
         mean > 0
           ? t("RPE running {d} above plan over two weeks — maxes may be too high", { d: `+${mean}` })
@@ -329,6 +363,7 @@ export function trainingFlags(
     const low = readiness.low.map((l) => `${l.label.toLowerCase()} ${l.value}`);
     const heavy = mean !== null && n >= DRIFT_MIN_ROWS && mean >= DRIFT_WARN;
     flags.push({
+      key: `readiness-${readiness.day}`,
       text:
         t("Readiness {n}/5 on {date}", { n: score, date: formatDate(readiness.day) }) +
         (low.length > 0 ? ` — ${low.join(", ")}` : "") +
@@ -341,6 +376,7 @@ export function trainingFlags(
   const weight = bodyweight.avg7 ?? bodyweight.latest?.weight ?? null;
   if (meet && meet.limit !== null && weight !== null && weight > meet.limit) {
     flags.push({
+      key: "over-class",
       text: t("{w} {u} over the {class} class, {n} days out", {
         w: Math.round((weight - meet.limit) * 10) / 10,
         u: unit,

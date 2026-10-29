@@ -1077,11 +1077,11 @@ function Feedback({
                   setDraft(m.body);
                   requestAnimationFrame(() => (document.getElementById(`feedback-${s.day.id}`) as HTMLTextAreaElement | null)?.focus());
                 }}
-                className="shrink-0 text-[10px] text-muted-2 opacity-0 hover:text-accent group-hover:opacity-100"
+                className="shrink-0 text-[10px] text-muted-2 opacity-0 hover:text-accent group-hover:opacity-100 focus-visible:opacity-100"
               >
                 {t("Edit")}
               </button>
-              <button type="button" onClick={() => onDelete(m.id)} className="shrink-0 text-[10px] text-muted-2 opacity-0 hover:text-miss group-hover:opacity-100">
+              <button type="button" onClick={() => onDelete(m.id)} className="shrink-0 text-[10px] text-muted-2 opacity-0 hover:text-miss group-hover:opacity-100 focus-visible:opacity-100">
                 {t("Delete")}
               </button>
             </li>

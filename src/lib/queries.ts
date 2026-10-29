@@ -1,5 +1,5 @@
 import { bodyweightEntry } from "@/lib/bodyweight";
-import { currentBlock, type AthleteSummary, type WindowSession } from "@/lib/overview";
+import { currentBlock, type AthleteSummary, type TrainingSession } from "@/lib/overview";
 import { isBodyweight, nutrientOf, questionData, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
 import { nutritionEntry, targetSpan, type NutritionEntry, type TargetSpan } from "@/lib/nutrition";
 import { photosHere } from "@/lib/photos";
@@ -219,6 +219,7 @@ export async function getOverview(today: Date) {
     variationPct: athlete.variationPct,
     variationPcts: athlete.variationPcts,
     rpeTable: athlete.rpeTable,
+    sex: athlete.sex,
     activeProgramId: athlete.activeProgramId,
     blocks: athlete.blocks.map((block) => {
       const first = block.weeks[0];
@@ -374,57 +375,6 @@ export type RosterAthlete = Awaited<ReturnType<typeof getRoster>>["athletes"][nu
  * The latest days athletes logged in the athlete app, newest first: who, which session,
  * how many sets are ticked off, and when they last touched it.
  */
-export async function getRecentCheckins(coachId: string, limit = 8) {
-  const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-  const logs = await prisma.setLog.findMany({
-    where: { loggedAt: { gte: since }, row: { day: { week: { block: { athlete: { coachId } } } } } },
-    orderBy: { loggedAt: "desc" },
-    take: 400,
-    select: {
-      done: true,
-      loggedAt: true,
-      row: {
-        select: {
-          dayId: true,
-          day: {
-            select: {
-              label: true,
-              week: {
-                select: {
-                  order: true,
-                  block: { select: { id: true, phase: true, athlete: { select: { id: true, name: true } } } },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  });
-
-  const days = new Map<
-    string,
-    { dayId: string; athleteId: string; athlete: string; blockId: string; phase: string; week: number; label: string; done: number; last: Date }
-  >();
-  for (const log of logs) {
-    const { day } = log.row;
-    const entry = days.get(log.row.dayId) ?? {
-      dayId: log.row.dayId,
-      athleteId: day.week.block.athlete.id,
-      athlete: day.week.block.athlete.name,
-      blockId: day.week.block.id,
-      phase: day.week.block.phase,
-      week: day.week.order,
-      label: day.label,
-      done: 0,
-      last: log.loggedAt,
-    };
-    if (log.done) entry.done += 1;
-    days.set(log.row.dayId, entry);
-  }
-  return [...days.values()].slice(0, limit);
-}
-
 /**
  * Every athlete's training days between two dates (`YYYY-MM-DD`, both included), each with
  * its rows and which sets are ticked. Two reads: the calendar of every phase, then the rows
@@ -444,20 +394,29 @@ export async function getTrainingWindow(athleteIds: string[], from: string, to: 
       athleteId: true,
       programId: true,
       startDate: true,
-      weeks: { select: { order: true, days: { select: { id: true, index: true, label: true, rest: true } } } },
+      phase: true,
+      weeks: { select: { order: true, days: { select: { id: true, index: true, label: true, rest: true, reviewedAt: true } } } },
     },
   });
 
   const byAthlete = new Map<string, typeof blocks>();
   for (const b of blocks) byAthlete.set(b.athleteId, [...(byAthlete.get(b.athleteId) ?? []), b]);
 
-  const scheduled = new Map<string, { ymd: string; dayId: string; label: string }[]>();
+  const scheduled = new Map<string, Omit<TrainingSession, "rows">[]>();
   for (const [athleteId, list] of byAthlete) {
     scheduled.set(
       athleteId,
       sessionsOf<(typeof list)[number]["weeks"][number]["days"][number], (typeof list)[number]>(list, moves, active.get(athleteId))
         .filter((s) => s.ymd >= from && s.ymd <= to)
-        .map((s) => ({ ymd: s.ymd, dayId: s.day.id, label: s.day.label })),
+        .map((s) => ({
+          ymd: s.ymd,
+          dayId: s.day.id,
+          label: s.day.label,
+          blockId: s.block.id,
+          phase: s.block.phase,
+          week: s.week,
+          reviewedAt: s.day.reviewedAt?.toISOString() ?? null,
+        })),
     );
   }
 
@@ -465,27 +424,40 @@ export async function getTrainingWindow(athleteIds: string[], from: string, to: 
   const rows = dayIds.length
     ? await prisma.exerciseRow.findMany({
         where: { dayId: { in: dayIds } },
+        orderBy: { order: "asc" },
         select: {
+          id: true,
           dayId: true,
+          tier: true,
+          target: true,
           exercise: true,
           sets: true,
+          reps: true,
+          repsMax: true,
           intensityType: true,
           intensity: true,
           intensityMax: true,
+          load: true,
           actualWeight: true,
           performedRpe: true,
-          logs: { select: { done: true } },
+          athleteNotes: true,
+          logs: {
+            orderBy: { setIndex: "asc" },
+            select: { id: true, setIndex: true, weight: true, reps: true, rpe: true, rir: true, seconds: true, done: true, pr: true, loggedAt: true },
+          },
         },
       })
     : [];
-  const rowsByDay = new Map<string, typeof rows>();
-  for (const r of rows) rowsByDay.set(r.dayId, [...(rowsByDay.get(r.dayId) ?? []), r]);
+  const rowsByDay = new Map<string, TrainingSession["rows"]>();
+  for (const { dayId, logs, ...r } of rows) {
+    rowsByDay.set(dayId, [...(rowsByDay.get(dayId) ?? []), { ...r, logs: logs.map((l) => ({ ...l, loggedAt: l.loggedAt.toISOString() })) }]);
+  }
 
-  const out = new Map<string, WindowSession[]>();
+  const out = new Map<string, TrainingSession[]>();
   for (const [athleteId, list] of scheduled) {
     out.set(
       athleteId,
-      list.map((s) => ({ ymd: s.ymd, label: s.label, rows: rowsByDay.get(s.dayId) ?? [] })),
+      list.map((s) => ({ ...s, rows: rowsByDay.get(s.dayId) ?? [] })),
     );
   }
   return out;
@@ -521,6 +493,26 @@ export async function getTargetSpans(athleteId: string): Promise<TargetSpan[]> {
     select: { startDate: true, kcalTarget: true, proteinTarget: true, carbsTarget: true, fatTarget: true, _count: { select: { weeks: true } } },
   });
   return phases.map((p) => targetSpan({ ...p, weeks: p._count.weeks })).filter((s): s is TargetSpan => s !== null);
+}
+
+/** Every meet of these athletes between two days, soonest first, with its attempts. */
+export async function getMeetsBetween(athleteIds: string[], from: Date, to: Date) {
+  return prisma.meet.findMany({
+    where: { athleteId: { in: athleteIds }, date: { gte: from, lt: to } },
+    orderBy: { date: "asc" },
+    include: { attempts: { orderBy: [{ lift: "asc" }, { number: "asc" }] } },
+  });
+}
+
+/** Which exercises have a video on them, per athlete and day: `athleteId|day` → row ids. */
+export async function getVideoRows(athleteIds: string[], from: string): Promise<Map<string, string[]>> {
+  const rows = await prisma.athleteVideo.findMany({
+    where: { athleteId: { in: athleteIds }, day: { gte: from }, deletedAt: null, uploadedAt: { not: null } },
+    select: { athleteId: true, day: true, rowId: true },
+  });
+  const out = new Map<string, string[]>();
+  for (const r of rows) out.set(`${r.athleteId}|${r.day}`, [...(out.get(`${r.athleteId}|${r.day}`) ?? []), r.rowId]);
+  return out;
 }
 
 /** Each athlete's next meet from a day on, if they have one. */
@@ -650,47 +642,6 @@ export async function chatSummary(athleteIds: string[]): Promise<Map<string, Cha
   for (const r of rows) {
     const c = out.get(r.athleteId)!;
     if (!c.last) c.last = { body: r.body, sender: r.sender === "athlete" ? "athlete" : "coach", createdAt: r.createdAt.toISOString() };
-  }
-  return out;
-}
-
-/**
- * Sessions with something new since the coach last reviewed them, per athlete, over the
- * last `days` days: logged sets after `reviewedAt`, or never reviewed at all.
- */
-export async function getUnreviewed(coachId: string, days = 14): Promise<Map<string, { count: number; blockId: string; week: number }>> {
-  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  const logs = await prisma.setLog.findMany({
-    where: { done: true, loggedAt: { gte: since }, row: { day: { week: { block: { athlete: { coachId } } } } } },
-    select: {
-      loggedAt: true,
-      row: {
-        select: {
-          day: {
-            select: {
-              id: true,
-              reviewedAt: true,
-              week: { select: { order: true, block: { select: { id: true, athleteId: true } } } },
-            },
-          },
-        },
-      },
-    },
-  });
-  const sessions = new Map<string, { athleteId: string; blockId: string; week: number; last: Date; reviewedAt: Date | null }>();
-  for (const log of logs) {
-    const day = log.row.day;
-    const had = sessions.get(day.id);
-    if (had && had.last >= log.loggedAt) continue;
-    sessions.set(day.id, { athleteId: day.week.block.athleteId, blockId: day.week.block.id, week: day.week.order, last: log.loggedAt, reviewedAt: day.reviewedAt });
-  }
-  const out = new Map<string, { count: number; blockId: string; week: number }>();
-  for (const d of sessions.values()) {
-    if (d.reviewedAt && d.reviewedAt >= d.last) continue;
-    const had = out.get(d.athleteId);
-    // The link opens the oldest session still waiting.
-    if (!had) out.set(d.athleteId, { count: 1, blockId: d.blockId, week: d.week });
-    else had.count++;
   }
   return out;
 }

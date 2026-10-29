@@ -45,6 +45,8 @@ export type Prefs = {
   clipboard: { kind: "phase" | "week"; id: string; label: string } | null;
   /** How Tracking is filtered and charted on this computer. */
   tracking: TrackingPrefs;
+  /** Overview inbox items put off on this computer: item key → the day it comes back. */
+  inboxSnoozed: Record<string, string>;
 };
 
 export type TrackingPrefs = {
@@ -103,6 +105,7 @@ export const PREF_DEFAULTS: Prefs = {
     lowOnly: false,
     perQuestion: false,
   },
+  inboxSnoozed: {},
 };
 
 /** The theme to draw with: the saved one, or the device's when it follows the system. */

@@ -128,7 +128,7 @@ export function ChatView({
                           setDraft(m.body);
                           requestAnimationFrame(focusComposer);
                         }}
-                        className="opacity-0 hover:text-accent group-hover:opacity-100"
+                        className="opacity-0 hover:text-accent group-hover:opacity-100 focus-visible:opacity-100"
                       >
                         {t("Edit")}
                       </button>
@@ -138,7 +138,7 @@ export function ChatView({
                           setMessages((list) => list.filter((x) => x.id !== m.id));
                           startTransition(() => deleteMessage(m.id));
                         }}
-                        className="opacity-0 hover:text-miss group-hover:opacity-100"
+                        className="opacity-0 hover:text-miss group-hover:opacity-100 focus-visible:opacity-100"
                       >
                         {t("Delete")}
                       </button>

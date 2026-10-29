@@ -48,15 +48,39 @@ export function IntensityKind({
   onCommit: (v: Partial<IntensityValue>) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Opened from the keyboard, the menu takes the focus so arrows and Enter pick straight away.
+  const [byKey, setByKey] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
   const kind = KINDS.find((k) => k.value === value.intensityType) ?? KINDS[0];
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.ctrlKey || e.metaKey) return;
+    if (e.key === "Enter" || e.key === " " || e.key === "F2" || (e.altKey && e.key === "ArrowDown")) {
+      e.preventDefault();
+      setByKey(true);
+      setOpen(true);
+      return;
+    }
+    if (e.key.length !== 1 || e.altKey) return;
+    // Typing over the cell picks the kind starting with that letter; again, the next one.
+    const want = e.key.toLowerCase();
+    const hits = KINDS.filter((k) => [t(k.chip), t(k.label)].some((n) => n.toLowerCase().startsWith(want)));
+    if (hits.length === 0) return;
+    e.preventDefault();
+    const at = hits.findIndex((k) => k.value === value.intensityType);
+    onCommit({ intensityType: hits[(at + 1) % hits.length].value });
+  }
 
   return (
     <div className="flex h-full w-full min-w-0 items-center justify-center px-1">
       <button
         ref={ref}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setByKey(false);
+          setOpen((o) => !o);
+        }}
+        onKeyDown={onKeyDown}
         title={t("Kind of intensity, range and ramp")}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -73,7 +97,7 @@ export function IntensityKind({
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={196}>
         <div>
           <MenuOptions
-            autoFocus={false}
+            autoFocus={byKey}
             value={value.intensityType}
             options={KINDS.map((k) => ({ value: k.value, label: t(k.label) }))}
             onPick={(intensityType) => onCommit({ intensityType })}

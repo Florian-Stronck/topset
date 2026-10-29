@@ -41,6 +41,24 @@ export function Popover({
   // A popover opened from inside this one is portalled outside its DOM, but React events
   // still bubble up the component tree: a press in it marks this one, which then stays open.
   const pressedInside = useRef(false);
+  // Closed with the focus inside, the focus goes back to what opened it, not to the page.
+  const hadFocus = useRef(false);
+  useEffect(() => {
+    if (!open) return;
+    // Read off the document: a list that takes the focus as it mounts does so before React's onFocus.
+    const inside = () => {
+      if (panelRef.current?.contains(document.activeElement)) hadFocus.current = true;
+    };
+    inside();
+    document.addEventListener("focusin", inside);
+    const anchor = anchorRef;
+    return () => {
+      document.removeEventListener("focusin", inside);
+      const lost = !document.activeElement || document.activeElement === document.body;
+      if (hadFocus.current && lost) anchor.current?.focus({ preventScroll: true });
+      hadFocus.current = false;
+    };
+  }, [open, anchorRef]);
 
   useIsomorphicLayoutEffect(() => {
     if (!open) return;
@@ -106,6 +124,7 @@ export function Popover({
   return createPortal(
     <div
       ref={panelRef}
+      data-popover=""
       onMouseDown={() => {
         pressedInside.current = true;
       }}

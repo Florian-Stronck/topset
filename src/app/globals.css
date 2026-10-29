@@ -128,3 +128,9 @@ body {
 .quiet-placeholders .group input.keep-placeholder::placeholder {
   color: var(--muted-2);
 }
+
+/* Whole rows picked in the programming grid: one band across the row, the sticky cells included. */
+.row-picked > *,
+.row-picked > .contents > * {
+  background-color: color-mix(in srgb, var(--accent) 13%, var(--surface)) !important;
+}

@@ -66,6 +66,14 @@ export function RpeChartEditor({
     setDragging(null);
   }
 
+  /** Moves a handle by `by` percent from the keyboard, as far as its neighbours allow. */
+  function nudge(i: number, by: number) {
+    const above = handles[i - 1].y - 0.5;
+    const below = i < handles.length - 1 ? handles[i + 1].y + 0.5 : floor;
+    const next = handles.map((h, j) => (j === i ? { ...h, y: Math.max(below, Math.min(above, h.y + by)) } : h));
+    if (next[i].y !== handles[i].y) onChange(tableFromCurve(table, next, handles));
+  }
+
   /** Puts a handle back where the reference chart has it, as far as its neighbours allow. */
   function resetHandle(i: number) {
     const target = base ? curveAt(base, handles[i].x) : null;
@@ -162,7 +170,7 @@ export function RpeChartEditor({
               key={i}
               type="button"
               disabled={i === 0}
-              aria-label={t("Drag to change {n} reps to failure", { n: Math.round(h.x) })}
+              aria-label={t("Drag or use ↑/↓ to change {n} reps to failure", { n: Math.round(h.x) })}
               title={
                 i === 0
                   ? t("A single at RPE 10 is the 1RM")
@@ -175,6 +183,15 @@ export function RpeChartEditor({
                 setDragging({ index: i, handles, from: handles });
               }}
               onDoubleClick={() => resetHandle(i)}
+              onKeyDown={(e) => {
+                if (e.key === "Backspace" || e.key === "Delete") {
+                  e.preventDefault();
+                  resetHandle(i);
+                } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                  e.preventDefault();
+                  nudge(i, (e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 2.5 : 0.5));
+                }
+              }}
               onPointerMove={move}
               onPointerUp={release}
               onPointerCancel={release}

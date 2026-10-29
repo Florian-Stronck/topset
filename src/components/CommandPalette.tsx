@@ -255,7 +255,11 @@ export function CommandPalette({
               e.preventDefault();
               // Alt+Enter sets the command's key instead of running it.
               if (e.altKey) record(current.command);
-              else run(current.command);
+              else if (e.shiftKey) {
+                // Shift+Enter pins it to the top, or unpins it.
+                const id = current.command.id;
+                setPref("pinnedCommands", pinned.includes(id) ? pinned.filter((p) => p !== id) : [...pinned, id]);
+              } else run(current.command);
               return;
             }
             if (e.key === "Escape") {
@@ -340,7 +344,7 @@ export function CommandPalette({
                     <span
                       role="button"
                       tabIndex={-1}
-                      title={isPinned ? t("Unpin") : t("Pin to the top")}
+                      title={`${isPinned ? t("Unpin") : t("Pin to the top")} (Shift+Enter)`}
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={(e) => {
                         e.stopPropagation();

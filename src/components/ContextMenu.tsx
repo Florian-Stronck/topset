@@ -28,6 +28,12 @@ export function useContextMenu() {
     if (shown.length === 0) return;
     e.preventDefault();
     e.stopPropagation();
+    // From the keyboard (Menu key, Shift+F10) there is no pointer: it opens under the focused element.
+    if (e.clientX === 0 && e.clientY === 0) {
+      const box = (document.activeElement ?? (e.target as Element)).getBoundingClientRect();
+      setState({ x: box.left, y: box.bottom, items: shown });
+      return;
+    }
     setState({ x: e.clientX, y: e.clientY, items: shown });
   }
 

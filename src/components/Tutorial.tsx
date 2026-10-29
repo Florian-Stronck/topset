@@ -105,10 +105,10 @@ const STEPS: Step[] = [
   },
   {
     page: "overview",
-    target: ["main article"],
+    target: [tour("inbox")],
     place: ["below", "above"],
     title: "Overview",
-    body: "Every athlete at a glance: this week's sessions, how far into the program they are, and who needs a new one soon. Click a row to open it.",
+    body: "Everything waiting on you, across every athlete: sessions to review, messages, moved sessions, programs running out. Clear them right here, then see the whole roster underneath.",
   },
   {
     page: "athletes",

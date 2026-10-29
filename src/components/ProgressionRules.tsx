@@ -84,6 +84,8 @@ export function ProgressionRules({
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const ref = useRef<HTMLButtonElement>(null);
+  // Opened from the keyboard, the popover takes the focus so Tab and Enter work in it straight away.
+  const [byKey, setByKey] = useState(false);
   const presets = useSettings().settings.progressionPresets;
   const history = useHistory();
 
@@ -94,7 +96,18 @@ export function ProgressionRules({
       <button
         ref={ref}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setByKey(false);
+          setOpen((o) => !o);
+        }}
+        onKeyDown={(e) => {
+          if (e.ctrlKey || e.metaKey) return;
+          if (e.key === "Enter" || e.key === " " || e.key === "F2" || (e.altKey && e.key === "ArrowDown")) {
+            e.preventDefault();
+            setByKey(true);
+            setOpen(true);
+          }
+        }}
         className={`flex w-full items-center gap-1 overflow-hidden rounded-[3px] px-2 py-1 text-left text-[11px] hover:bg-surface-3 ${
           pending ? "opacity-60" : ""
         }`}
@@ -105,6 +118,7 @@ export function ProgressionRules({
           active.map((r) => (
             <span
               key={r.id}
+              data-rule
               className="shrink-0 rounded bg-accent-soft px-1.5 py-0.5 whitespace-nowrap text-accent"
             >
               {describeRule(r, intensityType)}
@@ -114,7 +128,14 @@ export function ProgressionRules({
       </button>
 
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} width={360}>
-        <div>
+        <div
+          ref={(el) => {
+            if (byKey && el && !el.contains(document.activeElement)) {
+              el.querySelector<HTMLElement>("input, select, button")?.focus({ preventScroll: true });
+              setByKey(false);
+            }
+          }}
+        >
           <div className="flex items-center justify-between">
             <span className="text-[11px] tracking-[0.14em] text-muted-2">{t("PROGRESSION")}</span>
             <span className="text-[11px] text-muted-2">week 1 → week {weeks}</span>
