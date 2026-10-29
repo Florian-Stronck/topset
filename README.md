@@ -39,7 +39,7 @@ An inbox of everything waiting on you, across every athlete, urgent first: sessi
 
 Under it, the whole roster in one table: six weeks of sets done, RPE against plan, readiness, squat/bench/deadlift e1RM with its trend, bodyweight against the meet class and the meet countdown. **Today** shows who is training now and who is up next, **Season** the next 16 weeks of phases and meets, and **Insights** this week against the last, with suggestions like raising a max.
 
-![Overview: warnings and check-ins above a week table for the whole roster](docs/screenshots/overview.png)
+![Overview: the inbox with a session open beside it, above the roster table](docs/screenshots/overview.png)
 
 ### Athletes
 
