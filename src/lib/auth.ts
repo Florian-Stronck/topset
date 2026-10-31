@@ -62,7 +62,11 @@ export type SessionCoach = { id: string; name: string; username: string; isAdmin
 /** The coach a request is signed in as, from its `Authorization: Bearer …` header. */
 export async function coachFromRequest(request: Request): Promise<SessionCoach | null> {
   const token = /^Bearer (\S+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
-  if (!token) return null;
+  return token ? coachFromToken(token) : null;
+}
+
+/** The coach a session token belongs to: a desktop app's, or the cookie of a phone signed in on the server. */
+export async function coachFromToken(token: string): Promise<SessionCoach | null> {
   const session = await prisma.coachSession.findUnique({
     where: { tokenHash: sha256(token) },
     include: { coach: { select: { id: true, name: true, username: true, isAdmin: true, disabledAt: true } } },

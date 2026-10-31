@@ -448,6 +448,7 @@ export async function applyPush(
     needed.add("Athlete").add(table);
     if (table === "CheckinAnswer") needed.add("CheckinQuestion");
     if (table === "SessionMove") needed.add("Day");
+    if (table === "MeetTask") needed.add("Meet");
   }
   // Athletes shared to edit count as the coach's own, whichever app this is: an older one
   // never sends them. What is shared only to view or review is dropped from the push, bar
@@ -565,6 +566,8 @@ export async function applyPush(
   ]);
   // A moved session has to be one of theirs, as its id is named after it.
   const days = new Set([...(owned.get("Day") ?? []), ...(tables.Day?.upsert ?? []).map((r) => String(r.id))]);
+  // A checklist item has to be on one of their meets.
+  const meets = new Set([...(owned.get("Meet") ?? []), ...(tables.Meet?.upsert ?? []).map((r) => String(r.id))]);
   const notes: NewNote[] = [];
   const meetings: NewMeeting[] = [];
   for (const [table, all] of merged) {
@@ -588,6 +591,7 @@ export async function applyPush(
       if (!athletes.has(String(row.athleteId)) && !(isNote && review.get("Athlete")?.has(String(row.athleteId)))) return "That athlete isn't yours.";
       if (table === "CheckinAnswer" && !questions.has(String(row.questionId))) return "That question isn't yours.";
       if (table === "SessionMove" && !days.has(String(row.dayId))) return "That session isn't yours.";
+      if (table === "MeetTask" && !meets.has(String(row.meetId))) return "That meet isn't yours.";
     }
     const ids = list.map((r) => r.id);
     const held = new Map<string, number>();

@@ -1,92 +1,98 @@
 "use client";
 
+import { useCoachActions } from "@/components/CoachActions";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { useCommands, type Command } from "@/lib/commands";
-import type { AttemptResult, MeetLift } from "@prisma/client";
-import {
-  applyResultsAsMaxes,
-  createMeet,
-  deleteMeet,
-  planFromMaxes,
-  updateAttempt,
-  updateMeet,
-} from "@/app/competition/actions";
-import { BodyweightPanel } from "@/components/BodyweightPanel";
+import type { AttemptResult } from "@prisma/client";
+import type { Road, TrainingFacts } from "@/app/competition/data";
+import { AttemptsTab } from "@/components/competition/AttemptsTab";
+import { HistoryTab } from "@/components/competition/HistoryTab";
+import { RoadTab } from "@/components/competition/RoadTab";
 import { useSettings } from "@/components/SettingsProvider";
-import { formKeys, NumberInput, TextInput } from "@/components/cells";
-import type { BodyweightEntry } from "@/lib/bodyweight";
+import { formKeys, TextInput } from "@/components/cells";
+import { bodyweightSummary, dailyWeights, projectWeight, type BodyweightEntry } from "@/lib/bodyweight";
 import {
-  best,
+  COMPETITION_TABS,
   countdown,
   currentAttempt,
   daysUntil,
-  LIFT_LABEL,
-  MEET_LIFTS,
-  totalLifts,
-  maxFor,
   meetScore,
-  projectedTotal,
   scoreName,
-  suggestion,
+  THIRD_PLANS,
   total,
-  type AttemptData,
+  type CompetitionTab,
   type MeetData,
+  type Rack,
+  type ThirdPlan,
 } from "@/lib/competition";
-import { formatDate } from "@/lib/dates";
+import { formatDate, weekdayOf } from "@/lib/dates";
+import { REMINDER_KINDS, type ReminderKind } from "@/lib/meet-reminders";
 import { SHELL_MAX_WIDTH } from "@/lib/layout";
 import type { AthleteData } from "@/lib/types";
-import { t } from "@/lib/i18n";
-
-const RESULT_CYCLE: Record<AttemptResult, AttemptResult> = {
-  PENDING: "GOOD",
-  GOOD: "MISS",
-  MISS: "PENDING",
-};
-
-const RESULT_STYLE: Record<AttemptResult, string> = {
-  PENDING: "border-border text-muted-2 hover:text-foreground",
-  GOOD: "border-[color:var(--ok)]/50 bg-[color:var(--ok)]/10 text-[color:var(--ok)]",
-  MISS: "border-accent/50 bg-accent-soft text-accent",
-};
-
-const RESULT_LABEL: Record<AttemptResult, string> = {
-  PENDING: "—",
-  GOOD: "GOOD",
-  MISS: "MISS",
-};
-
-/** Keys on a focused result button, for calling attempts without the mouse. */
-const RESULT_KEYS: Record<string, AttemptResult> = {
-  g: "GOOD",
-  m: "MISS",
-  Backspace: "PENDING",
-  Delete: "PENDING",
-};
+import { t, weekdayShort } from "@/lib/i18n";
 
 type Limit = { limit: number | null; day: string };
+
+const TAB_LABEL: Record<CompetitionTab, string> = {
+  attempts: "Attempts",
+  road: "Road to the meet",
+  history: "History",
+};
+
+/** The palette's name for each reminder, as on the Road tab. */
+export const REMINDER_LABEL: Record<ReminderKind, string> = {
+  list: "14 days out: what's left on their list",
+  week: "7 days out",
+  eve: "The day before: weigh-in",
+  morning: "Meet morning",
+  results: "The day after: the result",
+};
+
+const PLAN_LABEL: Record<ThirdPlan, string> = {
+  safe: "Plan every third safe",
+  planned: "Plan every third off the 1RMs",
+  push: "Plan every third pushed",
+};
 
 export function MeetPlanner({
   athlete,
   meets,
-  activeMeetId,
+  meet,
+  tab,
+  training,
+  road,
   today,
   calendarDay,
   bodyweights,
+  linked,
+  racks,
   limits,
   readOnly = false,
 }: {
   athlete: AthleteData;
   meets: MeetData[];
-  activeMeetId: string | null;
+  /** The meet on show: the one picked, else the next, else the latest. */
+  meet: MeetData | null;
+  tab: CompetitionTab;
+  /** What training says, for the Attempts tab. */
+  training: TrainingFacts | null;
+  /** The program leading to the meet, for the Road tab. */
+  road: Road | null;
   today: string;
   /** Today on the athlete's calendar, yyyy-mm-dd. */
   calendarDay: string;
   bodyweights: BodyweightEntry[];
+  /** Whether the athlete has a link to the athlete app. */
+  linked: boolean;
+  /** The athlete's rack heights, per brand of rack. */
+  racks: Record<string, Rack>;
   limits: Record<string, Limit>;
   /** Shared with this coach to view or review: meets switch, nothing changes. */
   readOnly?: boolean;
 }) {
+  const { addUsualTasks, applyResultsAsMaxes, planFromMaxes, setReminder, setThirds, updateAttempt, updateMeet, meetHref } = useCoachActions();
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [creating, setCreating] = useState(false);
@@ -94,28 +100,42 @@ export function MeetPlanner({
   const scoring = settings.meetScore;
 
   const now = new Date(today);
-  const { upcoming, past, meet } = useMemo(() => {
+  const { upcoming, past } = useMemo(() => {
     const day = new Date(today);
-    const upcoming = meets.filter((m) => daysUntil(m.date, day) >= 0);
-    const past = meets.filter((m) => daysUntil(m.date, day) < 0).toReversed();
-    // With nothing picked, the next meet — or the latest one if they are all behind.
-    const meet = meets.find((m) => m.id === activeMeetId) ?? upcoming[0] ?? past[0] ?? null;
-    return { upcoming, past, meet };
-  }, [meets, activeMeetId, today]);
-  const current = meet ? currentAttempt(meet.attempts) : null;
-  const open = (id: string) => router.push(`/competition?athlete=${athlete.id}&meet=${id}`);
+    return {
+      upcoming: meets.filter((m) => daysUntil(m.date, day) >= 0),
+      past: meets.filter((m) => daysUntil(m.date, day) < 0).toReversed(),
+    };
+  }, [meets, today]);
+  const open = (id: string, to: CompetitionTab = tab) => router.push(meetHref(athlete.id, id, to));
+  const newMeet = () => {
+    setCreating(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const weight = useMemo(() => {
+    const daily = dailyWeights(bodyweights);
+    const summary = bodyweightSummary(daily, calendarDay);
+    const limit = meet ? (limits[meet.id] ?? null) : null;
+    return {
+      current: summary.avg7 ?? summary.latest?.weight ?? null,
+      limit: limit?.limit ?? null,
+      projected: limit ? (projectWeight(daily, calendarDay, limit.day)?.weight ?? null) : null,
+    };
+  }, [bodyweights, calendarDay, limits, meet]);
 
   const commands = useMemo<Command[]>(() => {
+    const run = (action: () => Promise<unknown>) => () =>
+      startTransition(() => {
+        void action();
+      });
     const list: Command[] = [
       {
         id: "meet-new",
         group: "Competition",
         title: t("New meet…"),
-        keywords: "add competition create",
-        run: () => {
-          setCreating(true);
-          window.scrollTo({ top: 0, behavior: "smooth" });
-        },
+        keywords: "add competition create past",
+        run: newMeet,
       },
       {
         id: "meet-score",
@@ -124,6 +144,16 @@ export function MeetPlanner({
         keywords: "points coefficient ipf wilks",
         run: () => update({ meetScore: scoring === "gl" ? "dots" : "gl" }),
       },
+      ...COMPETITION_TABS.map(
+        (v): Command => ({
+          id: `competition-tab-${v}`,
+          group: "Competition",
+          title: t(TAB_LABEL[v]),
+          keywords: "competition tab attempts road timeline checklist history meets",
+          kind: "place",
+          run: () => router.push(meetHref(athlete.id, meet?.id ?? null, v)),
+        }),
+      ),
       ...meets
         .filter((m) => m.id !== meet?.id)
         .map((m): Command => ({
@@ -131,38 +161,90 @@ export function MeetPlanner({
           group: "Competition",
           title: t("Open meet {name}", { name: m.name }),
           kind: "place",
-          run: () => router.push(`/competition?athlete=${athlete.id}&meet=${m.id}`),
+          run: () => router.push(meetHref(athlete.id, m.id, tab)),
         })),
     ];
-    if (meet) {
+    if (meet && !readOnly) {
+      const focus = (selector: string, to: CompetitionTab) => () => {
+        const go = () => {
+          const input = document.querySelector<HTMLInputElement>(selector);
+          input?.focus();
+          input?.select();
+        };
+        if (tab === to) go();
+        else {
+          router.push(meetHref(athlete.id, meet.id, to));
+          setTimeout(go, 400);
+        }
+      };
       list.push(
         {
           id: "meet-rename",
           group: "Competition",
           title: t("Rename meet"),
-          run: () => {
-            const input = document.querySelector<HTMLInputElement>('[data-focus="meet-name"] input');
-            input?.focus();
-            input?.select();
-          },
+          run: focus('[data-focus="meet-name"] input', tab),
+        },
+        {
+          id: "meet-goal",
+          group: "Competition",
+          title: t("Set the goal total"),
+          keywords: "target aim",
+          run: focus('[data-focus="meet-goal"] input', "attempts"),
         },
         {
           id: "meet-plan",
           group: "Competition",
           title: t("Plan attempts from 1RMs"),
           keywords: "openers fill attempts",
-          run: () =>
-            startTransition(() => {
-              void planFromMaxes(meet.id);
-            }),
+          run: run(() => planFromMaxes(meet.id)),
         },
+        ...THIRD_PLANS.map(
+          (plan): Command => ({
+            id: `meet-thirds-${plan}`,
+            group: "Competition",
+            title: t(PLAN_LABEL[plan]),
+            keywords: "third attempt safe push jump",
+            run: run(() => setThirds(meet.id, plan)),
+          }),
+        ),
+      );
+      if (meet.tasks.length === 0) {
+        list.push({
+          id: "meet-checklist",
+          group: "Competition",
+          title: t("Add the usual checklist"),
+          keywords: "todo kit entry hotel",
+          run: run(() => addUsualTasks(meet.id)),
+        });
+      }
+      list.push(
+        {
+          id: "meet-share",
+          group: "Competition",
+          title: t("Show this meet in the athlete app: on / off"),
+          keywords: "phone share athlete app",
+          run: run(() => updateMeet(meet.id, { shared: !meet.shared })),
+        },
+        {
+          id: "meet-share-attempts",
+          group: "Competition",
+          title: t("Show the attempts in the athlete app: on / off"),
+          keywords: "phone share openers plan",
+          run: run(() => updateMeet(meet.id, { shareAttempts: !meet.shareAttempts })),
+        },
+        ...REMINDER_KINDS.map(
+          (kind): Command => ({
+            id: `meet-reminder-${kind}`,
+            group: "Competition",
+            title: t("Reminder, {when}: on / off", { when: t(REMINDER_LABEL[kind]) }),
+            keywords: "push notification nudge phone",
+            run: run(() => setReminder(meet.id, kind, { on: !meet.reminders.on[kind] })),
+          }),
+        ),
       );
       const current = currentAttempt(meet.attempts);
       if (current) {
-        const call = (result: AttemptResult) => () =>
-          startTransition(() => {
-            void updateAttempt(meet.id, current.lift, current.number, { result });
-          });
+        const call = (result: AttemptResult) => run(() => updateAttempt(meet.id, current.lift, current.number, { result }));
         list.push(
           {
             id: "meet-good",
@@ -186,40 +268,57 @@ export function MeetPlanner({
           group: "Competition",
           title: t("Save results as the new 1RMs"),
           keywords: "maxes write back",
-          run: () =>
-            startTransition(() => {
-              void applyResultsAsMaxes(meet.id);
-            }),
+          run: run(() => applyResultsAsMaxes(meet.id)),
         });
       }
     }
     return list;
-  }, [athlete.id, meet, meets, router, scoring, update]);
+  }, [athlete.id, meet, meets, readOnly, router, scoring, tab, update, addUsualTasks, applyResultsAsMaxes, meetHref, planFromMaxes, setReminder, setThirds, updateAttempt, updateMeet]);
   useCommands("competition", commands);
 
   const unit = athlete.unit === "LB" ? "lb" : "kg";
+  const onScoring = (meetScore: "dots" | "gl") => update({ meetScore });
 
   return (
     <main className="min-w-0 flex-1 overflow-auto">
       <div style={{ maxWidth: SHELL_MAX_WIDTH }} className="mx-auto w-full px-6 py-7">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="text-[22px] font-semibold tracking-tight">{t("Competition")}</h1>
-            <p className="mt-1 text-[12px] text-muted">
-              {athlete.name} · {t("attempts planned off the 1RMs, results written back onto them")}
-            </p>
-          </div>
+        <nav aria-label={t("Meets")} className="flex flex-wrap items-stretch gap-2">
+          {[...upcoming, ...past].map((m) => {
+            const on = m.id === meet?.id;
+            const days = daysUntil(m.date, now);
+            const sum = total(m.attempts);
+            const score = meetScore(sum, m.bodyweight, athlete.sex, athlete.unit, scoring);
+            return (
+              <Link
+                key={m.id}
+                href={meetHref(athlete.id, m.id, tab)}
+                aria-current={on ? "page" : undefined}
+                className={`flex min-w-0 max-w-[260px] flex-col rounded-lg border px-3 py-1.5 ${
+                  on ? "border-accent/50 bg-accent-soft" : "border-border bg-surface hover:border-muted-2"
+                }`}
+              >
+                <span className="truncate text-[12.5px] font-medium">{m.name}</span>
+                <span className={`truncate text-[11px] ${days >= 0 && days <= 21 ? "text-accent" : "text-muted-2"}`}>
+                  {days >= 0
+                    ? `${formatDate(m.date)} · ${countdown(m.date, now)}`
+                    : [formatDate(m.date, true), sum !== null && `${sum} ${unit}`, score !== null && `${score.toFixed(1)} ${scoreName()}`]
+                        .filter(Boolean)
+                        .join(" · ")}
+                </span>
+              </Link>
+            );
+          })}
           {!readOnly && (
             <button
               data-tour="new-meet"
               type="button"
               onClick={() => setCreating((c) => !c)}
-              className="rounded-full border border-border px-3 py-1.5 text-[12px] text-muted hover:border-accent hover:text-accent"
+              className="rounded-lg border border-dashed border-border px-3 py-1.5 text-[12px] text-muted hover:border-accent hover:text-accent"
             >
               {t("+ New meet")}
             </button>
           )}
-        </div>
+        </nav>
         {readOnly && <p className="mt-2 text-[12px] text-muted">{t("Shared with you to look at: meets can't be changed here.")}</p>}
 
         {creating && (
@@ -227,68 +326,64 @@ export function MeetPlanner({
             athleteId={athlete.id}
             onDone={(id) => {
               setCreating(false);
-              open(id);
+              open(id, tab === "history" ? "history" : "attempts");
             }}
             onCancel={() => setCreating(false)}
           />
         )}
 
         {meet ? (
-          <div className="mt-5 grid items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-            <nav className="space-y-4">
-              <RailGroup label={t("UPCOMING")}>
-                {upcoming.map((m) => (
-                  <RailItem key={m.id} active={m.id === meet.id} onClick={() => open(m.id)} name={m.name}>
-                    <span className={daysUntil(m.date, now) <= 21 ? "text-accent" : ""}>{countdown(m.date, now)}</span>
-                  </RailItem>
-                ))}
-              </RailGroup>
-              <RailGroup label={t("PAST")}>
-                {past.map((m) => {
-                  const sum = total(m.attempts);
-                  const score = meetScore(sum, m.bodyweight, athlete.sex, athlete.unit, scoring);
-                  return (
-                    <RailItem key={m.id} active={m.id === meet.id} onClick={() => open(m.id)} name={m.name}>
-                      {formatDate(m.date, true)}
-                      {sum !== null && ` · ${sum} ${unit}`}
-                      {score !== null && ` · ${score.toFixed(1)} ${scoreName()}`}
-                    </RailItem>
-                  );
-                })}
-              </RailGroup>
+          <>
+            <MeetHeader athlete={athlete} meet={meet} today={now} readOnly={readOnly} />
+            <nav role="tablist" aria-label={t("Meet")} className="mt-4 flex gap-1 border-b border-border">
+              {COMPETITION_TABS.map((v) => {
+                const on = v === tab;
+                return (
+                  <Link
+                    key={v}
+                    role="tab"
+                    aria-selected={on}
+                    href={meetHref(athlete.id, meet.id, v)}
+                    scroll={false}
+                    className={`-mb-px border-b-2 px-3 pb-2 pt-1 text-[13px] ${
+                      on ? "border-accent font-medium text-foreground" : "border-transparent text-muted hover:text-foreground"
+                    }`}
+                  >
+                    {t(TAB_LABEL[v])}
+                  </Link>
+                );
+              })}
             </nav>
 
-            <div inert={readOnly} className="min-w-0 space-y-3">
-              <MeetHeader
-                athlete={athlete}
-                meet={meet}
-                today={now}
-                scoring={scoring}
-                onScoring={(meetScore) => update({ meetScore })}
-              />
-              <AttemptBoard athlete={athlete} meet={meet} current={current} />
-              {daysUntil(meet.date, now) >= 0 && (
-                <BodyweightPanel
-                  athleteId={athlete.id}
-                  unit={unit}
-                  today={calendarDay}
-                  entries={bodyweights}
-                  meet={{ name: meet.name, weightClass: meet.weightClass, ...(limits[meet.id] ?? { limit: null, day: meet.date.slice(0, 10) }) }}
-                />
+            <div className="mt-4 space-y-4">
+              {tab === "attempts" && (
+                <div inert={readOnly} className="space-y-4">
+                  <AttemptsTab athlete={athlete} meet={meet} meets={meets} training={training} weight={weight} today={now} scoring={scoring} onScoring={onScoring} />
+                </div>
               )}
-              {/* Delete lives at the bottom so it is never next to the attempt buttons. */}
-              <div className="flex justify-end pb-10 pt-4">
-                <DeleteMeet
-                  meet={meet}
-                  onDeleted={() =>
-                    startTransition(() => {
-                      router.push(`/competition?athlete=${athlete.id}`);
-                    })
-                  }
-                />
-              </div>
+              {tab === "road" && (
+                <div inert={readOnly} className="space-y-4">
+                  <RoadTab athlete={athlete} meet={meet} road={road} today={now} calendarDay={calendarDay} bodyweights={bodyweights} limit={limits[meet.id] ?? null} linked={linked} racks={racks} />
+                </div>
+              )}
+              {tab === "history" && (
+                <HistoryTab athlete={athlete} meets={meets} picked={meet.id} today={now} scoring={scoring} onScoring={onScoring} onNew={readOnly ? null : newMeet} />
+              )}
+              {tab !== "history" && !readOnly && (
+                // Delete lives at the bottom so it is never next to the attempt buttons.
+                <div className="flex justify-end pb-10 pt-2">
+                  <DeleteMeet
+                    meet={meet}
+                    onDeleted={() =>
+                      startTransition(() => {
+                        router.push(meetHref(athlete.id, null, tab));
+                      })
+                    }
+                  />
+                </div>
+              )}
             </div>
-          </div>
+          </>
         ) : (
           !creating && (
             <div className="mt-6 rounded-xl border border-dashed border-border px-6 py-12 text-center">
@@ -310,322 +405,63 @@ export function MeetPlanner({
   );
 }
 
-function RailGroup({ label, children }: { label: string; children: React.ReactNode[] }) {
-  if (children.length === 0) return null;
-  return (
-    <div>
-      <div className="px-2 text-[10px] tracking-[0.16em] text-muted-2">{label}</div>
-      <div className="mt-1 space-y-0.5">{children}</div>
-    </div>
-  );
-}
-
-function RailItem({
-  active,
-  onClick,
-  name,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  name: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`block w-full rounded-lg px-2 py-1.5 text-left ${
-        active ? "bg-surface-2 text-foreground" : "text-muted hover:bg-surface-2/60 hover:text-foreground"
-      }`}
-    >
-      <div className="truncate text-[13px] font-medium">{name}</div>
-      <div className="truncate text-[11px] text-muted-2">{children}</div>
-    </button>
-  );
-}
-
-function MeetHeader({
-  athlete,
-  meet,
-  today,
-  scoring,
-  onScoring,
-}: {
-  athlete: AthleteData;
-  meet: MeetData;
-  today: Date;
-  scoring: "dots" | "gl";
-  onScoring: (kind: "dots" | "gl") => void;
-}) {
+/** Which meet, where and when, and how long until it — on every tab. */
+function MeetHeader({ athlete, meet, today, readOnly }: { athlete: AthleteData; meet: MeetData; today: Date; readOnly: boolean }) {
+  const { updateMeet, meetHref } = useCoachActions();
   const [, startTransition] = useTransition();
-  const unit = athlete.unit === "LB" ? "lb" : "kg";
   const days = daysUntil(meet.date, today);
-  const meetTotal = total(meet.attempts);
-  const projected = projectedTotal(meet.attempts);
-  const score = meetScore(meetTotal, meet.bodyweight, athlete.sex, athlete.unit, scoring);
-  const projectedScore = meetScore(projected, meet.bodyweight, athlete.sex, athlete.unit, scoring);
-  const name = scoring === "gl" ? "GL" : "DOTS";
-
-  function patchMeet(patch: Parameters<typeof updateMeet>[1]) {
-    startTransition(() => {
-      void updateMeet(meet.id, patch);
-    });
-  }
+  const ymd = meet.date.slice(0, 10);
+  const facts = [
+    meet.federation,
+    `${weekdayShort(weekdayOf(ymd))} ${formatDate(ymd, true)}`,
+    meet.weighInTime && t("weigh-in {when}", { when: `${weekdayShort(weekdayOf(meet.weighInDay ?? ymd))} ${meet.weighInTime}` }),
+    meet.session,
+    meet.venue,
+  ].filter(Boolean);
 
   return (
-    <section className="overflow-hidden rounded-xl border border-border bg-surface">
-      <div className="flex flex-wrap items-start gap-4 p-4">
-        <div className="min-w-[220px] flex-1">
-          <div data-focus="meet-name" className="-ml-2">
-            <TextInput
-              value={meet.name}
-              placeholder={t("Meet name")}
-              className="!text-[18px] font-semibold"
-              onCommit={(v) => v && patchMeet({ name: v })}
-            />
-          </div>
-          <div className="mt-1 pl-0.5">
-            <input
-              type="date"
-              value={meet.date.slice(0, 10)}
-              onChange={(e) => e.target.value && patchMeet({ date: e.target.value })}
-              className="rounded border border-border bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted outline-none focus:ring-1 focus:ring-accent/60"
-            />
-          </div>
+    <header className="mt-5 flex flex-wrap items-end gap-4">
+      <div className="min-w-[260px] flex-1">
+        <div className="text-[12px] text-muted">
+          {athlete.name}
+          {meet.weightClass && ` · ${meet.weightClass}`}
         </div>
-        <div className={`text-right ${days >= 0 && days <= 21 ? "text-accent" : "text-muted"}`}>
-          <div className="text-[22px] font-semibold leading-none">
-            {days === 0 ? t("Meet day") : countdown(meet.date, today)}
-          </div>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-3 px-4 pb-4">
-        <Field label={t("FEDERATION")}>
-          <TextInput value={meet.federation} placeholder={t("e.g. IPF")} onCommit={(v) => patchMeet({ federation: v })} />
-        </Field>
-        <Field label={t("CLASS")}>
-          <TextInput value={meet.weightClass} placeholder={t("e.g. 93 kg")} onCommit={(v) => patchMeet({ weightClass: v })} />
-        </Field>
-        <Field label={t("BODYWEIGHT ({unit})", { unit })}>
-          <NumberInput value={meet.bodyweight} align="left" onCommit={(v) => patchMeet({ bodyweight: v })} />
-        </Field>
-      </div>
-
-      <div className="grid grid-cols-3 border-t border-border">
-        <Stat label={t("TOTAL")} value={meetTotal === null ? "—" : `${meetTotal} ${unit}`} />
-        <Stat
-          label={
-            <span className="inline-flex overflow-hidden rounded border border-border">
-              {(["dots", "gl"] as const).map((kind) => (
-                <button
-                  key={kind}
-                  type="button"
-                  aria-pressed={kind === scoring}
-                  onClick={() => kind !== scoring && onScoring(kind)}
-                  className={`px-1.5 ${kind === scoring ? "bg-surface-2 text-foreground" : "hover:text-foreground"}`}
-                >
-                  {kind === "gl" ? "GL" : "DOTS"}
-                </button>
-              ))}
-            </span>
-          }
-          value={score === null ? "—" : score.toFixed(1)}
-          note={
-            !athlete.sex
-              ? t("set the division on the athlete's card")
-              : meet.bodyweight === null
-                ? t("needs the meet bodyweight")
-                : undefined
-          }
-        />
-        <Stat
-          label={t("PROJECTED")}
-          value={projected === null ? "—" : `${projected} ${unit}`}
-          note={projectedScore === null ? t("if every attempt left goes") : `${projectedScore.toFixed(1)} ${name}`}
-        />
-      </div>
-    </section>
-  );
-}
-
-function Stat({ label, value, note }: { label: React.ReactNode; value: string; note?: string }) {
-  return (
-    <div className="border-r border-border px-4 py-3 last:border-r-0">
-      <div className="text-[10px] tracking-[0.16em] text-muted-2">{label}</div>
-      <div className="mt-0.5 text-[20px] font-semibold">{value}</div>
-      {note && <div className="text-[11px] text-muted-2">{note}</div>}
-    </div>
-  );
-}
-
-function AttemptBoard({
-  athlete,
-  meet,
-  current,
-}: {
-  athlete: AthleteData;
-  meet: MeetData;
-  current: { lift: MeetLift; number: number } | null;
-}) {
-  const [, startTransition] = useTransition();
-  const unit = athlete.unit === "LB" ? "lb" : "kg";
-  const meetTotal = total(meet.attempts);
-  const head = "px-3 py-2 text-left text-[10px] font-normal tracking-[0.16em] text-muted-2";
-
-  return (
-    <section className="rounded-xl border border-border bg-surface">
-      <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
-        <h2 className="text-[11px] tracking-[0.16em] text-muted-2">{t("ATTEMPTS")}</h2>
-        <span className="text-[11px] text-muted-2">· {t("G good, M miss on a focused result")}</span>
-        <button
-          type="button"
-          onClick={() =>
-            startTransition(() => {
-              void planFromMaxes(meet.id);
-            })
-          }
-          title={t("Fill the blank attempts from the athlete's 1RMs")}
-          className="ml-auto rounded-lg border border-border px-2.5 py-1 text-[12px] text-muted hover:border-accent hover:text-accent"
-        >
-          {t("Plan from 1RMs")}
-        </button>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[560px] border-separate border-spacing-0">
-          <thead>
-            <tr>
-              <th className={head} />
-              {[1, 2, 3].map((n) => (
-                <th key={n} className={head}>
-                  {n}
-                </th>
-              ))}
-              <th className={`${head} text-right`}>{t("BEST")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {MEET_LIFTS.map((lift) => {
-              const oneRM = maxFor(lift, athlete);
-              const made = best(meet.attempts, lift);
-              return (
-                <tr key={lift}>
-                  <td className="border-t border-border px-3 py-2 align-top">
-                    <div className="text-[13px] font-medium">{t(LIFT_LABEL[lift])}</div>
-                    <div className="text-[11px] text-muted-2">
-                      {oneRM === null ? t("no 1RM on file") : `1RM ${oneRM} ${unit}`}
-                    </div>
-                  </td>
-                  {[1, 2, 3].map((number) => (
-                    <td key={number} className="border-t border-border px-1.5 py-2">
-                      <AttemptCell
-                        meet={meet}
-                        lift={lift}
-                        number={number}
-                        oneRM={oneRM}
-                        athlete={athlete}
-                        current={current?.lift === lift && current.number === number}
-                      />
-                    </td>
-                  ))}
-                  <td className="border-t border-border px-3 py-2 text-right text-[15px] font-semibold">
-                    {made === null ? <span className="text-muted-2">—</span> : made}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {meetTotal !== null && (
-        <div className="flex flex-wrap items-center gap-3 border-t border-border px-4 py-3">
-          <div className="text-[12px] text-muted">
-            {totalLifts().map((lift) => `${t(LIFT_LABEL[lift])} ${best(meet.attempts, lift)}`).join(" · ")} {unit}
-          </div>
-          <button
-            type="button"
-            onClick={() =>
+        <div data-focus="meet-name" inert={readOnly} className="-ml-2 mt-0.5">
+          <TextInput
+            value={meet.name}
+            placeholder={t("Meet name")}
+            className="!text-[22px] font-semibold"
+            onCommit={(v) =>
+              v &&
               startTransition(() => {
-                void applyResultsAsMaxes(meet.id);
+                void updateMeet(meet.id, { name: v });
               })
             }
-            className="ml-auto rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90"
-          >
-            {t("Save results as the new 1RMs")}
-          </button>
+          />
         </div>
-      )}
-    </section>
-  );
-}
-
-function AttemptCell({
-  meet,
-  lift,
-  number,
-  oneRM,
-  athlete,
-  current,
-}: {
-  meet: MeetData;
-  lift: MeetLift;
-  number: number;
-  oneRM: number | null;
-  athlete: AthleteData;
-  current: boolean;
-}) {
-  const [, startTransition] = useTransition();
-  const attempt =
-    meet.attempts.find((a) => a.lift === lift && a.number === number) ??
-    ({ id: `${meet.id}-${lift}-${number}`, lift, number, weight: null, result: "PENDING" } satisfies AttemptData);
-  const hint = suggestion(meet.attempts, lift, number, oneRM, athlete.unit);
-  const pct = attempt.weight !== null && oneRM ? Math.round((attempt.weight / oneRM) * 100) : null;
-
-  const call = (result: AttemptResult) =>
-    startTransition(() => {
-      void updateAttempt(meet.id, lift, number, { result });
-    });
-
-  return (
-    <div
-      className={`rounded-lg border bg-surface-2 p-1 ${
-        current ? "border-accent/60 ring-2 ring-accent/30" : "border-border"
-      }`}
-    >
-      <NumberInput
-        value={attempt.weight}
-        align="left"
-        placeholder={hint === null ? "—" : String(hint)}
-        className="!text-[15px] font-medium"
-        onCommit={(v) =>
-          startTransition(() => {
-            void updateAttempt(meet.id, lift, number, { weight: v });
-          })
-        }
-      />
-      <div className="mt-1 flex items-center gap-1.5 px-1">
-        <span className={`text-[11px] ${pct !== null && pct > 100 ? "text-[color:var(--ok)]" : "text-muted-2"}`}>
-          {pct === null ? "" : `${pct}%`}
-        </span>
-        <button
-          type="button"
-          title={t("Pending → good → miss")}
-          onClick={() => call(RESULT_CYCLE[attempt.result])}
-          onKeyDown={(e) => {
-            const result = RESULT_KEYS[e.key];
-            if (!result || e.ctrlKey || e.metaKey || e.altKey) return;
-            e.preventDefault();
-            call(result);
-          }}
-          className={`ml-auto h-7 min-w-[64px] rounded border px-2 text-[11px] tracking-wider ${RESULT_STYLE[attempt.result]}`}
-        >
-          {RESULT_LABEL[attempt.result]}
-        </button>
+        <p className="mt-1 text-[12px] text-muted">
+          {facts.join(" · ")}
+          {!readOnly && (
+            <>
+              {" · "}
+              <Link href={meetHref(athlete.id, meet.id, "road")} scroll={false} className="text-muted-2 underline-offset-2 hover:text-accent hover:underline">
+                {t("Edit details")}
+              </Link>
+            </>
+          )}
+        </p>
       </div>
-    </div>
+      <div className={`flex items-baseline gap-2 ${days >= 0 && days <= 21 ? "text-accent" : "text-muted"}`}>
+        {days > 0 ? (
+          <>
+            <span className="text-[36px] font-semibold leading-none tabular-nums">{days}</span>
+            <span className="text-[13px]">{t(days === 1 ? "day out" : "days out")}</span>
+          </>
+        ) : (
+          <span className="text-[20px] font-semibold">{days === 0 ? t("Meet day") : countdown(meet.date, today)}</span>
+        )}
+      </div>
+    </header>
   );
 }
 
@@ -638,6 +474,7 @@ function NewMeetForm({
   onDone: (id: string) => void;
   onCancel: () => void;
 }) {
+  const { createMeet } = useCoachActions();
   const [pending, setPending] = useState(false);
   const [form, setForm] = useState({
     name: "",
@@ -711,6 +548,7 @@ function NewMeetForm({
 }
 
 function DeleteMeet({ meet, onDeleted }: { meet: MeetData; onDeleted: () => void }) {
+  const { deleteMeet } = useCoachActions();
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
 
@@ -748,15 +586,6 @@ function DeleteMeet({ meet, onDeleted }: { meet: MeetData; onDeleted: () => void
       >
         {t("Cancel")}
       </button>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="w-[140px]">
-      <div className="text-[10px] tracking-[0.14em] text-muted-2">{label}</div>
-      <div className="mt-0.5 rounded border border-border bg-surface-2">{children}</div>
     </div>
   );
 }

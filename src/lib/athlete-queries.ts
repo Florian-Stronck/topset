@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { formatPrescription, formatRamp, maxesOf, resolveDay } from "@/lib/intensity";
 import { bodyweightEntry } from "@/lib/bodyweight";
+import { parseRacks, rackFor, type Rack } from "@/lib/competition";
 import { prisma } from "@/lib/prisma";
 import { ymdOf } from "@/lib/dates";
 import { shortDate } from "@/lib/athlete-format";
@@ -34,15 +35,6 @@ export const getAthleteByToken = cache(async (token: string) => {
 });
 
 export type TokenAthlete = NonNullable<Awaited<ReturnType<typeof getAthleteByToken>>>;
-
-/** The athlete behind a viewer link: a read-only Tracking for a second coach. */
-export const getAthleteByViewToken = cache(async (token: string) => {
-  if (!plausibleToken(token)) return null;
-  return prisma.athlete.findUnique({
-    where: { viewToken: token, coach: { disabledAt: null } },
-    select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true, rpeTable: true },
-  });
-});
 
 /**
  * Every phase of every program, down to its days but not what is in them: enough to lay
@@ -303,6 +295,11 @@ function clipsOf(videos: Video[] | null, rowIds: Set<string>): Map<string, ClipV
   return out;
 }
 
+/** The athlete's clips on these rows, for the coach's phone; empty when the server has no bucket. */
+export async function clipsFor(athleteId: string, rowIds: string[]): Promise<Record<string, ClipView[]>> {
+  return Object.fromEntries(clipsOf(await videosOf(athleteId), new Set(rowIds)) ?? []);
+}
+
 /** Whether a row belongs to the athlete holding this token — the check before any write. */
 export async function rowForToken(token: string, rowId: string) {
   if (!plausibleToken(token)) return null;
@@ -454,4 +451,53 @@ export async function meetsFor(athleteId: string): Promise<AthleteMeet[]> {
     weightClass: m.weightClass,
     attempts: m.attempts.map((a) => ({ lift: a.lift, number: a.number, weight: a.weight, result: a.result })),
   }));
+}
+
+/** The meet the athlete app shows: where and when, the attempts if the coach shares them, and the checklist. */
+export type MeetView = {
+  id: string;
+  name: string;
+  ymd: string;
+  federation: string | null;
+  weightClass: string | null;
+  venue: string | null;
+  /** Weigh-in day, the meet's own when the coach set none. */
+  weighInDay: string;
+  weighInTime: string | null;
+  startTime: string | null;
+  session: string | null;
+  /** The brand of rack, and the athlete's heights on it. */
+  rackBrand: string | null;
+  racks: Rack;
+  /** Null unless the coach shows the attempts. */
+  attempts: { lift: "SQUAT" | "BENCH" | "DEADLIFT"; number: number; weight: number | null }[] | null;
+  tasks: { id: string; text: string; owner: "athlete" | "coach"; done: boolean }[];
+};
+
+/** The next meet the coach shows in the athlete app, today's included; null when there is none. */
+export async function nextMeetFor(athleteId: string, today: string): Promise<MeetView | null> {
+  const meet = await prisma.meet.findFirst({
+    where: { athleteId, shared: true, date: { gte: new Date(`${today}T00:00:00Z`) } },
+    orderBy: { date: "asc" },
+    include: { attempts: { orderBy: [{ lift: "asc" }, { number: "asc" }] }, athlete: { select: { racks: true } } },
+  });
+  if (!meet) return null;
+  const tasks = await prisma.meetTask.findMany({ where: { meetId: meet.id, deletedAt: null }, orderBy: [{ order: "asc" }, { createdAt: "asc" }] });
+  const ymd = ymdOf(meet.date);
+  return {
+    id: meet.id,
+    name: meet.name,
+    ymd,
+    federation: meet.federation,
+    weightClass: meet.weightClass,
+    venue: meet.venue,
+    weighInDay: meet.weighInDay ?? ymd,
+    weighInTime: meet.weighInTime,
+    startTime: meet.startTime,
+    session: meet.session,
+    rackBrand: meet.rackBrand,
+    racks: rackFor(parseRacks(meet.athlete.racks), meet.rackBrand),
+    attempts: meet.shareAttempts ? meet.attempts.map((a) => ({ lift: a.lift, number: a.number, weight: a.weight })) : null,
+    tasks: tasks.map((x) => ({ id: x.id, text: x.text, owner: x.owner === "athlete" ? "athlete" : "coach", done: x.done })),
+  };
 }

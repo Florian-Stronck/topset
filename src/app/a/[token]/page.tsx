@@ -1,11 +1,13 @@
 import { notFound } from "next/navigation";
 import { CheckinDay, type StripDay } from "@/components/athlete/CheckinDay";
 import { CheckinCard } from "@/components/athlete/CheckinCard";
+import { MeetCard, MeetMorning } from "@/components/athlete/MeetCards";
 import { Meetings } from "@/components/athlete/Meetings";
 import { SwipeDays } from "@/components/athlete/SwipeDays";
-import { checkinOn, getAthleteByToken, getAthleteCalendar, meetingsFor, recentBodyweight, sessionsInFull, type ScheduledSession, type SchedulePhase } from "@/lib/athlete-queries";
+import { checkinOn, getAthleteByToken, getAthleteCalendar, meetingsFor, nextMeetFor, recentBodyweight, sessionsInFull, type ScheduledSession, type SchedulePhase } from "@/lib/athlete-queries";
 import { longDate, shortDate, weekdayLetter, weekdayShort } from "@/lib/athlete-format";
 import { athleteToday } from "@/lib/athlete-today";
+import { bodyweightSummary, classLimit, dailyWeights } from "@/lib/bodyweight";
 import { loadSettings } from "@/lib/coach-settings";
 import { ymdOf } from "@/lib/dates";
 import { t } from "@/lib/i18n";
@@ -13,6 +15,9 @@ import { addDays, dateOfDay, daysBetween } from "@/lib/schedule";
 import { completion } from "@/lib/setlog";
 
 export const dynamic = "force-dynamic";
+
+/** How far ahead a meet shows on Today. */
+const MEET_CARD_DAYS = 84;
 
 /** Which week of a phase a date falls in, or null when it's outside the phase. */
 function weekOf(phase: SchedulePhase, ymd: string): number | null {
@@ -40,16 +45,40 @@ export default async function AthleteToday({
   const today = await athleteToday();
   const day = d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : today;
   // A day still to come shows what it will ask, to be answered on the day.
-  const [{ phases, sessions }, bodyweight, checkin, meetings] = await Promise.all([
+  const [{ phases, sessions }, bodyweight, checkin, meetings, meet] = await Promise.all([
     getAthleteCalendar(athlete),
     recentBodyweight(athlete.id),
     checkinOn(athlete.id, day),
     meetingsFor(athlete.id),
+    day === today ? nextMeetFor(athlete.id, today) : null,
   ]);
   const meetingsToday = meetings.filter((m) => m.day === day);
+  const unit = athlete.unit === "LB" ? "lb" : "kg";
+  const summary = bodyweightSummary(dailyWeights([...bodyweight].reverse()), today);
+  // The next meet the coach shows: the whole morning on weigh-in and meet day, a card before.
+  const meetCard = !meet ? null : today === meet.ymd || today === meet.weighInDay ? (
+    <MeetMorning token={token} meet={meet} today={today} unit={unit} />
+  ) : daysBetween(today, meet.ymd) <= MEET_CARD_DAYS ? (
+    <MeetCard
+      token={token}
+      meet={meet}
+      today={today}
+      weight={{ current: summary.avg7 ?? summary.latest?.weight ?? null, limit: classLimit(meet.weightClass) }}
+    />
+  ) : null;
   const base = `/a/${token}`;
   const link = (ymd: string) => (ymd === today ? base : `${base}?d=${ymd}`);
   const swipe = { prev: link(addDays(day, -1)), next: link(addDays(day, 1)) };
+
+  // On meet day the meet is the day: whatever session the plan has there gives way to it.
+  if (meet && today === meet.ymd) {
+    return (
+      <SwipeDays {...swipe}>
+        {meetCard}
+        <Meetings token={token} meetings={meetingsToday} today={today} compact />
+      </SwipeDays>
+    );
+  }
 
   const scheduled = sessions.find((s) => s.ymd === day) ?? null;
   // The phase the day belongs to: the one it is a session of, else the latest one running
@@ -62,6 +91,7 @@ export default async function AthleteToday({
   if (!phase) {
     return (
       <SwipeDays {...swipe}>
+        {meetCard}
         <Meetings token={token} meetings={meetingsToday} today={today} compact />
         <CheckinCard key={day} token={token} unit={athlete.unit} day={day} today={today} initial={checkin} bodyweight={bodyweight} />
         <div className="mt-12 rounded-2xl border border-border bg-surface px-5 py-8 text-center">
@@ -108,6 +138,7 @@ export default async function AthleteToday({
 
   return (
     <SwipeDays {...swipe}>
+      {meetCard}
       <Meetings token={token} meetings={meetingsToday} today={today} compact />
       <CheckinDay
         key={day}

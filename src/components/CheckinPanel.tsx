@@ -133,9 +133,9 @@ export function CheckinPanel({
                           <td key={q.id} className="px-3 py-1">
                             <span className="flex items-center gap-1.5">
                               {pics.map((p) => (
-                                <a key={p.id} href={`/api/photos/${p.id}`} target="_blank" rel="noreferrer" title={t("Open the photo")}>
+                                <a key={p.id} href={p.url ?? `/api/photos/${p.id}`} target="_blank" rel="noreferrer" title={t("Open the photo")}>
                                   {/* eslint-disable-next-line @next/next/no-img-element -- a local file served by the app */}
-                                  <img src={`/api/photos/${p.id}`} alt={q.label} className="size-8 rounded object-cover hover:ring-2 hover:ring-accent" />
+                                  <img src={p.url ?? `/api/photos/${p.id}`} alt={q.label} className="size-8 rounded object-cover hover:ring-2 hover:ring-accent" />
                                 </a>
                               ))}
                               {a && <span className="max-w-[160px] truncate">{formatAnswer(q, a.value, yesNo)}</span>}

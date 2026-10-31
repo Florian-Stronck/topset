@@ -1,17 +1,9 @@
 "use client";
 
+import { useCoachActions } from "@/components/CoachActions";
 import { Select } from "@/components/Select";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import {
-  answerAthleteMeeting,
-  cancelCoachMeeting,
-  deleteCoachMeeting,
-  markMovesSeen,
-  proposeMeeting,
-  rescheduleMeeting,
-  undoMove,
-} from "@/app/tracking/actions";
 import { formatDate, weekdayOf } from "@/lib/dates";
 import { t, weekdayShort } from "@/lib/i18n";
 import {
@@ -53,6 +45,7 @@ export function ScheduleView({
   /** Every training day, on the day it is done. */
   calendar: CalendarSession[];
 }) {
+  const { answerAthleteMeeting, cancelCoachMeeting, deleteCoachMeeting, markMovesSeen, proposeMeeting, rescheduleMeeting, undoMove } = useCoachActions();
   const router = useRouter();
   const [fresh] = useState(() => new Set(moves.filter((m) => m.seenAt === null).map((m) => m.id)));
   const [editing, setEditing] = useState<MeetingData | "new" | null>(null);
@@ -62,7 +55,7 @@ export function ScheduleView({
 
   useEffect(() => {
     if (fresh.size > 0) void markMovesSeen(athlete.id, [...fresh]).then(() => router.refresh());
-  }, [athlete.id, fresh, router]);
+  }, [athlete.id, fresh, router, markMovesSeen]);
 
   function run(action: () => Promise<unknown>, after?: () => void) {
     setError(null);

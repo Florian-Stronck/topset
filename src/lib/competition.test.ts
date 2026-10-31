@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { currentAttempt, meetScore, projectedTotal, type AttemptData } from "@/lib/competition";
+import { currentAttempt, meetScore, parseRacks, projectedTotal, rackBrand, rackFor, ratesByNumber, thirdFor, thirdsByLift, totalOf, weightOf, type AttemptData } from "@/lib/competition";
 
 const attempt = (lift: AttemptData["lift"], number: number, weight: number | null, result: AttemptData["result"] = "PENDING"): AttemptData => ({
   id: `${lift}${number}`,
@@ -48,5 +48,56 @@ describe("meet day", () => {
   });
   test("the projected total skips misses", () => {
     assert.equal(projectedTotal(attempts), 210 + 130 + 250);
+  });
+});
+
+describe("planning a meet", () => {
+  test("thirds sit one jump either side of the plan", () => {
+    assert.equal(thirdFor("planned", 170, "KG"), 170);
+    assert.equal(thirdFor("safe", 170, "KG"), 167.5);
+    assert.equal(thirdFor("push", 170, "KG"), 172.5);
+    assert.equal(thirdFor("push", 400, "LB"), 405);
+    assert.equal(thirdFor("push", null, "KG"), null);
+  });
+  test("a total needs every totalled lift", () => {
+    const attempts = [attempt("SQUAT", 3, 170), attempt("BENCH", 3, 87.5), attempt("DEADLIFT", 3, 182.5)];
+    assert.equal(totalOf((l) => weightOf(attempts, l, 3)), 440);
+    assert.equal(totalOf((l) => weightOf(attempts, l, 2)), null);
+  });
+});
+
+describe("meet history", () => {
+  const meets = [
+    { attempts: [attempt("SQUAT", 1, 150, "GOOD"), attempt("SQUAT", 3, 165, "MISS"), attempt("DEADLIFT", 3, 175, "GOOD")] },
+    { attempts: [attempt("SQUAT", 1, 155, "GOOD"), attempt("SQUAT", 3, 170, "GOOD"), attempt("BENCH", 3, 90)] },
+  ];
+  test("pending attempts count for neither side", () => {
+    assert.deepEqual(ratesByNumber(meets), [
+      { made: 2, called: 2 },
+      { made: 0, called: 0 },
+      { made: 2, called: 3 },
+    ]);
+  });
+  test("thirds are split by lift", () => {
+    const thirds = thirdsByLift(meets);
+    assert.deepEqual(thirds.SQUAT, { made: 1, called: 2 });
+    assert.deepEqual(thirds.BENCH, { made: 0, called: 0 });
+    assert.deepEqual(thirds.DEADLIFT, { made: 1, called: 1 });
+  });
+});
+
+describe("rack heights", () => {
+  const racks = parseRacks('{"Eleiko":{"squat":"12","bench":" 8 ","safety":""},"":{"squat":"1"},"Rogue":null}');
+  test("kept per brand, blanks as none", () => {
+    assert.deepEqual(racks.Eleiko, { squat: "12", bench: "8", safety: null });
+    assert.equal("" in racks, false);
+    assert.deepEqual(parseRacks("nope"), {});
+  });
+  test("a brand finds its heights however it's capitalised", () => {
+    assert.equal(rackBrand(racks, " eleiko "), "Eleiko");
+    assert.equal(rackBrand(racks, "Werksan"), "Werksan");
+    assert.equal(rackBrand(racks, "  "), null);
+    assert.equal(rackFor(racks, "ELEIKO").squat, "12");
+    assert.deepEqual(rackFor(racks, null), { squat: null, bench: null, safety: null });
   });
 });

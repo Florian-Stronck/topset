@@ -3,14 +3,9 @@
 import { Select } from "@/components/Select";
 import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
-import {
-  addCheckinQuestion,
-  removeCheckinQuestion,
-  reorderCheckinQuestions,
-  updateCheckinQuestion,
-  type CheckinQuestionInput,
-} from "@/app/athletes/actions";
+import type { CheckinQuestionInput } from "@/app/athletes/actions";
 import { CheckinIcon, ICON_NAMES } from "@/components/CheckinIcon";
+import { useCoachActions } from "@/components/CoachActions";
 import {
   COLORS,
   colorOf,
@@ -36,10 +31,11 @@ function whenAsked(q: Pick<CheckinQuestionData, "cadence" | "days">): string {
 }
 
 /**
- * An athlete's check-in on their roster card: the questions the athlete app asks, as chips
- * to open and edit or drag into order, and a button to add one.
+ * An athlete's check-in on the Athlete app tab: the questions the athlete app asks, one row
+ * each, to open and edit or drag into order, and a button to add one.
  */
 export function CheckinQuestions({ athleteId, questions }: { athleteId: string; questions: CheckinQuestionData[] }) {
+  const { addCheckinQuestion, updateCheckinQuestion, removeCheckinQuestion, reorderCheckinQuestions, phone } = useCoachActions();
   const [editing, setEditing] = useState<CheckinQuestionData | "new" | null>(null);
   const [order, setOrder] = useState(questions);
   const [synced, setSynced] = useState(questions);
@@ -71,8 +67,9 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
   }
 
   return (
-    <div title={t("What the athlete app asks before training.")}>
-      <div className="flex flex-wrap items-center gap-1.5">
+    <div>
+      <div className="overflow-hidden rounded-lg border border-border">
+        {order.length === 0 && <p className="px-3 py-4 text-[12px] text-muted-2">{t("No questions yet: the app only shows their training.")}</p>}
         {order.map((q) => (
           <button
             key={q.id}
@@ -84,32 +81,46 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
             onDrop={() => drop(q.id)}
             onClick={() => setEditing(q)}
             onKeyDown={(e) => {
-              if (!e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+              if (!e.altKey) return;
+              const by = e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : 0;
+              if (by === 0) return;
               e.preventDefault();
-              move(q.id, e.key === "ArrowLeft" ? -1 : 1);
+              move(q.id, by);
             }}
-            title={t("Click to edit, drag or Alt+←/→ to reorder")}
-            className={`flex items-center gap-1.5 rounded-lg border border-border bg-surface-2 py-1 pl-1 pr-2 text-[12px] hover:border-muted-2 ${
+            title={t("Click to edit, drag or Alt+↑/↓ to reorder")}
+            className={`flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left text-[13px] last:border-b-0 hover:bg-surface-2 ${
               dragging === q.id ? "opacity-50" : ""
             }`}
           >
-            <span className="grid size-5 place-items-center rounded-md text-white" style={{ background: colorOf(q.color) }}>
-              <CheckinIcon name={q.icon} size={12} />
+            <svg width="10" height="14" viewBox="0 0 10 14" aria-hidden className="shrink-0 text-muted-2">
+              {[3, 7, 11].flatMap((y) => [3, 7].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r={1.2} fill="currentColor" />))}
+            </svg>
+            <span className="grid size-6 shrink-0 place-items-center rounded-md text-white" style={{ background: colorOf(q.color) }}>
+              <CheckinIcon name={q.icon} size={13} />
             </span>
-            <span className="max-w-[160px] truncate">{q.label}</span>
-            <span className="text-[10px] text-muted-2">{whenAsked(q)}</span>
-            {countsForReadiness(q) && (
-              <span title={t("Counts toward readiness")} className="text-[10px] font-semibold text-muted-2">
-                R
-              </span>
-            )}
-            {q.config.photo && (
-              <span title={t("Asks for a photo")} className="text-muted-2">
-                <CheckinIcon name="camera" size={11} />
-              </span>
-            )}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium">{q.label}</span>
+              <span className="block text-[11.5px] text-muted-2">{whenAsked(q)}</span>
+            </span>
+            <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted">
+              {isBodyweight(q) ? t("Bodyweight") : t(KIND_TILES.find((k) => k.kind === q.kind)?.label ?? q.kind)}
+            </span>
+            <span className="flex w-9 shrink-0 items-center justify-end gap-1.5 text-muted-2">
+              {q.config.photo && (
+                <span title={t("Asks for a photo")}>
+                  <CheckinIcon name="camera" size={12} />
+                </span>
+              )}
+              {countsForReadiness(q) && (
+                <span title={t("Counts toward readiness")} className="text-[10px] font-semibold">
+                  R
+                </span>
+              )}
+            </span>
           </button>
         ))}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => setEditing("new")}
@@ -117,7 +128,7 @@ export function CheckinQuestions({ athleteId, questions }: { athleteId: string; 
         >
           + {t("Add question")}
         </button>
-        <Link href={`/tracking?athlete=${athleteId}&view=wellness#checkins`} className="ml-auto text-[11px] text-muted hover:text-accent">
+        <Link href={phone ? `/a/coach/${athleteId}/body?view=wellness` : `/tracking?athlete=${athleteId}&view=wellness#checkins`} className="ml-auto text-[12px] text-muted hover:text-accent">
           {t("See answers")} →
         </Link>
       </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { saveNutrition } from "@/app/tracking/actions";
+import { useCoachActions } from "@/components/CoachActions";
 import { ChartCard, LineChart } from "@/components/charts/charts";
 import { NUTRIENT_UNIT, NUTRIENTS, type Nutrient } from "@/lib/checkins";
 import { formatDate } from "@/lib/dates";
@@ -30,7 +30,6 @@ export function NutritionPanel({
   range,
   entries: initial,
   targets = [],
-  readOnly = false,
 }: {
   athleteId: string;
   today: string;
@@ -40,8 +39,8 @@ export function NutritionPanel({
   entries: NutritionEntry[];
   /** The phases' targets. */
   targets?: TargetSpan[];
-  readOnly?: boolean;
 }) {
+  const { saveNutrition } = useCoachActions();
   const [entries, setEntries] = useState(initial);
   const [synced, setSynced] = useState(initial);
   const [day, setDay] = useState(today);
@@ -82,7 +81,6 @@ export function NutritionPanel({
     });
   }
 
-  if (readOnly && entries.length === 0) return null;
   const now = targetOn(targets, today);
   const summary = NUTRIENTS.filter((n) => avg[n] !== null).map((n) => {
     const goal = now?.[n] ?? null;
@@ -128,48 +126,46 @@ export function NutritionPanel({
         />
       )}
 
-      {!readOnly && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          type="date"
+          value={day}
+          max={today}
+          onChange={(e) => pick(e.target.value || today)}
+          className="h-8 rounded-lg border border-border bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
+        />
+        {NUTRIENTS.map((n) => (
           <input
-            type="date"
-            value={day}
-            max={today}
-            onChange={(e) => pick(e.target.value || today)}
-            className="h-8 rounded-lg border border-border bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
+            key={n}
+            id={n === "kcal" ? "nutrition-kcal" : undefined}
+            type="text"
+            inputMode="numeric"
+            value={draft[n]}
+            placeholder={n === "kcal" ? "kcal" : `${t(LABEL[n])} g`}
+            aria-label={`${t(LABEL[n])} (${NUTRIENT_UNIT[n]})`}
+            onChange={(e) => setDraft((was) => ({ ...was, [n]: e.target.value }))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save(day, draft);
+            }}
+            className="h-8 w-24 rounded-lg border border-border bg-surface-2 px-2 text-center text-[12px] tabular-nums outline-none placeholder:text-muted-2 focus:border-accent"
           />
-          {NUTRIENTS.map((n) => (
-            <input
-              key={n}
-              id={n === "kcal" ? "nutrition-kcal" : undefined}
-              type="text"
-              inputMode="numeric"
-              value={draft[n]}
-              placeholder={n === "kcal" ? "kcal" : `${t(LABEL[n])} g`}
-              aria-label={`${t(LABEL[n])} (${NUTRIENT_UNIT[n]})`}
-              onChange={(e) => setDraft((was) => ({ ...was, [n]: e.target.value }))}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") save(day, draft);
-              }}
-              className="h-8 w-24 rounded-lg border border-border bg-surface-2 px-2 text-center text-[12px] tabular-nums outline-none placeholder:text-muted-2 focus:border-accent"
-            />
-          ))}
-          <button
-            type="button"
-            onClick={() => save(day, draft)}
-            disabled={pending || NUTRIENTS.every((n) => draft[n].trim() === "")}
-            className="h-8 rounded-lg border border-border px-3 text-[12px] text-muted hover:border-accent hover:text-accent disabled:opacity-40"
-          >
-            {byDay.has(day) ? t("Save day") : t("Add day")}
-          </button>
-          {error && <span className="text-[11px] text-miss">{error}</span>}
-        </div>
-      )}
+        ))}
+        <button
+          type="button"
+          onClick={() => save(day, draft)}
+          disabled={pending || NUTRIENTS.every((n) => draft[n].trim() === "")}
+          className="h-8 rounded-lg border border-border px-3 text-[12px] text-muted hover:border-accent hover:text-accent disabled:opacity-40"
+        >
+          {byDay.has(day) ? t("Save day") : t("Add day")}
+        </button>
+        {error && <span className="text-[11px] text-miss">{error}</span>}
+      </div>
 
       {entries.length > 0 && (
         <ul className="mt-3 max-h-[168px] divide-y divide-border/60 overflow-auto border-t border-border text-[12px]">
           {[...entries].reverse().slice(0, 30).map((e) => (
             <li key={e.id} className="group flex items-center gap-3 py-1.5">
-              <button type="button" disabled={readOnly} onClick={() => pick(e.day)} className="w-24 shrink-0 text-left text-muted hover:text-foreground">
+              <button type="button" onClick={() => pick(e.day)} className="w-24 shrink-0 text-left text-muted hover:text-foreground">
                 {formatDate(e.day, true)}
               </button>
               <HitDot hit={hitOf(e)} />
@@ -179,18 +175,16 @@ export function NutritionPanel({
                 </span>
               ))}
               <span className="flex-1 truncate text-[11px] text-muted-2">
-                {e.source === "coach" ? (readOnly ? t("added by the coach") : t("added by you")) : t("from the app")}
+                {e.source === "coach" ? t("added by you") : t("from the app")}
               </span>
-              {!readOnly && (
-                <button
-                  type="button"
-                  onClick={() => save(e.day, {})}
-                  title={t("Delete this day")}
-                  className="rounded px-1.5 text-muted-2 opacity-40 hover:text-miss focus:opacity-100 group-hover:opacity-100"
-                >
-                  ×
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => save(e.day, {})}
+                title={t("Delete this day")}
+                className="rounded px-1.5 text-muted-2 opacity-40 hover:text-miss focus:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
+              >
+                ×
+              </button>
             </li>
           ))}
         </ul>

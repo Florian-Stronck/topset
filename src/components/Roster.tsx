@@ -8,9 +8,9 @@ import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState, useTransition, type ReactNode } from "react";
 import { createAthlete, deleteAthlete, updateAthleteProfile } from "@/app/athletes/actions";
 import { manageShare } from "@/app/settings/cloud-actions";
-import { EnterShareCode, ROLE_LABEL, ShareButton } from "@/components/AthleteShares";
+import { EnterShareCode } from "@/components/AthleteShares";
+import { ROLE_LABEL } from "@/lib/roles";
 import { canEdit, type AthleteShareInfo } from "@/lib/share";
-import { AthleteLinkButton } from "@/components/AthleteLink";
 import { formKeys, NumberInput, TextInput } from "@/components/cells";
 import { parseRpeTable, parseVariationPcts } from "@/lib/intensity";
 import { RpeChartEditor } from "@/components/RpeChartEditor";
@@ -22,14 +22,19 @@ import { fresh, useCommands, type Command } from "@/lib/commands";
 import type { AthleteData } from "@/lib/types";
 import { plural, t } from "@/lib/i18n";
 import { tutorialDid } from "@/components/Tutorial";
-import { CheckinQuestions } from "@/components/CheckinQuestions";
 import type { CheckinQuestionData } from "@/lib/checkins";
+import type { HubData } from "@/app/athletes/hub";
+import { AthleteApp } from "@/components/athlete-hub/AthleteApp";
+import { HubOverview } from "@/components/athlete-hub/HubOverview";
+import { Panel } from "@/components/athlete-hub/Panel";
+import { athleteHref, type AthleteTab } from "@/lib/athlete-tabs";
+import { meetScore, scoreName, type Rack } from "@/lib/competition";
+import { setRack } from "@/app/competition/actions";
 
 export type RosterEntry = AthleteData & {
   /** Whether a check-in link is out. The link itself is only fetched when asked for. */
   hasLink: boolean;
   /** Whether a read-only Tracking link for a second coach is out. */
-  hasViewLink: boolean;
   /** How recently they checked in, by the Overview's rule. */
   checkin: CheckinStatus;
   /** Whose athlete this is, and what this coach may do with them. */
@@ -40,10 +45,13 @@ export type RosterEntry = AthleteData & {
   questions: CheckinQuestionData[];
   /** The coach's own notes, never shown to the athlete. */
   notes: string | null;
+  /** Rack heights per brand of rack, set from their meets. */
+  racks: Record<string, Rack>;
   nextMeet: { name: string; date: string; days: number; weightClass: string | null } | null;
   /** Injuries still open today, worst first. */
   injuries: { label: string; severity: number; since: string }[];
-  /** Whether every pair of overlapping programs has the active one in it. */
+  /** The 7-day average, else the last weigh-in of the last three weeks. */
+  bodyweight: { weight: number; avg: boolean } | null;
   /** Oldest first. */
   programs: {
     id: string;
@@ -67,12 +75,24 @@ const MAXES = [
   { key: "dead1RM", label: "Deadlift" },
 ] as const;
 
+const TABS: { id: AthleteTab; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "profile", label: "Profile" },
+  { id: "app", label: "Athlete app" },
+];
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
 export function Roster({
   athletes,
   signedIn = false,
   picked,
+  tab = "overview",
+  hub = null,
+  today,
   openNew = false,
   openLink,
+  openPhone,
   openShare = false,
   openCode = false,
   nonce,
@@ -82,9 +102,15 @@ export function Roster({
   signedIn?: boolean;
   /** The athlete shown, picked in the sidebar; the first one when none is. */
   picked?: string;
+  tab?: AthleteTab;
+  /** The Overview tab's numbers, worked out on the server for the athlete shown. */
+  hub?: HubData | null;
+  today: string;
   openNew?: boolean;
   /** An athlete whose check-in link opens straight away — the palette's "Athlete check-in link…". */
   openLink?: string;
+  /** An athlete whose phone link opens straight away — the palette's "Open on your phone…". */
+  openPhone?: string;
   /** The picked athlete's share panel opens straight away — the palette's "Share athlete…". */
   openShare?: boolean;
   /** The share-code box opens straight away — the palette's "Enter share code…". */
@@ -95,9 +121,9 @@ export function Roster({
   const router = useRouter();
   const selected = athletes.find((a) => a.id === picked) ?? athletes[0];
 
-  /** Shows the athlete, then puts the caret in one of their boxes once it's drawn. */
+  /** Shows the athlete's profile, then puts the caret in one of their boxes once it's drawn. */
   const focusIn = useCallback((id: string, selector: string) => {
-    router.push(`/athletes?athlete=${id}`);
+    router.push(athleteHref(id, "profile"));
     // Drawn once the server answers; a few tries cover a slow one.
     let tries = 0;
     const attempt = () => {
@@ -156,6 +182,14 @@ export function Roster({
             kind: "athlete",
             run: () => router.push(fresh(`/athletes?link=${a.id}`)),
           },
+          {
+            id: `roster-phone-${a.id}`,
+            group: "Athlete",
+            title: t("Open {name} on your phone", { name: a.name }),
+            keywords: "qr phone mobile coach review chat",
+            kind: "athlete",
+            run: () => router.push(fresh(`/athletes?phone=${a.id}`)),
+          },
           ...(latest?.firstPhaseId
             ? [
                 {
@@ -178,62 +212,166 @@ export function Roster({
   );
   useCommands("roster", commands);
 
-  return (
-    <div className="mx-auto w-full max-w-[1400px] px-6 py-7">
-      <div className="flex items-end justify-between gap-4">
-        <div>
+  if (!selected) {
+    return (
+      <div className="mx-auto w-full max-w-[1200px] px-6 py-7">
+        <div className="flex items-end justify-between gap-4">
           <h1 className="text-[22px] font-semibold tracking-tight">{t("Athletes")}</h1>
-          <p className="mt-1 text-[12px] text-muted">
-            {t("{n} on the roster", { n: athletes.length })} ·{" "}
-            {plural(athletes.reduce((n, a) => n + a.programs.length, 0), "{n} program", "{n} programs")}
-          </p>
+          <div className="flex items-center gap-2">
+            {signedIn && <EnterShareCode key={`code-${nonce ?? ""}`} initiallyOpen={openCode} />}
+            <NewAthleteButton key={`new-${nonce ?? ""}`} initiallyOpen={openNew} />
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {signedIn && <EnterShareCode key={`code-${nonce ?? ""}`} initiallyOpen={openCode} />}
-          <NewAthleteButton key={`new-${nonce ?? ""}`} initiallyOpen={openNew} />
-        </div>
-      </div>
-
-      {athletes.length === 0 ? (
         <div className="mt-6 rounded-xl border border-dashed border-border px-6 py-12 text-center text-[13px] text-muted">
           {t("No athletes yet. Add your first one to start programming.")}
         </div>
-      ) : (
-        <div className="mt-6">
-          <AthleteCard
-            key={selected.id === openLink || openShare ? `${selected.id}-${nonce ?? ""}` : selected.id}
-            athlete={selected}
-            signedIn={signedIn}
-            linkOpen={selected.id === openLink}
-            shareOpen={openShare}
-          />
-        </div>
-      )}
+      </div>
+    );
+  }
+
+  // Asked for again from the palette: the nonce remounts the tab, so a closed panel reopens.
+  const linkOpen = selected.id === openLink;
+  const phoneOpen = selected.id === openPhone;
+  const again = linkOpen || phoneOpen || openShare ? `${selected.id}-${nonce ?? ""}` : selected.id;
+
+  return (
+    <div className="mx-auto w-full max-w-[1200px] px-6 py-6">
+      <AthleteHeader key={selected.id} athlete={selected} signedIn={signedIn}>
+        {signedIn && <EnterShareCode key={`code-${nonce ?? ""}`} initiallyOpen={openCode} />}
+        {/* The sidebar has the add button; the palette's "New athlete…" opens it here. */}
+        {openNew && <NewAthleteButton key={`new-${nonce ?? ""}`} initiallyOpen />}
+      </AthleteHeader>
+      <HubTabs athleteId={selected.id} tab={tab} />
+      <div className="mt-5">
+        {tab === "overview" ? (
+          hub?.athleteId === selected.id && <HubOverview key={selected.id} data={hub} sex={selected.sex ?? null} readOnly={!canEdit(selected.share)} />
+        ) : tab === "app" ? (
+          <AthleteApp key={again} athlete={selected} signedIn={signedIn} today={today} linkOpen={linkOpen} shareOpen={openShare} phoneOpen={phoneOpen} />
+        ) : (
+          <AthleteCard key={selected.id} athlete={selected} />
+        )}
+      </div>
     </div>
   );
 }
 
-/** One labelled band of the athlete panel. */
-function Band({ label, hint, aside, children }: { label: string; hint?: string; aside?: ReactNode; children: ReactNode }) {
+/** The hub's tabs, each a page of its own and a palette command. */
+function HubTabs({ athleteId, tab }: { athleteId: string; tab: AthleteTab }) {
+  const router = useRouter();
+  const commands = useMemo<Command[]>(
+    () =>
+      TABS.map((v) => ({
+        id: `athlete-tab-${v.id}`,
+        group: "Athlete",
+        title: t(v.label),
+        keywords: "athlete tab overview profile app check-in questions link",
+        kind: "place" as const,
+        run: () => router.push(athleteHref(athleteId, v.id)),
+      })),
+    [athleteId, router],
+  );
+  useCommands("athlete-tabs", commands);
+
   return (
-    <section className="grid gap-2 border-t border-border py-4 sm:grid-cols-[84px_minmax(0,1fr)]">
-      <div className="pt-1 text-[10px] tracking-[0.14em] text-muted-2" title={hint}>
-        {label}
-        {hint && <span className="ml-1 cursor-help">ⓘ</span>}
-        {aside && <div className="mt-2">{aside}</div>}
-      </div>
-      <div className="min-w-0">{children}</div>
-    </section>
+    <nav role="tablist" aria-label={t("Athlete")} className="mt-5 flex gap-1 border-b border-border">
+      {TABS.map((v) => {
+        const on = v.id === tab;
+        return (
+          <Link
+            key={v.id}
+            role="tab"
+            aria-selected={on}
+            href={athleteHref(athleteId, v.id)}
+            scroll={false}
+            className={`-mb-px border-b-2 px-3 pb-2 pt-1 text-[13px] ${
+              on ? "border-accent font-medium text-foreground" : "border-transparent text-muted hover:text-foreground"
+            }`}
+          >
+            {t(v.label)}
+          </Link>
+        );
+      })}
+    </nav>
   );
 }
 
-/** A link's state beside its button: whether one has been handed out. */
-function LinkState({ sent }: { sent: boolean }) {
+/** Who the athlete is, on every tab: their name to rename, how they're doing at a glance, and where to go next. */
+function AthleteHeader({ athlete, signedIn, children }: { athlete: RosterEntry; signedIn: boolean; children?: ReactNode }) {
+  const [, startTransition] = useTransition();
+  const [leaving, startLeaving] = useTransition();
+  const readOnly = !canEdit(athlete.share);
+  const training = athlete.programs.find((p) => p.status === "active");
+  const chip = "rounded-full bg-surface-2 px-2.5 py-0.5";
+
   return (
-    <span className="flex items-center gap-1 text-[11px] text-muted-2">
-      <span aria-hidden className={`size-1.5 rounded-full ${sent ? "bg-ok" : "bg-muted-2"}`} />
-      {sent ? t("sent") : t("not sent yet")}
-    </span>
+    <header data-athlete={athlete.id} className="flex flex-wrap items-center gap-4">
+      <span className="grid size-12 shrink-0 place-items-center rounded-full bg-accent-soft text-[19px] font-semibold text-accent">
+        {athlete.name.slice(0, 1).toUpperCase()}
+      </span>
+      <div className="min-w-0 flex-1 basis-[260px]">
+        <h1 className="sr-only">{athlete.name}</h1>
+        <fieldset
+          disabled={readOnly}
+          className="-ml-2 max-w-[420px] rounded-lg border border-transparent hover:border-border focus-within:border-accent"
+          title={readOnly ? undefined : t("Click to rename")}
+        >
+          <TextInput
+            value={athlete.name}
+            placeholder={t("Athlete name")}
+            onCommit={(v) => v && startTransition(() => void updateAthleteProfile(athlete.id, { name: v }))}
+            className="!text-[22px] font-semibold tracking-tight"
+          />
+        </fieldset>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[12px] text-muted">
+          <span className={`flex items-center gap-1.5 ${chip}`}>
+            <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${TONE[athlete.checkin.tone]}`} />
+            {athlete.checkin.label}
+          </span>
+          {athlete.sex && (
+            <span className={chip}>
+              {athlete.sex === "M" ? t("Men") : t("Women")}
+              {athlete.nextMeet?.weightClass ? ` · ${athlete.nextMeet.weightClass}` : ""}
+            </span>
+          )}
+          {training && <span className={chip}>{training.name}</span>}
+          {athlete.share.role !== "own" ? (
+            <span className={chip}>
+              {t("Shared by {name}", { name: athlete.share.owner })} · {t(ROLE_LABEL[athlete.share.role])}
+              {signedIn && (
+                <button
+                  type="button"
+                  disabled={leaving}
+                  onClick={() => {
+                    if (!window.confirm(t("Take {name} off your roster? {owner} can share them with you again.", { name: athlete.name, owner: athlete.share.owner }))) return;
+                    startLeaving(async () => {
+                      const out = await manageShare({ action: "remove", athleteId: athlete.id, coachId: athlete.share.me });
+                      if (out.error) window.alert(out.error);
+                    });
+                  }}
+                  className="ml-1.5 text-muted-2 underline-offset-2 hover:text-red-400 hover:underline"
+                >
+                  {t("Leave")}
+                </button>
+              )}
+            </span>
+          ) : (
+            athlete.sharedWith.length > 0 && <span className={chip}>{t("Shared with {names}", { names: athlete.sharedWith.map((s) => s.name).join(", ") })}</span>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {children}
+        <Link
+          href={`/tracking?athlete=${athlete.id}`}
+          className="rounded-lg border border-border px-3 py-1.5 text-[12px] text-muted hover:border-accent hover:text-accent"
+        >
+          {t("Tracking")}
+        </Link>
+        <Link href={`/programming?athlete=${athlete.id}`} className="rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90">
+          {t("Open programming")}
+        </Link>
+      </div>
+    </header>
   );
 }
 
@@ -244,33 +382,28 @@ function NotesField({ value, onCommit }: { value: string | null; onCommit: (v: s
     <textarea
       data-notes
       value={draft}
-      rows={3}
+      rows={4}
+      aria-label={t("Notes")}
       placeholder={t("Goals, history, anything to remember. Only you see this.")}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => draft !== (value ?? "") && onCommit(draft)}
-      className="w-full resize-y rounded-lg border border-border bg-surface-2 px-2.5 py-2 text-[12px] leading-relaxed outline-none placeholder:text-muted-2 hover:border-muted-2 focus:border-accent"
+      className="w-full resize-y rounded-lg border border-border bg-surface-2 px-3 py-2 text-[13px] leading-relaxed outline-none placeholder:text-muted-2 hover:border-muted-2 focus:border-accent"
     />
   );
 }
 
-function AthleteCard({
-  athlete,
-  signedIn,
-  linkOpen,
-  shareOpen,
-}: {
-  athlete: RosterEntry;
-  signedIn: boolean;
-  linkOpen: boolean;
-  shareOpen: boolean;
-}) {
+/** The Profile tab: the numbers at a glance, then everything the plan is worked out from, panel by panel. */
+function AthleteCard({ athlete }: { athlete: RosterEntry }) {
   const [, startTransition] = useTransition();
-  const [leaving, startLeaving] = useTransition();
   const own = athlete.share.role === "own";
   // Shared to view or review: everything shows, nothing changes.
   const readOnly = !canEdit(athlete.share);
   const unit = athlete.unit === "LB" ? "lb" : "kg";
+  const complete = MAXES.every((m) => athlete[m.key] !== null);
   const total = MAXES.reduce((sum, m) => sum + (athlete[m.key] ?? 0), 0);
+  const weight = athlete.bodyweight?.weight ?? null;
+  const score = complete ? meetScore(total, weight, athlete.sex, athlete.unit) : null;
+  const weeks = athlete.programs.reduce((n, p) => n + p.weeks, 0);
 
   function patch(data: Parameters<typeof updateAthleteProfile>[1]) {
     startTransition(() => {
@@ -278,225 +411,217 @@ function AthleteCard({
     });
   }
 
-  // Looks like text until pointed at: then it shows it can be typed in.
-  const editable = "rounded-lg border border-transparent hover:border-border focus-within:border-accent";
+  const stats = [
+    { label: t("TOTAL"), value: total > 0 ? String(round1(total)) : "—", unit: total > 0 ? unit : "", sub: complete ? t("from the maxes on file") : t("needs all three maxes") },
+    {
+      label: scoreName(),
+      value: score === null ? "—" : String(round1(score)),
+      unit: "",
+      sub:
+        score !== null
+          ? t("at {w} {u}", { w: weight!, u: unit })
+          : !athlete.sex
+            ? t("needs the division")
+            : weight === null
+              ? t("needs a weigh-in")
+              : t("needs all three maxes"),
+    },
+    {
+      label: t("BODYWEIGHT"),
+      value: weight === null ? "—" : String(weight),
+      unit: weight === null ? "" : unit,
+      sub: weight === null ? t("no weigh-in in three weeks") : athlete.bodyweight!.avg ? t("7-day average") : t("last weigh-in"),
+    },
+    {
+      label: t("NEXT MEET"),
+      value: athlete.nextMeet ? String(athlete.nextMeet.days) : "—",
+      unit: athlete.nextMeet ? t("days") : "",
+      sub: athlete.nextMeet?.name ?? t("None planned"),
+    },
+  ];
 
   return (
-    <div data-athlete={athlete.id} className="rounded-xl border border-border bg-surface px-5 pt-5">
-      <div className="flex flex-wrap items-start gap-3 pb-4">
-        <span className="grid size-11 shrink-0 place-items-center rounded-full bg-accent-soft text-[16px] font-semibold text-accent">
-          {athlete.name.slice(0, 1).toUpperCase()}
-        </span>
-        <div className="min-w-0 flex-1">
-          <fieldset disabled={readOnly} className={`-ml-2 max-w-[360px] ${editable}`} title={readOnly ? undefined : t("Click to rename")}>
-            <TextInput
-              value={athlete.name}
-              placeholder={t("Athlete name")}
-              onCommit={(v) => v && patch({ name: v })}
-              className="!text-[18px] font-semibold"
-            />
-          </fieldset>
-          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 pl-0.5 text-[11px] text-muted-2">
-            <span aria-hidden className={`size-2 shrink-0 rounded-full ${TONE[athlete.checkin.tone]}`} />
-            {athlete.checkin.label}
-            {athlete.share.role !== "own" && (
-              <>
-                {` · ${t("Shared by {name}", { name: athlete.share.owner })} · ${t(ROLE_LABEL[athlete.share.role])}`}
-                {signedIn && (
-                  <button
-                    type="button"
-                    disabled={leaving}
-                    onClick={() => {
-                      if (!window.confirm(t("Take {name} off your roster? {owner} can share them with you again.", { name: athlete.name, owner: athlete.share.owner }))) return;
-                      startLeaving(async () => {
-                        const out = await manageShare({ action: "remove", athleteId: athlete.id, coachId: athlete.share.me });
-                        if (out.error) window.alert(out.error);
-                      });
-                    }}
-                    className="ml-1 text-muted-2 underline-offset-2 hover:text-red-400 hover:underline"
-                  >
-                    {t("Leave")}
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-        <Link
-          href={`/programming?athlete=${athlete.id}`}
-          className="rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90"
-        >
-          {t("Open programming")}
-        </Link>
-      </div>
-
+    <div data-athlete={athlete.id} className="flex flex-col gap-4">
       {readOnly && (
-        <p className="mb-3 rounded-lg border border-border bg-surface-2 px-3 py-2 text-[12px] text-muted">
+        <p className="rounded-lg border border-border bg-surface-2 px-3 py-2 text-[12px] text-muted">
           {athlete.share.role === "review"
             ? t("{owner} shared {name} with you to review: you can mark sessions reviewed and write to them, not change the plan.", { owner: athlete.share.owner, name: athlete.name })
             : t("{owner} shared {name} with you to view: you see everything but can't change anything.", { owner: athlete.share.owner, name: athlete.name })}
         </p>
       )}
 
+      <section aria-label={t("At a glance")} className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-px overflow-hidden rounded-xl border border-border bg-border">
+        {stats.map((s) => (
+          <div key={s.label} className="flex flex-col gap-1 bg-surface px-4 py-3.5">
+            <span className="text-[10.5px] tracking-[0.14em] text-muted-2">{s.label}</span>
+            <span className="text-[22px] font-semibold tabular-nums tracking-tight">
+              {s.value}
+              {s.unit && <span className="ml-1 text-[13px] font-medium text-muted">{s.unit}</span>}
+            </span>
+            <span className="truncate text-[12px] text-muted">{s.sub}</span>
+          </div>
+        ))}
+      </section>
+
       <fieldset disabled={readOnly} className="contents">
-      <div className="grid lg:grid-cols-2">
-        <div className="lg:border-r lg:border-border lg:pr-6">
-          <Band
-            label={t("MAXES")}
-            hint={t("These are the current bests; each program keeps the maxes it was written against.")}
-            aside={<UnitToggle unit={athlete.unit} onChange={(u) => patch({ unit: u })} />}
-          >
-            <div data-maxes className="flex flex-wrap items-center gap-2">
-              {MAXES.map((m) => (
-                <div
-                  key={m.key}
-                  className="w-[76px] cursor-text rounded-lg border border-border bg-surface-2 px-2 py-1.5 hover:border-muted-2 focus-within:border-accent"
-                >
-                  <div className="text-[10px] tracking-[0.14em] text-muted-2">{t(m.label).toUpperCase()}</div>
-                  <NumberInput
-                    value={athlete[m.key]}
-                    align="left"
-                    onCommit={(v) => patch({ [m.key]: v })}
-                    className="!px-0 !text-[14px]"
-                  />
-                </div>
-              ))}
-              <div className="px-2 py-1.5">
-                <div className="text-[10px] tracking-[0.14em] text-muted-2">{t("TOTAL")}</div>
-                <div className="py-1 text-[14px] font-medium text-foreground">
-                  {total > 0 ? `${Math.round(total * 10) / 10} ${unit}` : "—"}
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+          <div className="flex min-w-0 flex-col gap-4">
+            <Panel
+              title={t("Maxes")}
+              hint={t("These are the current bests; each program keeps the maxes it was written against.")}
+              aside={<UnitToggle unit={athlete.unit} onChange={(u) => patch({ unit: u })} />}
+            >
+              <div data-maxes className="overflow-hidden rounded-lg border border-border">
+                {MAXES.map((m) => (
+                  <label key={m.key} className="flex items-center gap-3 border-b border-border px-3 py-2">
+                    <span className="w-20 text-[13px] font-medium">{t(m.label)}</span>
+                    <span className="w-[92px] cursor-text rounded-lg border border-border bg-surface-2 px-2 py-1 hover:border-muted-2 focus-within:border-accent">
+                      <NumberInput value={athlete[m.key]} align="right" onCommit={(v) => patch({ [m.key]: v })} className="!px-0 !text-[16px] font-semibold" />
+                    </span>
+                    <span className="text-[12px] text-muted-2">{unit}</span>
+                  </label>
+                ))}
+                <div className="flex flex-wrap items-center gap-3 bg-surface-2 px-3 py-2 text-[13px]">
+                  <span className="w-20 text-muted">{t("Total")}</span>
+                  <span className="font-semibold tabular-nums">{total > 0 ? `${round1(total)} ${unit}` : "—"}</span>
+                  {score !== null && (
+                    <span className="ml-auto text-[12px] text-muted">
+                      {scoreName()} {round1(score)}
+                    </span>
+                  )}
                 </div>
               </div>
-            </div>
-          </Band>
+            </Panel>
 
-          <Band label={t("VARIATIONS")}>
-            <VariationDropoffs athlete={athlete} patch={patch} />
-          </Band>
+            <Panel title={t("Variation drop-off")} hint={t("How far off the competition max a variation is programmed. Blank uses your default.")}>
+              <VariationDropoffs athlete={athlete} patch={patch} />
+            </Panel>
 
-          <Band label={t("DIVISION")} hint={t("Division, for DOTS and GL")}>
-            <DivisionToggle sex={athlete.sex ?? null} onChange={(sex) => patch({ sex })} />
-          </Band>
+            <Panel title={t("RPE chart")} hint={t("An RPE chart of their own: every RPE weight and estimate for them comes off it.")}>
+              <AthleteRpeChart athlete={athlete} patch={patch} />
+            </Panel>
+          </div>
 
-          <Band label={t("NEXT MEET")}>
-            {athlete.nextMeet ? (
-              <Link href={`/competition?athlete=${athlete.id}`} className="group block text-[12px]">
-                <span className="font-medium group-hover:text-accent">{athlete.nextMeet.name}</span>
-                <span className="text-muted-2">
-                  {" · "}
-                  {athlete.nextMeet.date} · {t("in {n} days", { n: athlete.nextMeet.days })}
-                  {athlete.nextMeet.weightClass ? ` · ${athlete.nextMeet.weightClass}` : ""}
+          <div className="flex min-w-0 flex-col gap-4">
+            <Panel title={t("Competition")}>
+              <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 gap-y-2.5 text-[13px]">
+                <span className="text-muted" title={t("Division, for DOTS and GL")}>
+                  {t("Division")}
                 </span>
-              </Link>
-            ) : (
-              <Link href={`/competition?athlete=${athlete.id}`} className="text-[12px] text-muted-2 hover:text-accent">
-                {t("None planned")} · {t("Add one")} →
-              </Link>
-            )}
-          </Band>
-
-          <Band label={t("INJURIES")}>
-            {athlete.injuries.length === 0 ? (
-              <span className="text-[12px] text-muted-2">{t("None open")}</span>
-            ) : (
-              <Link href={`/tracking?athlete=${athlete.id}&view=wellness`} className="flex flex-col gap-1 text-[12px]">
-                {athlete.injuries.map((i, n) => (
-                  <span key={n} className="flex items-center gap-1.5">
-                    <span aria-hidden className={`size-1.5 rounded-full ${i.severity >= 4 ? "bg-miss" : "bg-warn"}`} />
-                    <span className="font-medium">{i.label}</span>
+                <DivisionToggle sex={athlete.sex ?? null} onChange={(sex) => patch({ sex })} />
+                <span className="text-muted">{t("Next meet")}</span>
+                {athlete.nextMeet ? (
+                  <Link href={`/competition?athlete=${athlete.id}`} className="group min-w-0">
+                    <span className="font-medium group-hover:text-accent">{athlete.nextMeet.name}</span>
                     <span className="text-muted-2">
-                      {i.severity}/5 · {t("since {date}", { date: i.since })}
+                      {" · "}
+                      {athlete.nextMeet.date} · {t("in {n} days", { n: athlete.nextMeet.days })}
+                      {athlete.nextMeet.weightClass ? ` · ${athlete.nextMeet.weightClass}` : ""}
                     </span>
-                  </span>
-                ))}
-              </Link>
-            )}
-          </Band>
-        </div>
-
-        <div className="lg:pl-6">
-          <Band label={t("CHECK-IN")}>
-            <CheckinQuestions athleteId={athlete.id} questions={athlete.questions} />
-          </Band>
-
-          <Band label={t("PROGRAMS")}>
-            {athlete.programs.length === 0 ? (
-              <span className="text-[12px] text-muted-2">{t("No program yet")}</span>
-            ) : (
-              <div className="flex flex-col gap-1.5">
-                {[...athlete.programs].reverse().map((p) => (
-                  <div key={p.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px]">
-                    <Link href={`/programming?athlete=${athlete.id}&program=${p.id}`} className="font-medium hover:text-accent">
-                      {p.name}
-                    </Link>
-                    {p.status && (
-                      <ProgramStatusBadge
-                        status={p.status}
-                        trained={p.trained}
-                        onSwitch={
-                          p.trained === null
-                            ? undefined
-                            : () => {
-                                // A paused one takes over; the trained one hands over to another it overlaps.
-                                const next = p.trained ? athlete.programs.find((x) => x.overlapping && x.id !== p.id)?.id : p.id;
-                                if (next) patch({ activeProgramId: next });
-                              }
-                        }
-                      />
-                    )}
-                    <span className="text-muted-2">
-                      {p.dates ? `${p.dates} · ` : ""}
-                      {plural(p.phases, "{n} phase", "{n} phases")} · {plural(p.weeks, "{n} week", "{n} weeks")}
-                    </span>
-                    {p.firstPhaseId && (
-                      <a
-                        href={`/api/export?blockId=${p.firstPhaseId}&format=xlsx`}
-                        className="ml-auto text-[11px] text-muted hover:text-foreground"
-                      >
-                        {t("Export")}
-                      </a>
-                    )}
-                  </div>
-                ))}
+                  </Link>
+                ) : (
+                  <Link href={`/competition?athlete=${athlete.id}`} className="text-muted-2 hover:text-accent">
+                    {t("None planned")} · {t("Add one")} →
+                  </Link>
+                )}
               </div>
-            )}
-          </Band>
+              <RackHeights athleteId={athlete.id} racks={athlete.racks} />
+            </Panel>
 
-          <Band label={t("SHARING")}>
-            <div className="flex flex-col gap-2">
-              <div data-tour="athlete-link" className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <AthleteLinkButton athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasLink} initiallyOpen={linkOpen} />
-                  <LinkState sent={athlete.hasLink} />
-                </div>
-                <div className="flex items-center gap-2">
-                  <AthleteLinkButton kind="viewer" athleteId={athlete.id} name={athlete.name} hasLink={athlete.hasViewLink} />
-                  <LinkState sent={athlete.hasViewLink} />
-                </div>
-              </div>
-              {own && signedIn && (
-                <div className="flex items-center gap-2">
-                  <ShareButton athleteId={athlete.id} name={athlete.name} sharedWith={athlete.sharedWith} initiallyOpen={shareOpen} />
+            <Panel
+              title={t("Health")}
+              aside={
+                <Link href={`/tracking?athlete=${athlete.id}&view=wellness`} className="text-[12px] text-muted hover:text-accent">
+                  {t("Wellness")} →
+                </Link>
+              }
+            >
+              {athlete.injuries.length === 0 ? (
+                <span className="text-[12px] text-muted-2">{t("None open")}</span>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {athlete.injuries.map((i, n) => (
+                    <div key={n} className="flex items-center gap-2.5 rounded-lg bg-surface-2 px-3 py-2 text-[13px]">
+                      <span aria-hidden className={`size-2 shrink-0 rounded-full ${i.severity >= 4 ? "bg-miss" : "bg-warn"}`} />
+                      <span className="min-w-0 flex-1 font-medium">{i.label}</span>
+                      <span className="text-[12px] tabular-nums text-muted">
+                        {i.severity}/5 · {t("since {date}", { date: i.since })}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               )}
-            </div>
-          </Band>
+            </Panel>
 
-          <Band label={t("NOTES")}>
-            <NotesField value={athlete.notes} onCommit={(v) => patch({ notes: v })} />
-          </Band>
+            <Panel
+              title={t("Programs")}
+              aside={
+                !readOnly && (
+                  <Link href={`/programming?athlete=${athlete.id}`} className="text-[12px] text-muted hover:text-accent">
+                    {t("Programming")} →
+                  </Link>
+                )
+              }
+            >
+              {athlete.programs.length === 0 ? (
+                <span className="text-[12px] text-muted-2">{t("No program yet")}</span>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {[...athlete.programs].reverse().map((p) => (
+                    <div
+                      key={p.id}
+                      className={`flex flex-col gap-1 rounded-lg border px-3 py-2.5 ${p.status === "active" ? "border-accent/40 bg-accent-soft/30" : "border-border"}`}
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Link href={`/programming?athlete=${athlete.id}&program=${p.id}`} className="text-[13px] font-semibold hover:text-accent">
+                          {p.name}
+                        </Link>
+                        {p.status && (
+                          <ProgramStatusBadge
+                            status={p.status}
+                            trained={p.trained}
+                            onSwitch={
+                              p.trained === null
+                                ? undefined
+                                : () => {
+                                    // A paused one takes over; the trained one hands over to another it overlaps.
+                                    const next = p.trained ? athlete.programs.find((x) => x.overlapping && x.id !== p.id)?.id : p.id;
+                                    if (next) patch({ activeProgramId: next });
+                                  }
+                            }
+                          />
+                        )}
+                        {p.firstPhaseId && (
+                          <a
+                            href={`/api/export?blockId=${p.firstPhaseId}&format=xlsx`}
+                            className="ml-auto rounded-md border border-border px-2 py-0.5 text-[11px] text-muted hover:border-accent hover:text-accent"
+                          >
+                            {t("Export")}
+                          </a>
+                        )}
+                      </div>
+                      <span className="text-[12px] text-muted">
+                        {p.dates ? `${p.dates} · ` : ""}
+                        {plural(p.phases, "{n} phase", "{n} phases")} · {plural(p.weeks, "{n} week", "{n} weeks")}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Panel>
+
+            <Panel title={t("Notes")} aside={<span className="text-[11px] text-muted-2">{t("Only you see this")}</span>}>
+              <NotesField value={athlete.notes} onCommit={(v) => patch({ notes: v })} />
+            </Panel>
+          </div>
         </div>
-      </div>
 
-      <Band label={t("RPE CHART")} hint={t("An RPE chart of their own: every RPE weight and estimate for them comes off it.")}>
-        <AthleteRpeChart athlete={athlete} patch={patch} />
-      </Band>
-
-      {own && (
-        <div className="flex justify-end border-t border-border py-3">
-          <DeleteAthleteButton athlete={athlete} />
-        </div>
-      )}
+        <footer className="flex flex-wrap items-center gap-3 border-t border-border pt-3 text-[12px] text-muted-2">
+          <span>
+            {plural(athlete.programs.length, "{n} program", "{n} programs")} · {plural(weeks, "{n} week planned", "{n} weeks planned")}
+          </span>
+          {own && <DeleteAthleteButton athlete={athlete} />}
+        </footer>
       </fieldset>
     </div>
   );
@@ -658,6 +783,52 @@ function AthleteRpeChart({
 }
 
 /** Men or women, for DOTS and GL; clicking the one on clears it. */
+/**
+ * Their settings on each brand of rack they've competed on, set from a meet's Road tab and
+ * read by every later meet on the same racks. A brand cleared of every height drops off.
+ */
+function RackHeights({ athleteId, racks }: { athleteId: string; racks: Record<string, Rack> }) {
+  const [, startTransition] = useTransition();
+  const [adding, setAdding] = useState<string | null>(null);
+  const brands = Object.keys(racks);
+  const save = (brand: string, patch: Partial<Rack>) =>
+    startTransition(() => {
+      void setRack(athleteId, brand, patch);
+    });
+  const cell = "rounded-lg border border-border bg-surface-2 hover:border-muted-2 focus-within:border-accent";
+  const row = (brand: string, rack: Rack | null) => (
+    <div key={brand} className="grid grid-cols-[minmax(0,1fr)_repeat(3,52px)] items-center gap-2">
+      <span className="truncate text-[13px] font-medium">{brand}</span>
+      {(["squat", "bench", "safety"] as const).map((key) => (
+        <span key={key} className={cell}>
+          <TextInput value={rack?.[key] ?? null} placeholder="—" onCommit={(v) => save(brand, { [key]: v })} />
+        </span>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="mt-4 border-t border-border pt-3">
+      <div className="mb-1.5 grid grid-cols-[minmax(0,1fr)_repeat(3,52px)] gap-2 text-[11px] text-muted-2">
+        <span className="text-[13px] text-muted">{t("Rack heights")}</span>
+        <span>{t("Squat")}</span>
+        <span>{t("Bench")}</span>
+        <span>{t("Safeties")}</span>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {brands.map((b) => row(b, racks[b]))}
+        {adding !== null && !brands.includes(adding) && adding.trim() !== "" && row(adding.trim(), null)}
+      </div>
+      {brands.length === 0 && adding === null && (
+        <p className="text-[12px] text-muted-2">{t("None yet. Name a meet's rack brand on its Road tab, or add one here.")}</p>
+      )}
+      <div className="mt-2 w-48 rounded-lg border border-dashed border-border">
+        <TextInput value={null} placeholder={t("+ Add a rack brand")} onCommit={(v) => setAdding(v?.trim() || null)} />
+      </div>
+    </div>
+  );
+}
+
 function DivisionToggle({ sex, onChange }: { sex: string | null; onChange: (sex: "M" | "F" | null) => void }) {
   return (
     <div className="flex w-fit shrink-0 overflow-hidden rounded-full border border-border text-[11px]">

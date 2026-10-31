@@ -1,6 +1,7 @@
 import { MONTHS_SHORT, weekdayOf } from "@/lib/dates";
 import { LOCALE, t, weekdayShort as weekdayName } from "@/lib/i18n";
 import { activeSettings } from "@/lib/settings";
+import type { MeetView } from "@/lib/athlete-queries";
 
 /** "Thursday, 24 September" in the coach's language, for a `YYYY-MM-DD`. */
 export function longDate(ymd: string): string {
@@ -36,4 +37,14 @@ export function weekdayShort(ymd: string): string {
     weekday: "short",
     timeZone: "UTC",
   });
+}
+
+/** Weigh-in and lifting, as one line: "Weigh-in 07:00 · Session 1, flight B". */
+export function meetTimes(meet: Pick<MeetView, "weighInTime" | "session" | "startTime">): string {
+  return [
+    meet.weighInTime && t("Weigh-in {time}", { time: meet.weighInTime }),
+    meet.session ?? (meet.startTime && t("Lifting from {time}", { time: meet.startTime })),
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }

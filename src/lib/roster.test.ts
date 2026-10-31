@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { byUrgency, isSnoozed, liveSnoozes, setText, type InboxItem } from "@/lib/inbox";
 import { estimate1RM } from "@/lib/intensity";
 import type { TrainingSession } from "@/lib/overview";
-import { liftTrends, suggestionsFor, weeklyDone, weeklyDrift, weeklyReadiness, weekStarts, type RosterRow } from "@/lib/roster";
+import { liftTrends, suggestionsFor, weeklyDone, weeklyDrift, weeklyE1rm, weeklyReadiness, weekStarts, type RosterRow } from "@/lib/roster";
 
 type Row = TrainingSession["rows"][number];
 
@@ -93,6 +93,22 @@ test("e1RM trend: best of the last four weeks against the four before", () => {
   assert.equal(trends.squat.change, Math.round((recent / prior - 1) * 1000) / 10);
   assert.equal(trends.bench.change, null);
   assert.equal(trends.dead.e1rm, null);
+});
+
+test("weekly e1RM: the best top set each week, nothing for a week not trained or still to come", () => {
+  const weeks = ["2026-10-12", "2026-10-19", "2026-10-26"];
+  const series = weeklyE1rm(
+    [
+      session("2026-10-13", [row({ logs: [log(150, 3, 8)] })]),
+      session("2026-10-15", [row({ logs: [log(155, 3, 8)] })]),
+      session("2026-10-30", [row({ logs: [log(170, 3, 8)] })]),
+    ],
+    weeks,
+    "2026-10-28",
+    "KG",
+  );
+  assert.deepEqual(series.squat, [estimate1RM(155, 3, 8, "KG"), null, null]);
+  assert.deepEqual(series.bench, [null, null, null]);
 });
 
 const roster = (over: Partial<RosterRow> = {}): RosterRow => ({

@@ -12,14 +12,15 @@ const SWIPE = 70;
  * own — a field, a scale, anything that scrolls sideways — is left to it, and so is a
  * mostly vertical one, which is the page scrolling.
  */
-export function SwipeDays({ prev, next, children }: { prev: string; next: string; children: React.ReactNode }) {
+/** `prev` / `next` null: nothing that way, so a swipe there does nothing. */
+export function SwipeDays({ prev, next, children }: { prev: string | null; next: string | null; children: React.ReactNode }) {
   const router = useRouter();
   const start = useRef<{ x: number; y: number } | null>(null);
   const [dx, setDx] = useState(0);
 
   useEffect(() => {
-    router.prefetch(prev);
-    router.prefetch(next);
+    if (prev) router.prefetch(prev);
+    if (next) router.prefetch(next);
   }, [router, prev, next]);
 
   function ownDrag(target: EventTarget | null): boolean {
@@ -50,7 +51,8 @@ export function SwipeDays({ prev, next, children }: { prev: string; next: string
         setDx(x);
       }}
       onTouchEnd={() => {
-        if (start.current && Math.abs(dx) > SWIPE) router.push(dx < 0 ? next : prev);
+        const to = dx < 0 ? next : prev;
+        if (start.current && Math.abs(dx) > SWIPE && to) router.push(to);
         start.current = null;
         setDx(0);
       }}

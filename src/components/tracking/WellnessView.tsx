@@ -35,7 +35,6 @@ export function WellnessView({
   nutrition,
   targets,
   meet,
-  readOnly = false,
 }: {
   athleteId: string;
   unit: string;
@@ -49,8 +48,6 @@ export function WellnessView({
   /** The phases' nutrition targets. */
   targets: TargetSpan[];
   meet: { name: string; day: string; weightClass: string | null; limit: number | null } | null;
-  /** The viewer link: weigh-ins can't be added or deleted. */
-  readOnly?: boolean;
 }) {
   const prefs = usePref("tracking");
   const range = prefs.checkinRange;
@@ -172,9 +169,9 @@ export function WellnessView({
         </ChartCard>
       </div>
 
-      <BodyweightPanel athleteId={athleteId} unit={unit} today={today} entries={bodyweight} meet={meet} readOnly={readOnly} />
+      <BodyweightPanel athleteId={athleteId} unit={unit} today={today} entries={bodyweight} meet={meet} />
 
-      <NutritionPanel athleteId={athleteId} today={today} range={range} entries={nutrition} targets={targets} readOnly={readOnly} />
+      <NutritionPanel athleteId={athleteId} today={today} range={range} entries={nutrition} targets={targets} />
 
       <div>
         <div className="mb-2 flex justify-end">

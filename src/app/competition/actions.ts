@@ -2,10 +2,9 @@
 
 import { assertCoach } from "@/lib/role";
 import { revalidatePath } from "next/cache";
-import type { AttemptResult, MeetLift } from "@prisma/client";
-import { best, MEET_LIFTS, maxFor, planned, suggestion } from "@/lib/competition";
-import { loadSettings } from "@/lib/coach-settings";
-import { prisma } from "@/lib/prisma";
+import * as meets from "@/lib/competition-writes";
+
+/** The desktop app's Competition actions; the writes themselves are in `competition-writes.ts`. */
 
 function revalidateAll() {
   revalidatePath("/competition");
@@ -13,144 +12,85 @@ function revalidateAll() {
   revalidatePath("/programming");
 }
 
-/** A meet is created with its nine empty attempts, so the card is never half-built. */
-export async function createMeet(input: {
-  athleteId: string;
-  name: string;
-  date: string;
-  federation?: string;
-  weightClass?: string;
-}) {
-  assertCoach();
-  const meet = await prisma.meet.create({
-    data: {
-      athleteId: input.athleteId,
-      name: input.name.trim() || "Meet",
-      date: new Date(input.date),
-      federation: input.federation?.trim() || null,
-      weightClass: input.weightClass?.trim() || null,
-      attempts: {
-        create: MEET_LIFTS.flatMap((lift) =>
-          [1, 2, 3].map((number) => ({ lift, number })),
-        ),
-      },
-    },
-  });
+type Args<F extends (...args: never[]) => unknown> = Parameters<F>;
 
+export async function createMeet(...args: Args<typeof meets.createMeet>) {
+  assertCoach();
+  const id = await meets.createMeet(...args);
   revalidateAll();
-  return meet.id;
+  return id;
 }
 
-export async function updateMeet(
-  meetId: string,
-  patch: {
-    name?: string;
-    date?: string;
-    federation?: string | null;
-    weightClass?: string | null;
-    bodyweight?: number | null;
-  },
-) {
+export async function updateMeet(...args: Args<typeof meets.updateMeet>) {
   assertCoach();
-  const { date, ...rest } = patch;
-  await prisma.meet.update({
-    where: { id: meetId },
-    data: {
-      ...rest,
-      ...(date ? { date: new Date(date) } : {}),
-    },
-  });
+  await meets.updateMeet(...args);
   revalidateAll();
 }
 
-export async function deleteMeet(meetId: string) {
+export async function setRack(...args: Args<typeof meets.setRack>) {
   assertCoach();
-  await prisma.meet.delete({ where: { id: meetId } });
+  await meets.setRack(...args);
+  revalidateAll();
+  revalidatePath("/athletes");
+}
+
+export async function setReminder(...args: Args<typeof meets.setReminder>) {
+  assertCoach();
+  await meets.setReminder(...args);
   revalidateAll();
 }
 
-export async function updateAttempt(
-  meetId: string,
-  lift: MeetLift,
-  number: number,
-  patch: { weight?: number | null; result?: AttemptResult },
-) {
+export async function addTasks(...args: Args<typeof meets.addTasks>) {
   assertCoach();
-  await prisma.attempt.upsert({
-    where: { meetId_lift_number: { meetId, lift, number } },
-    create: { meetId, lift, number, ...patch },
-    update: patch,
-  });
-  if (patch.result && patch.result !== "PENDING" && number < 3) await fillNext(meetId, lift, number + 1);
+  await meets.addTasks(...args);
   revalidateAll();
 }
 
-/**
- * Once an attempt is called, the next one on that lift gets its weight if it has none yet:
- * a jump after a make, the same again after a miss. On the day that is one click less.
- */
-async function fillNext(meetId: string, lift: MeetLift, number: number) {
-  await loadSettings();
-  const meet = await prisma.meet.findUniqueOrThrow({
-    where: { id: meetId },
-    include: { athlete: true, attempts: true },
-  });
-  const next = meet.attempts.find((a) => a.lift === lift && a.number === number);
-  if (!next || next.weight !== null) return;
-  const weight = suggestion(meet.attempts, lift, number, maxFor(lift, meet.athlete), meet.athlete.unit);
-  if (weight !== null) await prisma.attempt.update({ where: { id: next.id }, data: { weight } });
-}
-
-/**
- * Fills every attempt that is still blank from the athlete's 1RMs. Attempts already
- * written down are left alone — the plan is a starting point, not a reset.
- */
-export async function planFromMaxes(meetId: string) {
+export async function addUsualTasks(...args: Args<typeof meets.addUsualTasks>) {
   assertCoach();
-  await loadSettings();
-  const meet = await prisma.meet.findUniqueOrThrow({
-    where: { id: meetId },
-    include: { athlete: true, attempts: true },
-  });
-
-  const writes = meet.attempts
-    .filter((attempt) => attempt.weight === null)
-    .map((attempt) => {
-      const weight = planned(maxFor(attempt.lift, meet.athlete), attempt.number, meet.athlete.unit);
-      return weight === null
-        ? null
-        : prisma.attempt.update({ where: { id: attempt.id }, data: { weight } });
-    })
-    .filter((write) => write !== null);
-
-  if (writes.length > 0) await prisma.$transaction(writes);
+  await meets.addUsualTasks(...args);
   revalidateAll();
 }
 
-/**
- * Writes the meet's best successful lifts onto the athlete's 1RMs. A competition single
- * is the realest max there is, and every target weight in the next block comes off it.
- */
-export async function applyResultsAsMaxes(meetId: string) {
+export async function tickTask(...args: Args<typeof meets.tickTask>) {
   assertCoach();
-  const meet = await prisma.meet.findUniqueOrThrow({
-    where: { id: meetId },
-    include: { attempts: true },
-  });
+  await meets.tickTask(...args);
+  revalidateAll();
+}
 
-  const squat1RM = best(meet.attempts, "SQUAT");
-  const bench1RM = best(meet.attempts, "BENCH");
-  const dead1RM = best(meet.attempts, "DEADLIFT");
+export async function removeTask(...args: Args<typeof meets.removeTask>) {
+  assertCoach();
+  await meets.removeTask(...args);
+  revalidateAll();
+}
 
-  await prisma.athlete.update({
-    where: { id: meet.athleteId },
-    data: {
-      ...(squat1RM !== null ? { squat1RM } : {}),
-      ...(bench1RM !== null ? { bench1RM } : {}),
-      ...(dead1RM !== null ? { dead1RM } : {}),
-    },
-  });
+export async function setThirds(...args: Args<typeof meets.setThirds>) {
+  assertCoach();
+  await meets.setThirds(...args);
+  revalidateAll();
+}
 
+export async function deleteMeet(...args: Args<typeof meets.deleteMeet>) {
+  assertCoach();
+  await meets.deleteMeet(...args);
+  revalidateAll();
+}
+
+export async function updateAttempt(...args: Args<typeof meets.updateAttempt>) {
+  assertCoach();
+  await meets.updateAttempt(...args);
+  revalidateAll();
+}
+
+export async function planFromMaxes(...args: Args<typeof meets.planFromMaxes>) {
+  assertCoach();
+  await meets.planFromMaxes(...args);
+  revalidateAll();
+}
+
+export async function applyResultsAsMaxes(...args: Args<typeof meets.applyResultsAsMaxes>) {
+  assertCoach();
+  await meets.applyResultsAsMaxes(...args);
   revalidateAll();
   revalidatePath("/athletes");
 }

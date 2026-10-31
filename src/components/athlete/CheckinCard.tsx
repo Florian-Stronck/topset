@@ -51,7 +51,10 @@ function CheckinForm({
   today,
   initial,
   bodyweight,
+  preview = false,
 }: {
+  /** The coach's look at it on the Athlete app tab: it answers, but saves nothing. */
+  preview?: boolean;
   token: string;
   unit: Unit;
   /** The day the questions are for. */
@@ -82,6 +85,7 @@ function CheckinForm({
   const queue = useRef<Promise<unknown>>(Promise.resolve());
 
   function enqueue(action: () => Promise<unknown>) {
+    if (preview) return;
     setError(null);
     queue.current = queue.current
       .then(action)

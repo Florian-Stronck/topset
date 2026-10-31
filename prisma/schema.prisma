@@ -105,13 +105,17 @@ model Athlete {
   sex           String?
   /// The coach's own notes on the athlete — goals, history; never shown to the athlete.
   notes         String?
+  /// Rack settings per brand of rack, as JSON: {"Eleiko": {"squat": "12", "bench": "8", "safety": "6"}}.
+  /// Set from a meet; every later meet on that brand starts from them.
+  racks         String?
   /// The program that wins the days where two of the athlete's programs overlap; null lets
   /// the one that started later win. A plain id, not a relation: a deleted program just stops matching.
   activeProgramId String?
   /// Secret for the athlete's check-in link. Null until the coach hands one out; a new one
   /// replaces the old, so a lost phone is one click away from locked out.
   accessToken String? @unique
-  /// Secret for a read-only view of the athlete's Tracking, for a second coach.
+  /// Unused: the read-only viewer link it opened is gone (the coach's phone took its place).
+  /// Kept so desktop apps from before still sync; a server without it refuses their pushes.
   viewToken   String? @unique
   /// Other coaches this athlete is shared with; `coachId` stays the owner.
   shares     AthleteShare[]
@@ -129,6 +133,7 @@ model Athlete {
   injuries    Injury[]
   moves       SessionMove[]
   meetings    Meeting[]
+  meetTasks   MeetTask[]
 
   @@index([coachId])
 }
@@ -181,9 +186,53 @@ model Meet {
   weightClass String?
   bodyweight  Float?
   date        DateTime
+  /// The total the coach is aiming for, in the athlete's unit.
+  goal        Float?
+  venue       String?
+  /// Weigh-in as `YYYY-MM-DD` and `HH:MM`, on the meet's own clock; the day before the meet
+  /// for a 24-hour weigh-in.
+  weighInDay  String?
+  weighInTime String?
+  /// When lifting starts, `HH:MM`.
+  startTime   String?
+  /// Session and flight, as the meet gives them ("Session 1, flight B").
+  session     String?
+  /// The brand of rack the meet lifts on; its heights are on the athlete (`Athlete.racks`).
+  rackBrand   String?
+  /// Whether the athlete app shows the meet, and with it the attempts.
+  shared        Boolean @default(true)
+  shareAttempts Boolean @default(false)
+  /// Reminders the coach turned off or reworded, as JSON — see `src/lib/meet-reminders.ts`.
+  reminders   String?
   createdAt   DateTime  @default(now())
   attempts    Attempt[]
 
+  @@index([athleteId])
+}
+
+/// One thing to sort before a meet, the athlete's or the coach's. The athlete ticks theirs off
+/// on the phone, so rows merge one by one like meetings. `meetId` is a plain id, not a
+/// relation: a row can reach one side before its meet does, and deleting a meet leaves its
+/// tasks as tombstones so the delete travels.
+model MeetTask {
+  id        String    @id @default(cuid())
+  athleteId String
+  athlete   Athlete   @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  meetId    String
+  /// The meet's date, `YYYY-MM-DD`, as every merged row is dated.
+  day       String
+  text      String
+  /// "athlete" or "coach": whose it is to sort, and so who ticks it.
+  owner     String
+  done      Boolean   @default(false)
+  /// "athlete" or "coach": who ticked it; null while it is open.
+  doneBy    String?
+  order     Int       @default(0)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([meetId])
   @@index([athleteId])
 }
 

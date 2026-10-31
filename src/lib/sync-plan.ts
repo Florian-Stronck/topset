@@ -45,6 +45,8 @@ export const MERGED_COLUMNS: Record<string, readonly string[]> = {
   Meeting: ["id", "athleteId", "day", "time", "minutes", "timeZone", "place", "note", "proposedBy", "status", "createdAt", "updatedAt", "deletedAt"],
   // Either side reports or clears an injury.
   Injury: ["id", "athleteId", "area", "side", "day", "endDay", "severity", "note", "source", "createdAt", "updatedAt", "deletedAt"],
+  // The coach writes a meet's checklist; the athlete ticks their own things on it.
+  MeetTask: ["id", "athleteId", "meetId", "day", "text", "owner", "done", "doneBy", "order", "createdAt", "updatedAt", "deletedAt"],
   // Videos the athlete sent: only the athlete app writes them, so they only ever come down.
   AthleteVideo: [
     "id",
@@ -106,6 +108,15 @@ export function validMergedRow(table: string, row: Row): boolean {
     );
   }
   if (table === "Meeting") return validMeeting(row);
+  if (table === "MeetTask") {
+    return (
+      typeof row.meetId === "string" &&
+      row.meetId !== "" &&
+      typeof row.text === "string" &&
+      (row.owner === "athlete" || row.owner === "coach") &&
+      (row.doneBy === null || row.doneBy === undefined || row.doneBy === "athlete" || row.doneBy === "coach")
+    );
+  }
   if (table === "Injury") {
     return (
       typeof row.area === "string" &&

@@ -3,9 +3,10 @@
 import { Select } from "@/components/Select";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { deleteMessage, editMessage, markReviewed, sendMessage } from "@/app/tracking/actions";
 import { AthleteLinkButton } from "@/components/AthleteLink";
+import { useCoachActions } from "@/components/CoachActions";
 import { Trophy } from "@/components/CheckinIcon";
+import { PhoneClips } from "@/components/PhoneClips";
 import { RowVideos } from "@/components/RowVideos";
 import { formatAnswer, LOW_READINESS, readinessOf, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
 import { dayStatus, daySets, offPlan, rowSets, rpeDelta, type DayStatus, type OffPlan } from "@/lib/compliance";
@@ -36,6 +37,7 @@ import {
   type TopSet,
 } from "@/lib/tracking";
 import type { AthleteData, BlockData, DayData, RowData } from "@/lib/types";
+import type { ClipView } from "@/lib/athlete-videos";
 import type { VideoFile } from "@/lib/videos";
 
 const FILTER_LABEL: Record<ReviewFilter, string> = {
@@ -123,7 +125,6 @@ export function ReviewView({
   previous,
   show,
   hasLink,
-  readOnly = false,
   paused = NO_PAUSED,
 }: {
   /** Sessions not trained because another program is active on their dates. */
@@ -144,9 +145,8 @@ export function ReviewView({
   /** A filter asked for in the link (from Overview, say). */
   show: ReviewFilter | null;
   hasLink: boolean;
-  /** The viewer link: another coach looks, but can't review, write notes, or see them. */
-  readOnly?: boolean;
 }) {
+  const { markReviewed, sendMessage, editMessage, deleteMessage, phone } = useCoachActions();
   const [block, setBlock] = useState(initialBlock);
   const [messages, setMessages] = useState(initialMessages);
   const [synced, setSynced] = useState({ block: initialBlock, messages: initialMessages });
@@ -156,10 +156,7 @@ export function ReviewView({
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());
   const [, startTransition] = useTransition();
-  const stored = usePref("tracking");
-  // Review marks are the coach's own, so the viewer never filters by them.
-  const prefs = readOnly && stored.filter === "unreviewed" ? { ...stored, filter: "all" as const } : stored;
-  const filters = readOnly ? REVIEW_FILTERS.filter((f) => f !== "unreviewed") : REVIEW_FILTERS;
+  const prefs = usePref("tracking");
 
   // Fresh data from the server (a refresh, or an action's revalidation) replaces ours.
   if (synced.block !== initialBlock || synced.messages !== initialMessages) {
@@ -467,9 +464,9 @@ export function ReviewView({
         run: () => document.getElementById("review-attention")?.scrollIntoView({ block: "start", behavior: "smooth" }),
       },
     ];
-    return readOnly ? list.filter((c) => !["session-review", "session-feedback", "session-next-unreviewed", "week-review-all", "track-filter-unreviewed"].includes(c.id)) : list;
+    return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allSessions, collapsed, focusedSession, prefs, sessions, shown, videos, weekCount, activeWeek, readOnly, nowWeek, sessionsByWeek, today, athlete.id, router]);
+  }, [allSessions, collapsed, focusedSession, prefs, sessions, shown, videos, weekCount, activeWeek, nowWeek, sessionsByWeek, today, athlete.id, router]);
   useCommands("tracking-review", commands, 1);
 
   const sendFor = (s: Session) => async (body: string) => {
@@ -488,12 +485,10 @@ export function ReviewView({
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-medium">{t("Nothing logged in this phase yet")}</div>
             <div className="text-[12px] text-muted">
-              {readOnly
-                ? t("Every set {name} logs on their phone shows up here.", { name: athlete.name })
-                : t("Send {name} their check-in link and every set they log on their phone shows up here.", { name: athlete.name })}
+              {t("Send {name} their check-in link and every set they log on their phone shows up here.", { name: athlete.name })}
             </div>
           </div>
-          {!readOnly && <AthleteLinkButton athleteId={athlete.id} name={athlete.name} hasLink={hasLink} />}
+          {!phone && <AthleteLinkButton athleteId={athlete.id} name={athlete.name} hasLink={hasLink} />}
         </div>
       )}
 
@@ -509,9 +504,7 @@ export function ReviewView({
       })()}
 
       <div id="review-attention" className="mt-4 flex scroll-mt-4 flex-wrap items-center gap-2">
-        {!readOnly && (
-          <AttentionChip n={attention.unreviewed} label={t("to review")} tone="accent" on={prefs.filter === "unreviewed"} onClick={() => setTrackingPref({ filter: prefs.filter === "unreviewed" ? "all" : "unreviewed" })} />
-        )}
+        <AttentionChip n={attention.unreviewed} label={t("to review")} tone="accent" on={prefs.filter === "unreviewed"} onClick={() => setTrackingPref({ filter: prefs.filter === "unreviewed" ? "all" : "unreviewed" })} />
         <AttentionChip n={attention.missed} label={t("missed")} tone="miss" on={prefs.filter === "missed"} onClick={() => setTrackingPref({ filter: prefs.filter === "missed" ? "all" : "missed" })} />
         <AttentionChip n={attention.offPlan} label={t("off plan")} tone="warn" on={prefs.filter === "offplan"} onClick={() => setTrackingPref({ filter: prefs.filter === "offplan" ? "all" : "offplan" })} />
         <AttentionChip n={attention.prs} label={t("PRs")} tone="pr" on={prefs.filter === "prs"} onClick={() => setTrackingPref({ filter: prefs.filter === "prs" ? "all" : "prs" })} />
@@ -535,7 +528,7 @@ export function ReviewView({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-y border-border/60 py-2">
-        <Seg value={prefs.filter} options={filters.map((f) => ({ value: f, label: t(FILTER_LABEL[f]) }))} onChange={(f) => setTrackingPref({ filter: f })} label={t("Filter")} />
+        <Seg value={prefs.filter} options={REVIEW_FILTERS.map((f) => ({ value: f, label: t(FILTER_LABEL[f]) }))} onChange={(f) => setTrackingPref({ filter: f })} label={t("Filter")} />
         <Select
           value={prefs.lifts}
           aria-label={t("Exercises")}
@@ -577,7 +570,6 @@ export function ReviewView({
             expandAll={prefs.expandAll}
             showCues={prefs.showCues}
             onToggleRow={toggleRow}
-            readOnly={readOnly}
             onReviewed={(on) => setReviewed([s.day.id], on)}
             onSend={sendFor(s)}
             onEdit={async (id, body) => {
@@ -716,7 +708,6 @@ function SessionCard({
   expandAll,
   showCues,
   onToggleRow,
-  readOnly,
   onReviewed,
   onSend,
   onEdit,
@@ -735,12 +726,12 @@ function SessionCard({
   expandAll: boolean;
   showCues: boolean;
   onToggleRow: (rowId: string) => void;
-  readOnly: boolean;
   onReviewed: (on: boolean) => void;
   onSend: (body: string) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
   onDelete: (id: string) => void;
 }) {
+  const { clips } = useCoachActions();
   const reviewed = !s.unreviewed && !!s.day.reviewedAt;
   const done = s.lines.filter((l) => rowSets(l.row).done > 0).length;
   const low = s.readiness.score !== null && s.readiness.score <= LOW_READINESS;
@@ -780,7 +771,7 @@ function SessionCard({
             {t("moved from {date}", { date: formatDate(s.movedFrom) })}
           </span>
         )}
-        {s.unreviewed && !readOnly && <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent">{t("to review")}</span>}
+        {s.unreviewed && <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent">{t("to review")}</span>}
         {s.readiness.score !== null && (
           <span title={answerText} className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ${low ? "bg-warn/15 text-warn" : "bg-surface-3 text-muted"}`}>
             {t("Readiness {n}/5", { n: s.readiness.score })}
@@ -793,7 +784,7 @@ function SessionCard({
           </span>
         ))}
         <span className="ml-auto flex items-center gap-1.5">
-          {s.status !== "upcoming" && !readOnly && (
+          {s.status !== "upcoming" && (
             <button
               type="button"
               onClick={() => onReviewed(!reviewed)}
@@ -826,6 +817,7 @@ function SessionCard({
                 unit={unit}
                 athleteUnit={athleteUnit}
                 videos={videos[line.row.id] ?? []}
+                clips={clips[line.row.id] ?? []}
                 open={expandAll || openRows.has(line.row.id)}
                 showCues={showCues}
                 onToggle={() => onToggleRow(line.row.id)}
@@ -837,7 +829,7 @@ function SessionCard({
               </div>
             )}
           </div>
-          {s.status !== "upcoming" && !readOnly && <Feedback session={s} onSend={onSend} onEdit={onEdit} onDelete={onDelete} />}
+          {s.status !== "upcoming" && <Feedback session={s} onSend={onSend} onEdit={onEdit} onDelete={onDelete} />}
         </>
       )}
     </section>
@@ -880,6 +872,7 @@ function ExerciseLine({
   unit,
   athleteUnit,
   videos,
+  clips,
   open,
   showCues,
   onToggle,
@@ -888,11 +881,14 @@ function ExerciseLine({
   unit: string;
   athleteUnit: AthleteData["unit"];
   videos: VideoFile[];
+  clips: ClipView[];
   open: boolean;
   showCues: boolean;
   onToggle: () => void;
 }) {
   const { row, target, oneRM, off, pr, top, e1rm, previous } = line;
+  const { phone } = useCoachActions();
+  const count = phone ? clips.length : videos.length;
   const targetPct = row.intensityType === "PERCENT" ? null : pctText(target, oneRM);
   const topPct = row.duration === null && top ? pctText(top.weight, oneRM) : null;
   // Logged as RIR, the summary reads "RIR 2"; the top set's RPE goes next to its %.
@@ -909,7 +905,7 @@ function ExerciseLine({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="grid w-full grid-cols-[minmax(140px,1.1fr)_minmax(200px,2fr)_minmax(110px,auto)_20px] items-center gap-3 px-4 py-2 text-left hover:bg-surface-2/60"
+        className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-4 py-2 text-left hover:bg-surface-2/60 sm:grid-cols-[minmax(140px,1.1fr)_minmax(200px,2fr)_minmax(110px,auto)_20px] sm:gap-y-3"
       >
         <span className="min-w-0">
           <span className="flex items-center gap-1.5 text-[12px] font-medium">
@@ -919,18 +915,18 @@ function ExerciseLine({
                 <Trophy size={9} /> {t("PR")}
               </span>
             )}
-            {videos.length > 0 && (
-              <span title={t("{n} videos", { n: videos.length })} className="flex shrink-0 items-center gap-0.5 text-[10px] text-muted-2">
+            {count > 0 && (
+              <span title={t("{n} videos", { n: count })} className="flex shrink-0 items-center gap-0.5 text-[10px] text-muted-2">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <path d="M15 10l5-3v10l-5-3M3 7h12v10H3z" />
                 </svg>
-                {videos.length}
+                {count}
               </span>
             )}
           </span>
           {showCues && cues && <span className="block truncate text-[10px] text-muted-2">{cues}</span>}
         </span>
-        <span className="min-w-0 truncate text-[12px] tabular-nums">
+        <span className="col-span-full row-start-2 min-w-0 text-[12px] tabular-nums sm:col-span-1 sm:row-start-auto sm:truncate">
           <span className="text-muted-2">
             {plan}
             {target !== null && row.intensityType !== "WEIGHT" && ` · ${target} ${unit}`}
@@ -958,13 +954,13 @@ function ExerciseLine({
             </span>
           )}
         </span>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={`text-muted-2 ${open ? "rotate-180" : ""}`}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={`hidden text-muted-2 sm:block ${open ? "rotate-180" : ""}`}>
           <path d="M6 9l6 6 6-6" />
         </svg>
       </button>
 
       {open && (
-        <div className="grid gap-4 bg-surface-2/40 px-4 pb-3 pl-8 pt-1 md:grid-cols-2">
+        <div className="grid gap-4 bg-surface-2/40 px-4 pb-3 pt-1 sm:pl-8 md:grid-cols-2">
           <div className="min-w-0">
             {row.logs && row.logs.length > 0 ? (
               <table className="text-[11px] tabular-nums">
@@ -1002,7 +998,7 @@ function ExerciseLine({
             ) : (
               <div className="text-[11px] text-muted-2">{t("No note from the athlete.")}</div>
             )}
-            <RowVideos rowId={row.id} exercise={row.exercise} videos={videos} />
+            {phone ? <PhoneClips clips={clips} /> : <RowVideos rowId={row.id} exercise={row.exercise} videos={videos} />}
           </div>
         </div>
       )}
@@ -1077,18 +1073,18 @@ function Feedback({
                   setDraft(m.body);
                   requestAnimationFrame(() => (document.getElementById(`feedback-${s.day.id}`) as HTMLTextAreaElement | null)?.focus());
                 }}
-                className="shrink-0 text-[10px] text-muted-2 opacity-0 hover:text-accent group-hover:opacity-100 focus-visible:opacity-100"
+                className="shrink-0 text-[10px] text-muted-2 opacity-0 hover:text-accent group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
               >
                 {t("Edit")}
               </button>
-              <button type="button" onClick={() => onDelete(m.id)} className="shrink-0 text-[10px] text-muted-2 opacity-0 hover:text-miss group-hover:opacity-100 focus-visible:opacity-100">
+              <button type="button" onClick={() => onDelete(m.id)} className="shrink-0 text-[10px] text-muted-2 opacity-0 hover:text-miss group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100">
                 {t("Delete")}
               </button>
             </li>
           ))}
         </ul>
       )}
-      <div className="flex items-end gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
         <textarea
           id={`feedback-${s.day.id}`}
           value={draft}
@@ -1112,7 +1108,7 @@ function Feedback({
           onClick={submit}
           disabled={!draft.trim() || pending}
           title={t("Ctrl+Enter")}
-          className="h-8 shrink-0 rounded-lg bg-accent px-3 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-40"
+          className="h-8 shrink-0 self-end rounded-lg bg-accent px-3 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-40"
         >
           {editing ? t("Save") : t("Send and mark reviewed")}
         </button>

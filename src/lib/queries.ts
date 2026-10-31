@@ -3,6 +3,8 @@ import { currentBlock, type AthleteSummary, type TrainingSession } from "@/lib/o
 import { isBodyweight, nutrientOf, questionData, type CheckinAnswerData, type CheckinQuestionData } from "@/lib/checkins";
 import { nutritionEntry, targetSpan, type NutritionEntry, type TargetSpan } from "@/lib/nutrition";
 import { photosHere } from "@/lib/photos";
+import { isAthleteHost } from "@/lib/role";
+import { presign, storageConfig } from "@/lib/storage";
 import { byWhen, meetingData, type MeetingData } from "@/lib/meetings";
 import { moveData, movesMap, type MoveData } from "@/lib/moves";
 import { injuryData, type InjuryData } from "@/lib/injuries";
@@ -177,12 +179,14 @@ export async function getExerciseHistory(coachId: string) {
  * Everything the overview reads: the roster, every block, and — for the block each
  * athlete is on today — the TARGET/tier pairs the missing-1RM check needs.
  */
-export async function getOverview(today: Date) {
-  const coach = await prisma.coach.findFirst({ where: await myCoach() });
+export async function getOverview(today: Date, coachId?: string) {
+  const coach = coachId ? await prisma.coach.findUnique({ where: { id: coachId } }) : await prisma.coach.findFirst({ where: await myCoach() });
   if (!coach) throw new Error("No coach found — run `npm run db:seed`.");
 
   const rows = await prisma.athlete.findMany({
-    // The coach's own athletes and those shared with them: everyone here.
+    // The coach's own athletes and those shared with them: everyone here on the desktop; on
+    // the server (the coach's phone) every coach's are, so only theirs.
+    where: coachId ? { OR: [{ coachId }, { shares: { some: { coachId } } }] } : undefined,
     orderBy: { name: "asc" },
     include: {
       blocks: {
@@ -527,7 +531,7 @@ export async function getNextMeets(athleteIds: string[], from: Date) {
   return out;
 }
 
-export type CheckinPhotoRef = { id: string; questionId: string; day: string };
+export type CheckinPhotoRef = { id: string; questionId: string; day: string; /** On the server: a signed link to storage. */ url?: string };
 
 export type AthleteCheckins = {
   questions: CheckinQuestionData[];
@@ -551,7 +555,7 @@ export async function getCheckins(athleteIds: string[], from?: string): Promise<
     prisma.checkinPhoto.findMany({
       where: { athleteId: { in: athleteIds }, deletedAt: null, uploadedAt: { not: null }, ...(from ? { day: { gte: from } } : {}) },
       orderBy: { createdAt: "asc" },
-      select: { id: true, athleteId: true, questionId: true, day: true },
+      select: { id: true, athleteId: true, questionId: true, day: true, storageKey: true },
     }),
   ]);
   const out = new Map<string, AthleteCheckins>();
@@ -565,8 +569,13 @@ export async function getCheckins(athleteIds: string[], from?: string): Promise<
     const q = questionData(row);
     if (!isBodyweight(q) && !nutrientOf(q)) entry(row.athleteId).questions.push(q);
   }
-  const here = photosHere(photos.map((p) => p.id));
-  for (const { athleteId, ...photo } of photos) if (here.has(photo.id)) entry(athleteId).photos.push(photo);
+  // The desktop app shows its own copies; the server (the coach's phone) links to storage.
+  const config = isAthleteHost() ? storageConfig() : null;
+  const here = isAthleteHost() ? new Set<string>() : photosHere(photos.map((p) => p.id));
+  for (const { athleteId, storageKey, ...photo } of photos) {
+    if (config) entry(athleteId).photos.push({ ...photo, url: presign(config, { method: "GET", key: storageKey, expiresIn: 6 * 60 * 60 }) });
+    else if (here.has(photo.id)) entry(athleteId).photos.push(photo);
+  }
   for (const { athleteId, updatedAt, ...answer } of answers) entry(athleteId).answers.push({ ...answer, updatedAt: updatedAt.toISOString() });
   return out;
 }

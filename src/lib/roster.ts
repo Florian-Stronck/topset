@@ -53,6 +53,16 @@ export type LiftTrend = {
 
 export const TREND_DAYS = 28;
 
+/** A primary row's main lift and the estimated 1RM of its top set, if it has both. */
+function rowE1rm(row: TrainingSession["rows"][number], unit: Unit, table: ReturnType<typeof rpeTableFor>): { lift: LiftKey; e1rm: number } | null {
+  if (row.tier !== "PRIMARY") return null;
+  const lift = liftOf(row.target);
+  const top = lift ? topSetOf(row) : null;
+  if (!lift || !top) return null;
+  const e1rm = estimate1RM(top.weight, top.reps, top.rpe, unit, table);
+  return e1rm === null ? null : { lift, e1rm };
+}
+
 /**
  * Each main lift's best estimated 1RM over the last four weeks, from the top set of every
  * primary row, and how far it moved against the four weeks before.
@@ -71,12 +81,8 @@ export function liftTrends(
     if (s.ymd > today || s.ymd < priorFrom) continue;
     const slot = s.ymd >= recentFrom ? 0 : 1;
     for (const row of s.rows) {
-      if (row.tier !== "PRIMARY") continue;
-      const lift = liftOf(row.target);
-      const top = lift ? topSetOf(row) : null;
-      if (!lift || !top) continue;
-      const e1rm = estimate1RM(top.weight, top.reps, top.rpe, unit, table);
-      if (e1rm !== null && e1rm > (best[lift][slot] ?? 0)) best[lift][slot] = e1rm;
+      const hit = rowE1rm(row, unit, table);
+      if (hit && hit.e1rm > (best[hit.lift][slot] ?? 0)) best[hit.lift][slot] = hit.e1rm;
     }
   }
   const trend = ([recent, prior]: [number | null, number | null]): LiftTrend => ({
@@ -84,6 +90,27 @@ export function liftTrends(
     change: recent !== null && prior !== null ? Math.round((recent / prior - 1) * 1000) / 10 : null,
   });
   return { squat: trend(best.squat), bench: trend(best.bench), dead: trend(best.dead) };
+}
+
+/** Each main lift's best estimated 1RM in each of `weeks`, oldest first; null where it wasn't trained. */
+export function weeklyE1rm(
+  sessions: Pick<TrainingSession, "ymd" | "rows">[],
+  weeks: string[],
+  today: string,
+  unit: Unit,
+  rpeTable?: string | null,
+): Record<LiftKey, (number | null)[]> {
+  const table = rpeTableFor({ rpeTable });
+  const out: Record<LiftKey, (number | null)[]> = { squat: weeks.map(() => null), bench: weeks.map(() => null), dead: weeks.map(() => null) };
+  for (const s of sessions) {
+    const i = s.ymd > today ? -1 : weeks.findIndex((w) => inWeek(s.ymd, w));
+    if (i < 0) continue;
+    for (const row of s.rows) {
+      const hit = rowE1rm(row, unit, table);
+      if (hit && hit.e1rm > (out[hit.lift][i] ?? 0)) out[hit.lift][i] = hit.e1rm;
+    }
+  }
+  return out;
 }
 
 /** The roster table's row for one athlete. Plain data, so it can cross to the client. */

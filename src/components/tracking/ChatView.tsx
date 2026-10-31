@@ -2,8 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { syncChat } from "@/app/sync-actions";
-import { deleteMessage, editMessage, markChatRead, sendChatMessage } from "@/app/tracking/actions";
+import { useCoachActions } from "@/components/CoachActions";
 import { shortDate } from "@/lib/athlete-format";
 import { useCommands, type Command } from "@/lib/commands";
 import { formatMoment } from "@/lib/dates";
@@ -29,6 +28,7 @@ export function ChatView({
   hasLink: boolean;
 }) {
   const router = useRouter();
+  const { deleteMessage, editMessage, markChatRead, sendChatMessage, pollChat } = useCoachActions();
   const [messages, setMessages] = useState(initial);
   const [synced, setSynced] = useState(initial);
   const [draft, setDraft] = useState("");
@@ -45,19 +45,19 @@ export function ChatView({
 
   useEffect(() => {
     if (unread > 0) void markChatRead(athlete.id).then(() => router.refresh());
-  }, [athlete.id, unread, router]);
+  }, [athlete.id, unread, router, markChatRead]);
 
   useEffect(() => {
     let busy = false;
     const timer = setInterval(() => {
       if (busy || document.visibilityState !== "visible") return;
       busy = true;
-      void syncChat()
+      void pollChat()
         .then((news) => news && router.refresh())
         .finally(() => (busy = false));
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [router]);
+  }, [router, pollChat]);
 
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
@@ -128,7 +128,7 @@ export function ChatView({
                           setDraft(m.body);
                           requestAnimationFrame(focusComposer);
                         }}
-                        className="opacity-0 hover:text-accent group-hover:opacity-100 focus-visible:opacity-100"
+                        className="opacity-0 hover:text-accent group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
                       >
                         {t("Edit")}
                       </button>
@@ -138,7 +138,7 @@ export function ChatView({
                           setMessages((list) => list.filter((x) => x.id !== m.id));
                           startTransition(() => deleteMessage(m.id));
                         }}
-                        className="opacity-0 hover:text-miss group-hover:opacity-100 focus-visible:opacity-100"
+                        className="opacity-0 hover:text-miss group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
                       >
                         {t("Delete")}
                       </button>

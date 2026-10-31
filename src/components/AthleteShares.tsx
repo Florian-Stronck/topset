@@ -6,10 +6,9 @@ import { sharedWithOf } from "@/app/athletes/actions";
 import { listShareCodes, manageShare, type ShareCodeListing } from "@/app/settings/cloud-actions";
 import { Popover } from "@/components/Popover";
 import { formKeys } from "@/components/cells";
-import { ROLES, type Role } from "@/lib/roles";
+import { ROLE_LABEL, ROLES, type Role } from "@/lib/roles";
 import { plural, t } from "@/lib/i18n";
 
-export const ROLE_LABEL: Record<Role, string> = { view: "Can view", review: "Can review", edit: "Can edit" };
 const ROLE_HINT: Record<Role, string> = {
   view: "Sees everything, changes nothing.",
   review: "Also marks sessions reviewed and writes to the athlete.",

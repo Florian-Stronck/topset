@@ -1,9 +1,13 @@
+import { loadHub } from "@/app/athletes/hub";
 import { Roster, type RosterEntry } from "@/components/Roster";
 import { Sidebar } from "@/components/Sidebar";
-import { getActiveInjuries, getNextMeets, getRoster } from "@/lib/queries";
+import { ATHLETE_TABS, type AthleteTab } from "@/lib/athlete-tabs";
+import { bodyweightSummary, dailyWeights } from "@/lib/bodyweight";
+import { getActiveInjuries, getBodyweights, getNextMeets, getRoster } from "@/lib/queries";
 import { formatDate, overlapWinner, phaseOverlaps, programStatus, today as calendarToday, ymdOf } from "@/lib/dates";
 import { addDays, daysBetween, programOn } from "@/lib/schedule";
 import { injuryLabel } from "@/lib/injuries";
+import { parseRacks } from "@/lib/competition";
 import { questionData } from "@/lib/checkins";
 import { loadSettings } from "@/lib/coach-settings";
 import { prisma } from "@/lib/prisma";
@@ -12,11 +16,15 @@ import { readConfig, syncEnabled } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 
-/** `?new=1` opens the add-athlete form straight away — the palette's "New athlete…". */
+/**
+ * One athlete at a time, in tabs: Overview, Profile and Athlete app. `?new=1` opens the
+ * add-athlete form straight away — the palette's "New athlete…"; `?link=`, `?phone=` and
+ * `?share=1` open the Athlete app tab with the check-in link, the phone link or the share panel showing.
+ */
 export default async function AthletesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ new?: string; link?: string; n?: string; athlete?: string; share?: string; code?: string }>;
+  searchParams: Promise<{ new?: string; link?: string; phone?: string; n?: string; athlete?: string; share?: string; code?: string; tab?: string }>;
 }) {
   await loadSettings();
   const params = await searchParams;
@@ -29,7 +37,15 @@ export default async function AthletesPage({
   const names = new Map((await prisma.coach.findMany({ select: { id: true, name: true } })).map((c) => [c.id, c.name]));
   const today = ymdOf(calendarToday());
   const ids = athletes.map((a) => a.id);
-  const [meets, injuries] = await Promise.all([getNextMeets(ids, new Date(`${today}T00:00:00`)), getActiveInjuries(ids, today)]);
+  const picked = params.athlete ?? params.link ?? params.phone ?? athletes[0]?.id;
+  const tab: AthleteTab =
+    params.link || params.phone || params.share === "1" ? "app" : ATHLETE_TABS.includes(params.tab as AthleteTab) ? (params.tab as AthleteTab) : "overview";
+  const [meets, injuries, weighIns, hub] = await Promise.all([
+    getNextMeets(ids, new Date(`${today}T00:00:00`)),
+    getActiveInjuries(ids, today),
+    getBodyweights(ids, addDays(today, -21)),
+    tab === "overview" && picked ? loadHub(picked, new Date()) : null,
+  ]);
 
   const entries: RosterEntry[] = athletes.map((a) => {
     const pairs = phaseOverlaps(
@@ -53,7 +69,6 @@ export default async function AthletesPage({
     sex: a.sex,
     activeProgramId: a.activeProgramId,
     hasLink: a.accessToken !== null,
-    hasViewLink: a.viewToken !== null,
     checkin: checkinStatus(lastCheckin.get(a.id) ?? null, { hasLink: a.accessToken !== null, linksOn }),
     share: a.share,
     sharedWith: a.shares
@@ -61,11 +76,16 @@ export default async function AthletesPage({
       .map((s) => ({ coachId: s.coachId, name: names.get(s.coachId) ?? s.coachId, role: s.role })),
     questions: a.questions.map(questionData),
     notes: a.notes,
+    racks: parseRacks(a.racks),
     nextMeet: (() => {
       const m = meets.get(a.id);
       return m ? { name: m.name, date: formatDate(m.date), days: daysBetween(today, ymdOf(m.date)), weightClass: m.weightClass } : null;
     })(),
     injuries: (injuries.get(a.id) ?? []).map((i) => ({ label: injuryLabel(i), severity: i.severity, since: formatDate(i.day) })),
+    bodyweight: (() => {
+      const s = bodyweightSummary(dailyWeights(weighIns.get(a.id) ?? []), today);
+      return s.avg7 !== null ? { weight: Math.round(s.avg7 * 10) / 10, avg: true } : s.latest ? { weight: s.latest.weight, avg: false } : null;
+    })(),
     programs: a.programs.map((p, i) => {
       const first = p.phases[0];
       const last = p.phases[p.phases.length - 1];
@@ -91,9 +111,22 @@ export default async function AthletesPage({
 
   return (
     <div className="flex h-screen">
-      <Sidebar athletes={athletes} coachUsername={coach.username} coachName={coach.name} section="athletes" activeAthleteId={params.athlete ?? params.link ?? athletes[0]?.id} />
+      <Sidebar athletes={athletes} coachUsername={coach.username} coachName={coach.name} section="athletes" activeAthleteId={picked} />
       <main className="min-w-0 flex-1 overflow-auto">
-        <Roster athletes={entries} signedIn={signedIn} picked={params.athlete ?? params.link} openNew={params.new === "1"} openLink={params.link} openShare={params.share === "1"} openCode={params.code === "1"} nonce={params.n} />
+        <Roster
+          athletes={entries}
+          signedIn={signedIn}
+          picked={picked}
+          tab={tab}
+          hub={hub}
+          today={today}
+          openNew={params.new === "1"}
+          openLink={params.link}
+          openPhone={params.phone}
+          openShare={params.share === "1"}
+          openCode={params.code === "1"}
+          nonce={params.n}
+        />
       </main>
     </div>
   );

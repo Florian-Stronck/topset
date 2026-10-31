@@ -602,3 +602,14 @@ export async function deleteInjury(token: string, id: string) {
   if (count > 0) await changed(token);
   revalidatePath("/a", "layout");
 }
+
+/** Ticks one of the athlete's own checklist items for a meet, or takes the tick back. */
+export async function tickMeetTask(token: string, id: string, done: boolean) {
+  const athlete = await getAthleteByToken(token);
+  if (!athlete) throw new Error("Not found.");
+  const { count } = await prisma.meetTask.updateMany({
+    where: { id, athleteId: athlete.id, owner: "athlete", deletedAt: null },
+    data: { done, doneBy: done ? "athlete" : null },
+  });
+  if (count > 0) await changed(token);
+}

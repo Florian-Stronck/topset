@@ -1,5 +1,7 @@
 import webpush from "web-push";
 import { getAthleteSchedule, type TokenAthlete } from "@/lib/athlete-queries";
+import { loadSettings } from "@/lib/coach-settings";
+import { LIFT_LABEL, parseRacks, rackFor, reminderFacts, type TaskOwner } from "@/lib/competition";
 import { ymdOf } from "@/lib/dates";
 import { tIn } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
@@ -7,6 +9,7 @@ import { pushServiceEndpoint, type PushKind } from "@/lib/push-kinds";
 import { sessionOn } from "@/lib/schedule";
 import { parseSettings, type Language } from "@/lib/settings";
 import { inZone, timeSpan } from "@/lib/meetings";
+import { parseReminders, REMINDER_KINDS, reminderDay, reminderText } from "@/lib/meet-reminders";
 import type { NewMeeting, NewNote } from "@/lib/sync-server";
 
 /**
@@ -251,12 +254,10 @@ function addDays(ymd: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Days before a meet the athlete hears about it. */
-const MEET_NOTICES = [7, 1];
-
 /**
- * Once a morning: each phone that wants it hears whether today is a training day, and about
- * a meet a week or a day away. Days are the phone's own, from its time zone.
+ * Once a morning: each phone that wants it hears whether today is a training day, and the
+ * reminders of a meet the athlete app shows (see `meet-reminders.ts`). Days are the phone's
+ * own, from its time zone.
  */
 export async function dailyNotices(now = new Date()): Promise<{ sent: number }> {
   if (!configured()) return { sent: 0 };
@@ -268,7 +269,7 @@ export async function dailyNotices(now = new Date()): Promise<{ sent: number }> 
   for (const [athleteId, theirs] of byAthlete) {
     const athlete = await prisma.athlete.findUnique({
       where: { id: athleteId },
-      select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true, rpeTable: true, activeProgramId: true, accessToken: true },
+      select: { id: true, coachId: true, name: true, unit: true, squat1RM: true, bench1RM: true, dead1RM: true, variationPct: true, variationPcts: true, rpeTable: true, activeProgramId: true, accessToken: true, racks: true },
     });
     if (!athlete?.accessToken) continue;
     const token = athlete.accessToken;
@@ -298,19 +299,35 @@ export async function dailyNotices(now = new Date()): Promise<{ sent: number }> 
 
     const meetPhones = live.filter((s) => s.meets);
     if (meetPhones.length) {
-      const meets = await prisma.meet.findMany({ where: { athleteId }, select: { id: true, name: true, date: true } });
-      for (const s of meetPhones) {
-        const today = todayIn(s.timeZone, now);
-        for (const meet of meets) {
-          const days = MEET_NOTICES.find((n) => addDays(today, n) === ymdOf(meet.date));
-          if (!days) continue;
-          await send([s], {
-            title: days === 1 ? tIn(voice.lang, "{meet} is tomorrow", { meet: meet.name }) : tIn(voice.lang, "{meet} is in {n} days", { meet: meet.name, n: days }),
-            body: days === 1 ? tIn(voice.lang, "Rest up and check your attempts.") : tIn(voice.lang, "One week to go. Trust the plan."),
-            url: `/a/${token}`,
-            tag: `meet-${meet.id}-${days}`,
-          });
-          sent++;
+      // Only meets the athlete app shows, from the day after the meet back to two weeks out.
+      const from = addDays(todayIn(null, now), -2);
+      const meets = await prisma.meet.findMany({
+        where: { athleteId, shared: true, date: { gte: new Date(`${from}T00:00:00Z`) } },
+        include: { attempts: true },
+      });
+      if (meets.length === 0) continue;
+      // The coach's settings: which lifts make the total.
+      await loadSettings(athlete.coachId);
+      const tasks = await prisma.meetTask.findMany({ where: { meetId: { in: meets.map((m) => m.id) }, deletedAt: null } });
+      const say = (text: string, vars?: Record<string, string | number>) => tIn(voice.lang, text, vars);
+      for (const meet of meets) {
+        const day = ymdOf(meet.date);
+        const settings = parseReminders(meet.reminders);
+        const facts = reminderFacts(
+          { ...meet, date: day, attempts: meet.attempts, racks: rackFor(parseRacks(athlete.racks), meet.rackBrand) },
+          tasks.filter((x) => x.meetId === meet.id).map((x) => ({ text: x.text, owner: x.owner as TaskOwner, done: x.done })),
+          athlete.unit,
+          (lift) => say(LIFT_LABEL[lift]),
+        );
+        for (const kind of REMINDER_KINDS) {
+          if (!settings.on[kind]) continue;
+          const text = settings.text[kind] ?? reminderText(kind, facts, say);
+          if (!text) continue;
+          for (const s of meetPhones) {
+            if (todayIn(s.timeZone, now) !== reminderDay(kind, day)) continue;
+            await send([s], { ...text, url: `/a/${token}/meet`, tag: `meet-${meet.id}-${kind}` });
+            sent++;
+          }
         }
       }
     }

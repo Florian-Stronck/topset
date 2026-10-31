@@ -11,7 +11,8 @@ import { LAST_SCREEN_COOKIE } from "@/lib/athlete-cookies";
 import { NewAthleteButton } from "@/components/Roster";
 import { startTutorial, Tutorial } from "@/components/Tutorial";
 import { plural, t } from "@/lib/i18n";
-import { ROLE_LABEL, ShareCodeDialog, ShareDialog } from "@/components/AthleteShares";
+import { ShareCodeDialog, ShareDialog } from "@/components/AthleteShares";
+import { ROLE_LABEL } from "@/lib/roles";
 import type { AthleteShareInfo } from "@/lib/share";
 import { SyncLight } from "@/components/SyncLight";
 

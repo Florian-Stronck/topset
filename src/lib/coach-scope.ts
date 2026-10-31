@@ -25,6 +25,7 @@ export const SCOPE: { table: string; parents: Parent[] }[] = [
   { table: "SessionMove", parents: [{ column: "athleteId", table: "Athlete" }] },
   { table: "Meeting", parents: [{ column: "athleteId", table: "Athlete" }] },
   { table: "Meet", parents: [{ column: "athleteId", table: "Athlete" }] },
+  { table: "MeetTask", parents: [{ column: "athleteId", table: "Athlete" }] },
   {
     table: "Block",
     parents: [

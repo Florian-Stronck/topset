@@ -1,10 +1,10 @@
 "use client";
 
 import { useMemo, useTransition } from "react";
-import { updateAthlete } from "@/app/programming/actions";
 import { BarChart, ChartCard, Legend, LineChart, Segmented, type Series } from "@/components/charts/charts";
 import { ExerciseHistoryPanel } from "@/components/ExerciseHistoryPanel";
 import { LiftChart } from "@/components/LiftChart";
+import { useCoachActions } from "@/components/CoachActions";
 import { useSettings } from "@/components/SettingsProvider";
 import { VolumeTable } from "@/components/VolumeTable";
 import { useCommands, type Command } from "@/lib/commands";
@@ -51,7 +51,6 @@ export function ProgressView({
   series,
   history,
   moves = NO_MOVE_LIST,
-  readOnly = false,
 }: {
   block: BlockData;
   athlete: AthleteData;
@@ -60,9 +59,8 @@ export function ProgressView({
   history: ExerciseHistory[];
   /** Session → the day the athlete moved it to. */
   moves?: Record<string, string>;
-  /** The viewer link: no updating the athlete's 1RMs. */
-  readOnly?: boolean;
 }) {
+  const { updateAthlete } = useCoachActions();
   const prefs = usePref("tracking");
   const targetColors = usePref("targetColors");
   const prHighlight = useSettings().settings.pr.highlight;
@@ -159,7 +157,7 @@ export function ProgressView({
         run: () => setTrackingPref({ tonnageBy: prefs.tonnageBy === "lift" ? "target" : "lift" }),
       },
       ...bests
-        .filter((b) => !readOnly && b.onFile !== b.e1rm)
+        .filter((b) => b.onFile !== b.e1rm)
         .map(
           (b): Command => ({
             id: `use-1rm-${b.lift}`,
@@ -215,7 +213,7 @@ export function ProgressView({
                   {best.exercise} · {best.weight} {unit} × {best.reps}
                   {best.rpe !== null && ` @ RPE ${best.rpe}`}
                 </div>
-                {!readOnly && best.onFile !== best.e1rm && (
+                {best.onFile !== best.e1rm && (
                   <button
                     type="button"
                     onClick={() => saveAs1rm(best.lift, best.e1rm)}

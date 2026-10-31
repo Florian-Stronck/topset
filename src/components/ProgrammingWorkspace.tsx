@@ -607,6 +607,13 @@ export function ProgrammingWorkspace({
         run: () => router.push(fresh(`/athletes?link=${athlete.id}`)),
       },
       {
+        id: "athlete-phone",
+        group: "Athlete",
+        title: t("Open on your phone…"),
+        keywords: "qr phone mobile coach review chat",
+        run: () => router.push(fresh(`/athletes?phone=${athlete.id}`)),
+      },
+      {
         id: "athlete-example",
         group: "Athlete",
         title: t("Add the example athlete"),

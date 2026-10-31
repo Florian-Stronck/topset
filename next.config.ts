@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Dev only: other devices allowed to load the dev server, e.g. a phone on the same Wi-Fi
+  // (TOPSET_DEV_ORIGINS=192.168.1.20). Without it Next refuses their dev requests.
+  allowedDevOrigins: process.env.TOPSET_DEV_ORIGINS?.split(",").filter(Boolean),
   // Packaged into an Electron app: the build has to carry its own server and
   // dependencies rather than expect a node_modules tree beside it.
   output: "standalone",

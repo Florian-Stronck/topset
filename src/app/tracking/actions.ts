@@ -1,10 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { bodyweightEntry, type BodyweightEntry } from "@/lib/bodyweight";
-import { NUTRIENTS, type Nutrient } from "@/lib/checkins";
-import { cleanInjury, injuryData, type InjuryData, type InjuryInput } from "@/lib/injuries";
-import { cleanAmount, isEmpty, nutritionEntry, nutritionId, type NutritionEntry } from "@/lib/nutrition";
+import type { BodyweightEntry } from "@/lib/bodyweight";
+import type { Nutrient } from "@/lib/checkins";
+import { writeBodyweight, writeInjury, writeNote, writeNutrition } from "@/lib/coach-writes";
+import type { InjuryData, InjuryInput } from "@/lib/injuries";
+import type { NutritionEntry } from "@/lib/nutrition";
 import { today as calendarToday, ymdOf } from "@/lib/dates";
 import { cleanMeeting, meetingData, waitingOn, type MeetingData, type MeetingInput } from "@/lib/meetings";
 import { cleanBody } from "@/lib/messages";
@@ -24,13 +25,9 @@ function refresh() {
 
 export async function addBodyweight(athleteId: string, day: string, weight: number): Promise<BodyweightEntry> {
   assertCoach();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(day))) throw new Error("That day isn't a date.");
-  if (!Number.isFinite(weight) || weight <= 0 || weight > 1000) throw new Error("That weight doesn't look right.");
-  const row = await prisma.bodyweightLog.create({
-    data: { athleteId, day, weight: Number(weight.toFixed(2)), source: "coach" },
-  });
+  const entry = await writeBodyweight(athleteId, day, weight);
   refresh();
-  return bodyweightEntry(row);
+  return entry;
 }
 
 export async function deleteBodyweight(id: string) {
@@ -46,17 +43,9 @@ export async function deleteBodyweight(id: string) {
  */
 export async function saveNutrition(athleteId: string, day: string, values: Partial<Record<Nutrient, unknown>>): Promise<NutritionEntry | null> {
   assertCoach();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(day))) throw new Error("That day isn't a date.");
-  const data = Object.fromEntries(NUTRIENTS.map((n) => [n, cleanAmount(n, values[n])])) as Record<Nutrient, number | null>;
-  const id = nutritionId(athleteId, day);
-  const deletedAt = isEmpty(data) ? new Date() : null;
-  const row = await prisma.nutritionLog.upsert({
-    where: { id },
-    create: { id, athleteId, day, ...data, source: "coach", deletedAt },
-    update: { ...data, source: "coach", deletedAt },
-  });
+  const entry = await writeNutrition(athleteId, day, values);
   refresh();
-  return deletedAt ? null : nutritionEntry(row);
+  return entry;
 }
 
 /*
@@ -83,15 +72,9 @@ export async function sendMessage(
   rowId: string | null = null,
 ): Promise<{ message: MessageData; reviewedAt: string }> {
   assertCoach();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error("That day isn't a date.");
-  const text = cleanBody(body);
-  const now = new Date();
-  const [row] = await prisma.$transaction([
-    prisma.coachMessage.create({ data: { athleteId, day, dayId, rowId, body: text } }),
-    prisma.day.update({ where: { id: dayId }, data: { reviewedAt: now } }),
-  ]);
+  const sent = await writeNote(athleteId, dayId, day, body, rowId);
   refresh();
-  return { message: messageData(row), reviewedAt: now.toISOString() };
+  return sent;
 }
 
 /** A message in the chat, about no session in particular. */
@@ -130,13 +113,10 @@ export async function deleteMessage(id: string) {
 
 export async function saveCoachInjury(athleteId: string, input: InjuryInput): Promise<InjuryData> {
   assertCoach();
-  const data = cleanInjury(input);
-  const row = input.id
-    ? await prisma.injury.update({ where: { id: input.id, athleteId }, data })
-    : await prisma.injury.create({ data: { ...data, athleteId, source: "coach" } });
+  const injury = await writeInjury(athleteId, input);
   refresh();
   revalidatePath("/programming");
-  return injuryData(row);
+  return injury;
 }
 
 export async function deleteCoachInjury(id: string) {
