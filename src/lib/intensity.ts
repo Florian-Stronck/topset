@@ -443,3 +443,54 @@ export function resolveDay(
 
   return resolved;
 }
+
+const NUM = String.raw`(\d+(?:[.,]\d+)?)`;
+const num = (text: string) => Number(text.replace(",", "."));
+
+export type ParsedIntensity = {
+  intensityType?: IntensityType;
+  intensity?: number | null;
+  intensityMax?: number | null;
+  rampStep?: number | null;
+};
+
+/**
+ * What a coach types for intensity, the way a sheet's cell would hold it: "80%", "@8" or
+ * "rpe 8", "2 rir", "100kg", "100-110", "-10%" for a back-off, each with "+2.5" after it
+ * for a ramp. A bare number keeps the kind the row has. Null when it is none of these, or
+ * an RPE or RIR past 10.
+ */
+export function parseIntensity(text: string, kind: IntensityType): ParsedIntensity | null {
+  let s = text.trim().toLowerCase();
+  if (s === "") return { intensity: null };
+  const out: ParsedIntensity = {};
+
+  const ramp = new RegExp(String.raw`^(.*\S)\s*\+\s*${NUM}$`).exec(s);
+  if (ramp) {
+    s = ramp[1];
+    out.rampStep = num(ramp[2]);
+  }
+
+  const forms: [RegExp, IntensityType | null][] = [
+    [new RegExp(String.raw`^${NUM}\s*%$`), "PERCENT"],
+    [new RegExp(String.raw`^[-−]\s*${NUM}\s*%$`), "BACKOFF"],
+    [new RegExp(String.raw`^(?:@|rpe)\s*${NUM}$`), "RPE"],
+    [new RegExp(String.raw`^${NUM}\s*rpe$`), "RPE"],
+    [new RegExp(String.raw`^rir\s*${NUM}$`), "RIR"],
+    [new RegExp(String.raw`^${NUM}\s*rir$`), "RIR"],
+    [new RegExp(String.raw`^${NUM}\s*(?:-|–|—|to)\s*${NUM}\s*(?:kg|lbs?)?$`), "RANGE"],
+    [new RegExp(String.raw`^${NUM}\s*(?:kg|lbs?)$`), "WEIGHT"],
+    [new RegExp(String.raw`^${NUM}$`), null],
+  ];
+  for (const [form, type] of forms) {
+    const m = form.exec(s);
+    if (!m) continue;
+    out.intensity = num(m[1]);
+    if (type) out.intensityType = type;
+    if (type === "RANGE") out.intensityMax = num(m[2]);
+    const is = type ?? kind;
+    if ((is === "RPE" || is === "RIR") && out.intensity > 10) return null;
+    return out;
+  }
+  return null;
+}

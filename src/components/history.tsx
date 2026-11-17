@@ -13,6 +13,8 @@ export type HistoryEntry = {
    * share a key and fold into one step: undo goes back to before the first of them.
    */
   key?: string;
+  /** The id of a row the edit touched: undo and redo scroll it back into view. */
+  at?: string;
 };
 
 export type History = {
@@ -59,8 +61,9 @@ export function HistoryProvider({
   const past = useRef<HistoryEntry[]>([]);
   const future = useRef<HistoryEntry[]>([]);
   const key = useRef(resetKey);
-  // One at a time: two overlapping undos would race their revalidations.
-  const running = useRef(false);
+  // One at a time, in the order asked for: overlapping undos would race their
+  // revalidations, and a held Ctrl+Z must not lose the presses in between.
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
 
   const [labels, setLabels] = useState<{ undo: string | null; redo: string | null }>({
     undo: null,
@@ -111,22 +114,28 @@ export function HistoryProvider({
 
       // Leaving the cell first saves what is in it, so Ctrl+Z takes back the edit that
       // is actually on screen rather than the one before it.
-      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      // It takes the focus straight back, so the keyboard still has a cell to work from.
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement) {
+        focused.blur();
+        focused.focus();
+      }
 
       const source = from === "past" ? past : future;
       const target = from === "past" ? future : past;
 
-      if (running.current || source.current.length === 0) return;
+      if (source.current.length === 0) return;
       const entry = source.current[source.current.length - 1];
 
       source.current = source.current.slice(0, -1);
       target.current = [...target.current, entry];
       publish();
 
-      running.current = true;
-      void Promise.resolve(from === "past" ? entry.undo() : entry.redo()).finally(() => {
-        running.current = false;
-      });
+      if (entry.at) document.querySelector(`[data-row="${entry.at}"]`)?.scrollIntoView({ block: "nearest" });
+      queue.current = queue.current
+        .then(() => (from === "past" ? entry.undo() : entry.redo()))
+        // Still an unhandled rejection, which is what says a save failed; the queue goes on.
+        .catch((error) => void Promise.reject(error));
     },
     [ensureKey, publish],
   );

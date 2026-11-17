@@ -6,7 +6,7 @@ import { after, before, test } from "node:test";
 import Database from "better-sqlite3";
 import { createClient, type Client } from "@libsql/client";
 import { migrateRemote } from "@/lib/cloud";
-import { syncNow } from "@/lib/sync";
+import { finalSync, syncNow } from "@/lib/sync";
 import { applyPush, athleteData, planData, planRev, snapshot } from "@/lib/sync-server";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -169,6 +169,14 @@ test("after a restart, rows the other computer made meanwhile stay, and a delete
 
   await sync(a());
   assert.equal(one(a().db, `SELECT 1 FROM "ExerciseRow" WHERE "id" = 'r1'`), null);
+});
+
+test("an edit made just before closing goes up as the app quits", async () => {
+  switchTo(a());
+  sql(a(), `UPDATE "Week" SET "order" = 7 WHERE "id" = 'w3'`);
+  await finalSync();
+  a().state = g.__topsetSync;
+  assert.deepEqual(await onServer(`SELECT "order" FROM "Week" WHERE "id" = 'w3'`), { order: 7 });
 });
 
 test("both computers edit the same row: the last push wins everywhere", async () => {

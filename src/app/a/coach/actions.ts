@@ -3,6 +3,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
+import { POST as reset } from "@/app/api/coach/reset/route";
 import { createSession, normalizeUsername, sha256, verifyPassword, type SessionCoach } from "@/lib/auth";
 import { cloudPrimary } from "@/lib/cloud";
 import { allowTry, clearTries, slowDown } from "@/lib/coach-api";
@@ -32,21 +33,31 @@ import { today as calendarToday, ymdOf } from "@/lib/dates";
  * the coach's desktop apps pull it by — see `phone-coach.ts`.
  */
 
+/** What a failed attempt hands back: the message, and what was typed that's worth keeping (not passwords). */
+export type Failed = { error: string; username: string; code: string };
+
 /** Username and password in, a session cookie out; then on to the page asked for. */
-export async function signIn(_: string | null, form: FormData): Promise<string | null> {
-  if (!cloudPrimary()) return "Open this on your athlete app's address to sign in.";
-  const username = normalizeUsername(String(form.get("username") ?? ""));
+export async function signIn(_: Failed | null, form: FormData): Promise<Failed | null> {
+  const typed = String(form.get("username") ?? "");
+  const fail = (error: string): Failed => ({ error, username: typed, code: "" });
+  if (!cloudPrimary()) return fail("Open this on your athlete app's address to sign in.");
+  const username = normalizeUsername(typed);
   const password = String(form.get("password") ?? "");
   const key = `login:${username}`;
-  if (!(await allowTry(key))) return "Too many wrong tries. Wait 15 minutes and try again.";
+  if (!(await allowTry(key))) return fail("Too many wrong tries. Wait 15 minutes and try again.");
   const coach = await prisma.coach.findUnique({ where: { username } });
   if (!coach || !(await verifyPassword(password, coach.passwordHash))) {
     await slowDown();
-    return "Wrong username or password.";
+    return fail("Wrong username or password.");
   }
   await clearTries(key);
-  if (coach.disabledAt) return "This account has been turned off. Ask your admin.";
-  const token = await createSession(coach.id);
+  if (coach.disabledAt) return fail("This account has been turned off. Ask your admin.");
+  await startSession(await createSession(coach.id));
+  redirect(landing(form));
+}
+
+/** The cookie that keeps this phone signed in. */
+async function startSession(token: string) {
   (await cookies()).set(PHONE_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -55,8 +66,35 @@ export async function signIn(_: string | null, form: FormData): Promise<string |
     // As long as a browser keeps any cookie: a phone stays signed in like a desktop app.
     maxAge: 400 * 86_400,
   });
+}
+
+/** Where to go once signed in: the page asked for, else Home. */
+function landing(form: FormData) {
   const next = String(form.get("next") ?? "");
-  redirect(next.startsWith("/a/coach") ? next : "/a/coach");
+  return next.startsWith("/a/coach") ? next : "/a/coach";
+}
+
+/**
+ * A forgotten password: the reset code (the admin's, or for the admin the server's setup
+ * code) and a new one. The server's own reset runs, with its checks and lockout, and
+ * every old sign-in ends; this phone is signed in afresh. The admin may leave the
+ * username out.
+ */
+export async function resetPassword(_: Failed | null, form: FormData): Promise<Failed | null> {
+  const fail = (error: string): Failed => ({ error, username: String(form.get("username") ?? ""), code: String(form.get("code") ?? "") });
+  if (!cloudPrimary()) return fail("Open this on your athlete app's address to sign in.");
+  const password = String(form.get("password") ?? "");
+  if (password !== String(form.get("again") ?? "")) return fail("The passwords don't match.");
+  const reply = await reset(
+    new Request("http://topset.local/api/coach/reset", {
+      method: "POST",
+      body: JSON.stringify({ username: String(form.get("username") ?? ""), code: String(form.get("code") ?? ""), password }),
+    }),
+  );
+  const result = (await reply.json().catch(() => null)) as { ok?: boolean; token?: string; error?: string } | null;
+  if (!result?.ok || !result.token) return fail(result?.error ?? "Something went wrong.");
+  await startSession(result.token);
+  redirect(landing(form));
 }
 
 export async function signOut() {
@@ -286,11 +324,22 @@ export async function deleteCoachMeeting(id: string) {
 
 /** The meet's athlete, once the signed-in coach may edit them; their settings round the weights. */
 async function meetFor(meetId: string) {
-  const meet = await prisma.meet.findUnique({ where: { id: meetId }, select: { athleteId: true } });
+  const meet = await prisma.meet.findUnique({ where: { id: meetId }, select: { athleteId: true, competitionId: true, competition: { select: { coachId: true } } } });
   if (!meet) throw new Error("Not found.");
   const coach = await signedInFor([meet.athleteId], "edit");
   await loadSettings(coach.id);
-  return { coach, athleteId: meet.athleteId };
+  // A shared athlete's meet in another coach's competition: their shared fields change on this entry alone.
+  return { coach, athleteId: meet.athleteId, competitionId: meet.competitionId, entryOnly: meet.competition.coachId !== coach.id };
+}
+
+/** After a shared field changed: the competition (when it was written) and every entry touched; a new date moves each athlete's counter. */
+async function logShared(coach: SessionCoach, competitionId: string | null, entries: meets.Entry[], dated: boolean) {
+  await prisma.$transaction([
+    ...(competitionId ? [logPlan(coach, "Competition", [{ id: competitionId, athleteId: null }])] : []),
+    logPlan(coach, "Meet", entries),
+    // The checklist is dated by the meet.
+    ...(dated ? [...new Set(entries.map((e) => e.athleteId))].map(bumpVersion) : []),
+  ]);
 }
 
 async function logMeet(coach: SessionCoach, athleteId: string, meetId: string) {
@@ -303,20 +352,22 @@ async function logMeet(coach: SessionCoach, athleteId: string, meetId: string) {
 
 type Args<F extends (...args: never[]) => unknown> = Parameters<F>;
 
-export async function createMeet(input: Args<typeof meets.createMeet>[0]) {
+export async function createMeet(input: Omit<Args<typeof meets.createMeet>[0], "coachId">) {
   const coach = await signedInFor([input.athleteId], "edit");
   await loadSettings(coach.id);
-  const id = await meets.createMeet(input);
+  if (input.competitionId && !(await prisma.competition.count({ where: { id: input.competitionId, coachId: coach.id } }))) throw new Error("Not found.");
+  const id = await meets.createMeet({ ...input, coachId: coach.id });
+  const { competitionId } = await prisma.meet.findUniqueOrThrow({ where: { id }, select: { competitionId: true } });
+  await logPlan(coach, "Competition", [{ id: competitionId, athleteId: null }]);
   await logMeet(coach, input.athleteId, id);
   return id;
 }
 
 export async function updateMeet(meetId: string, patch: Args<typeof meets.updateMeet>[1]) {
-  const { coach, athleteId } = await meetFor(meetId);
-  await meets.updateMeet(meetId, patch);
-  await logMeet(coach, athleteId, meetId);
-  // The checklist is dated by the meet.
-  if (patch.date) await bumpVersion(athleteId);
+  const { coach, competitionId, entryOnly } = await meetFor(meetId);
+  const entries = await meets.updateMeet(meetId, patch, entryOnly);
+  const shared = meets.SHARED_FIELDS.some((k) => k in patch);
+  await logShared(coach, shared && !entryOnly ? competitionId : null, entries, Boolean(patch.date));
 }
 
 export async function setRack(athleteId: string, brand: string, patch: Args<typeof meets.setRack>[2]) {
@@ -325,10 +376,10 @@ export async function setRack(athleteId: string, brand: string, patch: Args<type
   await logPlan(coach, "Athlete", [{ id: athleteId, athleteId }]);
 }
 
-export async function setReminder(...args: Args<typeof meets.setReminder>) {
-  const { coach, athleteId } = await meetFor(args[0]);
-  await meets.setReminder(...args);
-  await logMeet(coach, athleteId, args[0]);
+export async function setReminder(meetId: string, kind: Args<typeof meets.setReminder>[1], patch: Args<typeof meets.setReminder>[2]) {
+  const { coach, competitionId, entryOnly } = await meetFor(meetId);
+  const entries = await meets.setReminder(meetId, kind, patch, entryOnly);
+  await logShared(coach, entryOnly ? null : competitionId, entries, false);
 }
 
 export async function addTasks(...args: Args<typeof meets.addTasks>) {

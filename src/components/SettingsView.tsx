@@ -469,6 +469,8 @@ function View() {
   const density = usePref("density");
   const columns = usePref("columns");
   const hideRest = usePref("hideRestDays");
+  const wrapNotes = usePref("wrapNotes");
+  const columnWidths = usePref("columnWidths");
   const fontSize = usePref("fontSize");
   const theme = usePref("theme");
   const accent = usePref("accent");
@@ -510,6 +512,19 @@ function View() {
       </Row>
       <Row label="Hide rest days" hint="A strip of the week's days stays on top; click a rest day there to train on it.">
         <Switch on={hideRest} onChange={(v) => setPref("hideRestDays", v)} />
+      </Row>
+      <Row label="Wrap long coach notes" hint="The row grows to show the whole note.">
+        <Switch on={wrapNotes} onChange={(v) => setPref("wrapNotes", v)} />
+      </Row>
+      <Row label="Column widths" hint="Drag the edge of a column's name in the grid to resize it.">
+        <button
+          type="button"
+          disabled={Object.keys(columnWidths).length === 0}
+          onClick={() => resetPref("columnWidths")}
+          className="rounded-md border border-border px-3 py-1 text-[12px] text-muted hover:border-accent hover:text-accent disabled:opacity-40 disabled:hover:border-border disabled:hover:text-muted"
+        >
+          {t("Reset column widths")}
+        </button>
       </Row>
       <Row label="Text size">
         <Select

@@ -63,6 +63,8 @@ export type TaskData = { id: string; text: string; owner: TaskOwner; done: boole
 
 export type MeetData = {
   id: string;
+  /** The competition this is the athlete's entry in. */
+  competitionId: string;
   name: string;
   federation: string | null;
   weightClass: string | null;
@@ -84,6 +86,11 @@ export type MeetData = {
   tasks: TaskData[];
   attempts: AttemptData[];
 };
+
+/** How many lifts have an opener (attempt 1) weighed out: 0–3, 3 is ready. */
+export function openersSet(attempts: Pick<AttemptData, "lift" | "number" | "weight">[]) {
+  return MEET_LIFTS.filter((lift) => attempts.some((a) => a.lift === lift && a.number === 1 && a.weight !== null)).length;
+}
 
 /** What most meets need sorted beforehand, and whose each usually is, for a checklist that starts empty. */
 export const USUAL_TASKS: { text: string; owner: TaskOwner }[] = [

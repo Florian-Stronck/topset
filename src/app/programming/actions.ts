@@ -254,6 +254,67 @@ export async function moveRow(rowId: string, direction: "up" | "down") {
   revalidatePath("/programming");
 }
 
+/** Where rows sit: each by its id, on its day, at its place there. */
+export type Placement = { id: string; dayId: string; order: number }[];
+
+/**
+ * Moves rows to `index` among the other rows of `dayId` — from that day or others — and
+ * closes the gaps they leave. The rows keep their ids, so what the athlete logged on
+ * them comes along. Returns where every row of the days touched sat before, for `placeRows`.
+ */
+export async function moveRowsTo(rowIds: string[], dayId: string, index: number) {
+  assertCoach();
+  const moving = await prisma.exerciseRow.findMany({ where: { id: { in: rowIds } }, select: { dayId: true } });
+  const dayIds = [...new Set([dayId, ...moving.map((r) => r.dayId)])];
+  const rows = await prisma.exerciseRow.findMany({
+    where: { dayId: { in: dayIds } },
+    orderBy: { order: "asc" },
+    select: { id: true, dayId: true, order: true },
+  });
+  const moved = new Set(rowIds);
+  const placement: Placement = [];
+  for (const day of dayIds) {
+    const stay = rows.filter((r) => r.dayId === day && !moved.has(r.id)).map((r) => r.id);
+    // In the order asked for, which is the order they sat in on screen.
+    if (day === dayId) stay.splice(Math.max(0, Math.min(index, stay.length)), 0, ...rowIds.filter((id) => rows.some((r) => r.id === id)));
+    stay.forEach((id, order) => placement.push({ id, dayId: day, order }));
+  }
+  const lost = await placeRows(placement);
+  return { was: rows, lost };
+}
+
+/**
+ * Puts rows on the days and at the places given — how `moveRowsTo` is undone, with the
+ * `lost` it returned. Returns what the athlete had logged in later weeks on rows the sync
+ * took out, as `deleteRow` does.
+ */
+export async function placeRows(placement: Placement, lost: LoggedRow[] = []) {
+  assertCoach();
+  const days = await prisma.day.findMany({
+    where: { id: { in: [...new Set(placement.map((p) => p.dayId))] } },
+    select: { id: true, weekId: true, week: { select: { blockId: true } } },
+  });
+  if (days.length === 0) return [];
+  const blockId = days[0].week.blockId;
+  const logged = await loggedRows(blockId);
+  await prisma.$transaction(async (tx) => {
+    // Park every row below the real slots first: (dayId, order) is unique.
+    for (const [i, p] of placement.entries()) {
+      await tx.exerciseRow.update({ where: { id: p.id }, data: { dayId: p.dayId, order: -1 - i } });
+    }
+    for (const p of placement) await tx.exerciseRow.update({ where: { id: p.id }, data: { order: p.order } });
+  });
+  // Weeks link row to row by day and place, so the rows that moved are joined up again.
+  await relinkChain(blockId);
+  for (const weekId of new Set(days.map((d) => d.weekId))) await syncWeeks(weekId);
+  if (lost.length > 0) await putBackLogged(days[0].id, lost);
+  revalidatePath("/programming");
+  const left = new Set(
+    (await prisma.exerciseRow.findMany({ where: { id: { in: logged.map((r) => r.id) } }, select: { id: true } })).map((r) => r.id),
+  );
+  return logged.filter((r) => !left.has(r.id));
+}
+
 /** Puts a copied prescription on a row, its progression rules included. */
 async function writeTemplate(tx: Tx, rowId: string, template: RowTemplate) {
   const { rules, ...prescription } = template;

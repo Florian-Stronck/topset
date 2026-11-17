@@ -13,6 +13,9 @@ type Parent = { column: string; table: string; optional?: boolean };
 export const SCOPE: { table: string; parents: Parent[] }[] = [
   { table: "Coach", parents: [] },
   { table: "Athlete", parents: [{ column: "coachId", table: "Coach" }] },
+  // Not a parent of Meet: a coach an athlete is shared with keeps their meets without the
+  // owner's competition, and may still edit them.
+  { table: "Competition", parents: [{ column: "coachId", table: "Coach" }] },
   { table: "Program", parents: [{ column: "athleteId", table: "Athlete" }] },
   { table: "BodyweightLog", parents: [{ column: "athleteId", table: "Athlete" }] },
   { table: "CheckinQuestion", parents: [{ column: "athleteId", table: "Athlete" }] },
@@ -76,11 +79,13 @@ export function ownedIdsSql(table: string, shared: boolean | Role = false): stri
 
 /**
  * The joins from `table` (as `t0`) up to its athlete, and the expression for that athlete's
- * id; null for the Coach table, which has none.
+ * id; null for tables hanging straight off the coach (Coach, Competition), which have none.
  */
 export function athleteChain(table: string): { from: string; athlete: string } | null {
   if (table === "Coach") return null;
   if (table === "Athlete") return { from: `"Athlete" t0`, athlete: `t0."id"` };
+  // The coach's own, under no athlete: a competition.
+  if (SCOPE.find((s) => s.table === table)?.parents[0]?.table === "Coach") return null;
   let from = `${quote(table)} t0`;
   let at = table;
   for (let i = 0; ; i++) {

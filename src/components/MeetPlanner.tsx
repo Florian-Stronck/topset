@@ -92,7 +92,7 @@ export function MeetPlanner({
   /** Shared with this coach to view or review: meets switch, nothing changes. */
   readOnly?: boolean;
 }) {
-  const { addUsualTasks, applyResultsAsMaxes, planFromMaxes, setReminder, setThirds, updateAttempt, updateMeet, meetHref } = useCoachActions();
+  const { addUsualTasks, applyResultsAsMaxes, planFromMaxes, setReminder, setThirds, updateAttempt, updateMeet, meetHref, phone } = useCoachActions();
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [creating, setCreating] = useState(false);
@@ -130,6 +130,9 @@ export function MeetPlanner({
         void action();
       });
     const list: Command[] = [
+      ...(meet && !phone
+        ? [{ id: "competition-back", group: "Competition", title: t("Back to competitions"), kind: "place" as const, run: () => router.push(`/competition?comp=${meet.competitionId}`) }]
+        : []),
       {
         id: "meet-new",
         group: "Competition",
@@ -273,7 +276,7 @@ export function MeetPlanner({
       }
     }
     return list;
-  }, [athlete.id, meet, meets, readOnly, router, scoring, tab, update, addUsualTasks, applyResultsAsMaxes, meetHref, planFromMaxes, setReminder, setThirds, updateAttempt, updateMeet]);
+  }, [athlete.id, meet, meets, phone, readOnly, router, scoring, tab, update, addUsualTasks, applyResultsAsMaxes, meetHref, planFromMaxes, setReminder, setThirds, updateAttempt, updateMeet]);
   useCommands("competition", commands);
 
   const unit = athlete.unit === "LB" ? "lb" : "kg";
@@ -282,6 +285,11 @@ export function MeetPlanner({
   return (
     <main className="min-w-0 flex-1 overflow-auto">
       <div style={{ maxWidth: SHELL_MAX_WIDTH }} className="mx-auto w-full px-6 py-7">
+        {meet && !phone && (
+          <Link href={`/competition?comp=${meet.competitionId}`} className="mb-3 inline-block text-[12px] text-muted hover:text-accent">
+            {t("← {name}", { name: meet.name })}
+          </Link>
+        )}
         <nav aria-label={t("Meets")} className="flex flex-wrap items-stretch gap-2">
           {[...upcoming, ...past].map((m) => {
             const on = m.id === meet?.id;

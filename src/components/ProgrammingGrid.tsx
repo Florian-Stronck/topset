@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { flushSync } from "react-dom";
-import type { Tier } from "@prisma/client";
+import type { IntensityType, Tier } from "@prisma/client";
 import {
   addRow,
   addWeek,
@@ -17,7 +17,9 @@ import {
   duplicateRow,
   insertRow,
   moveRow,
+  moveRowsTo,
   pasteRows,
+  placeRows,
   setWeekLock,
   updateBlock,
   updateBlockMaxes,
@@ -39,14 +41,14 @@ import { IntensityAmount, IntensityKind, parseKind } from "@/components/Intensit
 import { ProgressionRules } from "@/components/ProgressionRules";
 import { meetOn, type MeetSummary } from "@/lib/competition";
 import { classifyExercise, isBackoff, resolveAlias } from "@/lib/exercises";
-import { maxesOf, resolveDay } from "@/lib/intensity";
+import { maxesOf, parseIntensity, resolveDay } from "@/lib/intensity";
 import { dayName } from "@/lib/days";
 import { formatDuration, parseDuration } from "@/lib/duration";
 import { parseReps, repsText } from "@/lib/reps";
 import { formatDate, today as calendarToday, weekdayOf, weekdayOfDay, ymdOf } from "@/lib/dates";
 import { weekOn } from "@/lib/schedule";
 import { GRID_MIN_WIDTH, SHELL_MAX_WIDTH } from "@/lib/layout";
-import { colorOfTarget, setPref, tierShade, usePref, togglePref, type Column } from "@/lib/prefs";
+import { colorOfTarget, getPref, resetPref, setPref, tierShade, usePref, togglePref, type Column } from "@/lib/prefs";
 import { activeSettings, TIERS, tierLabel } from "@/lib/settings";
 import { claimsKey } from "@/components/CommandCenter";
 import { useCommands, type Command } from "@/lib/commands";
@@ -78,6 +80,27 @@ const WEEK_COL_LABEL: Record<WeekCol, string> = {
   video: "VIDEO",
   notes: "COACH NOTES",
 };
+
+/** The columns a coach can switch off, as the Columns menu names them. */
+const COLUMN_NAMES: [Column, string][] = [
+  ["progression", "PROGRESSION"],
+  ["time", "TIME"],
+  ["weight", "WEIGHT"],
+  ["tempo", "TEMPO"],
+  ["rest", "REST"],
+  ["video", "VIDEO"],
+  ["notes", "COACH NOTES"],
+];
+
+/** Where find and replace can look: the text a coach writes, by the column it is in. */
+const FIND_FIELDS = [
+  ["exercise", "EXERCISE"],
+  ["target", "TARGET"],
+  ["coachNotes", "COACH NOTES"],
+] as const;
+type FindField = (typeof FIND_FIELDS)[number][0];
+/** What a find looks through: which columns, and this week or every week of the phase. */
+type FindIn = { fields: FindField[]; scope: "week" | "phase" };
 
 /** The prescription field a text column edits. */
 const TEXT_FIELD = { notes: "coachNotes", tempo: "tempo", rest: "restTime", video: "videoUrl" } as const;
@@ -129,9 +152,16 @@ function subscribeDayClip(l: () => void) {
  * The grid's columns for the coach's view settings. The left four are sticky and fixed
  * (PROGRESSION shrinks to nothing when hidden, so the offsets never move); the week
  * absorbs a wide display — INTENSITY a little and COACH NOTES most of it, or all of it
- * in notes when intensity is kept beside reps.
+ * in notes when intensity is kept beside reps. A width the coach dragged a column to
+ * (`widths`, by column key) replaces its own.
  */
-function gridLayout(columns: Record<Column, boolean>, tight: boolean, timed: boolean) {
+function gridLayout(
+  columns: Record<Column, boolean>,
+  tight: boolean,
+  timed: boolean,
+  autoExW: number,
+  widths: Record<string, number>,
+) {
   // TIME shows when switched on, or on its own once any row of the phase is timed.
   const cols: WeekCol[] = ["sets", "reps", ...(columns.time || timed ? (["time"] as const) : []), "kind", "intensity"];
   if (columns.weight) cols.push("load");
@@ -155,13 +185,22 @@ function gridLayout(columns: Record<Column, boolean>, tight: boolean, timed: boo
     notes: tight ? "minmax(202px,1fr)" : "minmax(236px,2fr)",
   };
   if (!columns.notes && !tight) width.intensity = "minmax(144px,1fr)";
+  for (const c of cols) if (widths[c]) width[c] = `${widths[c]}px`;
 
-  const progression = columns.progression ? 164 : 0;
+  const targetW = widths.target ?? 128;
+  const exW = widths.exercise ?? autoExW;
+  const exLeft = 40 + targetW;
+  const progression = columns.progression ? (widths.progression ?? 164) : 0;
   return {
     cols,
     showProgression: columns.progression,
-    leftWidth: 336 + progression,
-    template: `40px 128px 168px ${progression}px ${cols.map((c) => width[c]).join(" ")}`,
+    leftWidth: exLeft + exW + progression,
+    /** TARGET's width; EXERCISE's, where it starts, and where the column after it starts. */
+    targetW,
+    exW,
+    exLeft,
+    progLeft: exLeft + exW,
+    template: `40px ${targetW}px ${exW}px ${progression}px ${cols.map((c) => width[c]).join(" ")}`,
     /** Keyboard columns: target, exercise, PROGRESSION when it shows, then the week's. */
     navKeys: ["target", "exercise", ...(columns.progression ? (["progression"] as const) : []), ...cols] as NavKey[],
     /** The keyboard column the week's first cell is. */
@@ -170,8 +209,48 @@ function gridLayout(columns: Record<Column, boolean>, tight: boolean, timed: boo
 }
 
 
+/**
+ * What text typed or pasted into a column means for its row, read the way a sheet's cell
+ * would hold it: "3x5" in SETS or REPS is both, "80%" or "@8" in INTENSITY brings its kind,
+ * a weight may carry its unit. Null when the column can't take the text.
+ */
+function parseCell(col: NavKey, text: string, kind: IntensityType): Partial<RowTemplate> | null {
+  const s = text.trim();
+  if (col === "target") return { target: s || "General" };
+  if (col === "exercise") return { exercise: s };
+  if (col === "progression") return null;
+  if (col === "kind") {
+    // A kind is only ever replaced, never cleared.
+    if (s === "") return {};
+    const parsed = parseKind(s);
+    return parsed ? { intensityType: parsed } : null;
+  }
+  if (col === "notes" || col === "tempo" || col === "rest" || col === "video") {
+    return { [TEXT_FIELD[col]]: s || null } as Partial<RowTemplate>;
+  }
+  if (col === "sets" || col === "reps") {
+    const both = /^(\d{1,2})\s*[x×*]\s*(.+)$/i.exec(s);
+    if (both) {
+      const reps = parseReps(both[2]);
+      return reps && reps.reps !== null ? { sets: Number(both[1]), ...reps } : null;
+    }
+    if (col === "reps") return parseReps(s);
+  }
+  if (col === "time") {
+    const duration = parseDuration(s);
+    return duration === null && s !== "" ? null : { duration };
+  }
+  if (col === "intensity") return parseIntensity(s, kind);
+  if (s === "") return { [col]: null };
+  const n = /^(-?\d+(?:[.,]\d+)?)\s*(?:kg|lbs?)?$/i.exec(s);
+  return n ? { [col]: Number(n[1].replace(",", ".")) } : null;
+}
+
 /** One cell to write: its slot, column and text — and, for a fill, the row it is filled from. */
 type CellWrite = { r: number; c: number; text: string; from?: number };
+
+/** A row to write, by its id, and all that goes on it. */
+type Templated = { id: string; template: RowTemplate };
 
 /** A cell's nav coordinates: its row slot and its column. */
 type Coord = [number, number];
@@ -222,7 +301,10 @@ function pastedLocally(
   };
 }
 
-function rectOf(a: Coord, b: Coord) {
+/** A block of cells, by its corners. */
+type Box = { r1: number; r2: number; c1: number; c2: number };
+
+function rectOf(a: Coord, b: Coord): Box {
   return {
     r1: Math.min(a[0], b[0]),
     r2: Math.max(a[0], b[0]),
@@ -308,13 +390,41 @@ export function ProgrammingGrid({
   const pickDay = (day: DayData, label: string, move: boolean) =>
     setDayClip({ id: day.id, label, move, dayLabel: day.label, rows: day.rows.filter((r) => !isBlank(r)).map(rowTemplate) });
 
-  /** Runs an edit and records how to take it back. */
-  function edit(label: string, run: () => Promise<unknown>, undo: () => Promise<unknown>, key?: string) {
-    history.push({ label, undo, redo: run, key });
-    startTransition(() => {
-      void run();
+  /** Saves on their way to the server, for the "Saving…" in the status line. */
+  const [saving, setSaving] = useState(0);
+  const [saved, setSaved] = useState(false);
+  function track<T>(work: Promise<T>): Promise<T> {
+    setSaving((n) => n + 1);
+    return work.finally(() => {
+      setSaving((n) => n - 1);
+      setSaved(true);
     });
   }
+
+  /** A line in the status bar that goes away by itself: what a paste could not read, say. */
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  function notify(text: string) {
+    setNotice(text);
+    clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(null), 6000);
+  }
+
+  /** Runs an edit and records how to take it back. `at` is a row it touched, for undo to scroll to. */
+  function edit(label: string, run: () => Promise<unknown>, undo: () => Promise<unknown>, key?: string, at?: string) {
+    history.push({ label, undo: () => track(undo()), redo: () => track(run()), key, at });
+    startTransition(() => {
+      void track(run());
+    });
+  }
+
+  /** The block last copied, framed until the next edit or Escape — and the week it is in. */
+  const [copied, setCopied] = useState<{ week: number; box: Box } | null>(null);
+  /** Find and replace: whether its bar is up, and the cell the last "next" landed on. */
+  const [finding, setFinding] = useState(false);
+  const [found, setFound] = useState<Coord | null>(null);
+  /** The column a run of Tabs started in: Enter comes back to it on the next row. */
+  const tabCol = useRef<number | null>(null);
 
   /** The row whose × has had one click: the second deletes it. */
   const [armed, setArmed] = useState<string | null>(null);
@@ -398,7 +508,17 @@ export function ProgrammingGrid({
   const hideRestDays = usePref("hideRestDays");
   const { tiers, targets } = useSettings().settings;
   const timed = useMemo(() => block.weeks.some((w) => w.days.some((d) => d.rows.some((r) => r.duration !== null))), [block]);
-  const layout = useMemo(() => gridLayout(columns, tightIntensity, timed), [columns, tightIntensity, timed]);
+  // EXERCISE is as wide as the week's longest name, within reason, so none is cut short.
+  const exW = useMemo(() => {
+    const longest = Math.max(0, ...days.flatMap((d) => d.rows.map((r) => r.exercise.length)));
+    return Math.min(300, Math.max(168, longest * 7 + 24));
+  }, [days]);
+  const columnWidths = usePref("columnWidths");
+  const wrapNotes = usePref("wrapNotes");
+  const layout = useMemo(
+    () => gridLayout(columns, tightIntensity, timed, exW, columnWidths),
+    [columns, tightIntensity, timed, exW, columnWidths],
+  );
   const { template, cols, navKeys } = layout;
   const NAV_COLS = navKeys.length;
 
@@ -414,46 +534,80 @@ export function ProgrammingGrid({
   /** Whole rows are selected, as clicking the row numbers does. */
   const wholeRows = rect !== null && rect.c1 === 0 && rect.c2 === NAV_COLS - 1;
   /** A drag of the fill handle: the block it started from, and the row it has reached. */
-  const fillFrom = useRef<ReturnType<typeof rectOf> | null>(null);
+  const fillFrom = useRef<Box | null>(null);
   const [fillTo, setFillTo] = useState<number | null>(null);
   const fillHandle = useRef<HTMLDivElement>(null);
-
+  /** The frames round the selection and round what was copied. */
+  const selFrame = useRef<HTMLDivElement>(null);
+  const copyFrame = useRef<HTMLDivElement>(null);
   // Painted on the DOM rather than threaded through six cell call sites, the same way
-  // the rest of this grid reaches cells by their nav coordinates.
+  // the rest of this grid reaches cells by their nav coordinates. Run again on a sideways
+  // scroll too: the sticky columns move under the frames without a render.
+  const paint = useRef(() => {});
   useEffect(() => {
+  paint.current = () => {
     const root = gridRef.current;
     if (!root) return;
+    // A cell's whole box — TARGET's holds its tier badge beside the text that is its nav cell.
+    const cellAt = (r: number, c: number) => {
+      const el = root.querySelector<HTMLElement>(`[data-nav="${r}-${c}"]`);
+      return el?.closest<HTMLElement>('[role="gridcell"]') ?? el;
+    };
     for (const el of root.querySelectorAll<HTMLElement>("[data-nav]")) {
       const [r, c] = el.dataset.nav!.split("-").map(Number);
-      // Whole rows are painted as rows, below; a cell only for a block of cells.
-      const on =
-        spans && !wholeRows && rect !== null && r >= rect.r1 && r <= rect.r2 && c >= rect.c1 && c <= rect.c2;
-      const filling =
-        fillTo !== null && rect !== null && r > rect.r2 && r <= fillTo && c >= rect.c1 && c <= rect.c2;
-      el.classList.toggle("bg-accent-soft", on || filling);
+      el.classList.toggle("bg-accent-soft", found !== null && found[0] === r && found[1] === c);
     }
+    const g = root.getBoundingClientRect();
+    /** Lays a frame round a block of cells — whole rows edge to edge — or puts it away. */
+    const frame = (el: HTMLElement | null, box: Box | null) => {
+      if (!el) return;
+      const whole = box !== null && box.c1 === 0 && box.c2 === NAV_COLS - 1;
+      const first = box && (whole ? root.querySelector<HTMLElement>(`[data-slot="${box.r1}"]`) : cellAt(box.r1, box.c1));
+      const last = box && (whole ? root.querySelector<HTMLElement>(`[data-slot="${box.r2}"]`) : cellAt(box.r2, box.c2));
+      const a = first?.getBoundingClientRect();
+      const b = last?.getBoundingClientRect();
+      el.classList.toggle("hidden", !a || !b);
+      if (!a || !b) return;
+      el.style.left = `${a.left - g.left}px`;
+      el.style.top = `${a.top - g.top}px`;
+      el.style.width = `${b.right - a.left}px`;
+      el.style.height = `${b.bottom - a.top}px`;
+    };
+    // The selection, stretched over the rows a fill handle has been dragged across.
+    const shown =
+      rect && fillTo !== null ? { ...rect, r1: Math.min(rect.r1, fillTo), r2: Math.max(rect.r2, fillTo) } : rect;
+    frame(selFrame.current, spans || fillTo !== null ? shown : null);
+    frame(copyFrame.current, copied?.week === activeWeek ? copied.box : null);
+    // The active cell keeps its own focus ring only while it is the whole selection.
+    root.toggleAttribute("data-range", spans);
     // The fill handle sits on the corner of the selection, or of where a fill has dragged it.
     const handle = fillHandle.current;
     if (handle) {
-      const corner =
-        rect && !readOnly ? root.querySelector<HTMLElement>(`[data-nav="${fillTo ?? rect.r2}-${rect.c2}"]`) : null;
+      // Whole rows move by their grip and copy whole: no fill handle on them.
+      const corner = shown && !readOnly && !wholeRows ? cellAt(shown.r2, shown.c2) : null;
       handle.classList.toggle("hidden", !corner);
       if (corner) {
-        const g = root.getBoundingClientRect();
         const b = corner.getBoundingClientRect();
-        handle.style.left = `${b.right - g.left - 4}px`;
-        handle.style.top = `${b.bottom - g.top - 4}px`;
+        handle.style.left = `${b.right - g.left - 5}px`;
+        handle.style.top = `${b.bottom - g.top - 5}px`;
       }
     }
-    for (const el of root.querySelectorAll<HTMLElement>("[data-slot]")) {
-      const r = Number(el.dataset.slot);
-      el.classList.toggle("row-picked", wholeRows && rect !== null && r >= rect.r1 && r <= rect.r2);
+    // The row numbers and column names of the selection light up, as a sheet's headers do.
+    for (const el of root.querySelectorAll<HTMLElement>("[data-row-head]")) {
+      const r = Number(el.dataset.rowHead);
+      el.classList.toggle("text-accent", rect !== null && r >= rect.r1 && r <= rect.r2);
     }
+    for (const el of root.querySelectorAll<HTMLElement>("[data-col-head]")) {
+      const c = Number(el.dataset.colHead);
+      el.classList.toggle("text-accent", rect !== null && c >= rect.c1 && c <= rect.c2);
+    }
+  };
+  paint.current();
   });
 
   useEffect(() => {
     function stop() {
-      latestEndFill.current();
+      latestEndDrag.current();
       anchor.current = null;
       rowAnchor.current = null;
       setDragging(false);
@@ -486,6 +640,9 @@ export function ProgrammingGrid({
     }
     const at = coordOf(e.target);
     if (!at) return;
+    tabCol.current = null;
+    // A right-click inside the selection keeps it: its menu is about those cells.
+    if (e.button === 2 && rect && spans && at[0] >= rect.r1 && at[0] <= rect.r2 && at[1] >= rect.c1 && at[1] <= rect.c2) return;
     if (e.shiftKey && sel) {
       e.preventDefault();
       setSel({ a: sel.a, b: at });
@@ -493,7 +650,14 @@ export function ProgrammingGrid({
     }
     // A click selects the cell, as in a sheet: the text is not to be dragged across or
     // put a caret in until a double-click or F2 starts editing it.
-    const input = e.target instanceof HTMLInputElement ? e.target : null;
+    // Anywhere in the cell counts — its padding, TARGET's badge column — but a button is its own.
+    const el = e.target as HTMLElement;
+    const input =
+      el instanceof HTMLInputElement
+        ? el
+        : !el.closest("button")
+          ? (el.closest<HTMLElement>("[data-nav]")?.querySelector("input") ?? null)
+          : null;
     if (input && !("editing" in input.dataset) && e.button === 0) {
       e.preventDefault();
       input.focus();
@@ -505,25 +669,31 @@ export function ProgrammingGrid({
     setSel({ a: at, b: at });
   }
 
-  /** Copies the block the fill handle was dragged from down over the rows it reached, repeating. */
+  /** Repeats a block of cells over the rows from its edge to `to` — below it, or above. */
+  function fillRows(box: Box, to: number) {
+    if (to >= box.r1 && to <= box.r2) return;
+    const height = box.r2 - box.r1 + 1;
+    const [lo, hi] = to > box.r2 ? [box.r2 + 1, to] : [to, box.r1 - 1];
+    const writes: CellWrite[] = [];
+    for (let r = lo; r <= hi; r++) {
+      const from = box.r1 + ((((r - box.r1) % height) + height) % height);
+      for (let c = box.c1; c <= box.c2; c++) writes.push({ r, c, text: readCell(from, c), from });
+    }
+    writeCells("fill down", writes);
+    setSel({ a: [Math.min(box.r1, to), box.c1], b: [Math.max(box.r2, to), box.c2] });
+  }
+
+  /** Ends a drag of the fill handle: the block it started from goes over the rows it reached. */
   function endFill() {
     const box = fillFrom.current;
     fillFrom.current = null;
     if (!box) return;
     setFillTo(null);
-    if (fillTo === null || fillTo <= box.r2) return;
-    const height = box.r2 - box.r1 + 1;
-    const writes: CellWrite[] = [];
-    for (let r = box.r2 + 1; r <= fillTo; r++) {
-      const from = box.r1 + ((r - box.r1) % height);
-      for (let c = box.c1; c <= box.c2; c++) writes.push({ r, c, text: readCell(from, c), from });
-    }
-    writeCells("fill down", writes);
-    setSel({ a: [box.r1, box.c1], b: [fillTo, box.c2] });
+    if (fillTo !== null) fillRows(box, fillTo);
   }
-  const latestEndFill = useRef(endFill);
+  const latestEndDrag = useRef(endFill);
   useEffect(() => {
-    latestEndFill.current = endFill;
+    latestEndDrag.current = endFill;
   });
 
   function onFillHandleDown(e: React.MouseEvent) {
@@ -536,11 +706,32 @@ export function ProgrammingGrid({
     setDragging(true);
   }
 
+  /** A double-click on the fill handle fills to the end of the day, as a sheet fills to the end of its data. */
+  function onFillHandleDouble(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!rect) return;
+    const day = nav.slots.get(rect.r2)?.day.id;
+    let to = rect.r2;
+    while (nav.slots.get(to + 1)?.row && nav.slots.get(to + 1)?.day.id === day) to++;
+    fillRows(rect, to);
+  }
+
+  /** A drag held near the top or bottom edge scrolls the sheet along with it. */
+  function onGridMouseMove(e: React.MouseEvent) {
+    if (e.buttons !== 1 || !(anchor.current || rowAnchor.current !== null || fillFrom.current)) return;
+    const scroller = gridRef.current?.parentElement;
+    if (!scroller) return;
+    const edge = scroller.getBoundingClientRect();
+    // ponytail: scrolls only while the mouse moves; a timer if holding still at the edge matters.
+    if (e.clientY > edge.bottom - 40) scroller.scrollTop += 18;
+    else if (e.clientY < edge.top + 90) scroller.scrollTop -= 18;
+  }
+
   function onGridMouseOver(e: React.MouseEvent) {
     const box = fillFrom.current;
     if (box && e.buttons === 1) {
       const at = coordOf(e.target);
-      if (at) setFillTo(Math.max(at[0], box.r2));
+      if (at) setFillTo(at[0]);
       return;
     }
     const fromRow = rowAnchor.current;
@@ -572,117 +763,102 @@ export function ProgrammingGrid({
     if (input && !input.readOnly && coordOf(input)) startEditing(input);
   }
 
-  /** What a cell shows right now, read off the DOM so it includes uncommitted typing. */
-  function readCell(r: number, c: number) {
+  /**
+   * What a cell holds right now, read off the DOM so it includes uncommitted typing. With
+   * `shown`, what it reads as on screen instead: both ends of a range, and a weight that
+   * is only worked out — for copying out, where a blank would be a lie.
+   */
+  function readCell(r: number, c: number, shown = false) {
     const el = gridRef.current?.querySelector<HTMLElement>(`[data-nav="${r}-${c}"]`);
     if (navKeys[c] === "progression") {
       return [...(el?.querySelectorAll("[data-rule]") ?? [])].map((s) => s.textContent).join(", ");
     }
-    const input = el?.querySelector("input");
-    return (input?.value ?? el?.textContent ?? "").trim();
+    const inputs = [...(el?.querySelectorAll("input") ?? [])];
+    if (inputs.length === 0) return (el?.textContent ?? "").trim();
+    if (!shown) return inputs[0].value.trim();
+    const text = inputs.map((i) => i.value.trim()).filter(Boolean).join("-");
+    const hint = inputs[0].placeholder;
+    return text || (navKeys[c] === "load" && hint !== "—" ? hint : "");
   }
 
   /**
-   * Writes a block of cells as one undoable edit. Columns 0 and 1 belong to the row
-   * itself; the rest are PROGRESSION (skipped) and this week's prescription.
+   * Writes a block of cells as one undoable edit. TARGET and EXERCISE belong to the row
+   * itself; the rest are PROGRESSION (skipped) and this week's prescription. Text a
+   * column can't take is left out, and said so.
    */
   function writeCells(label: string, writes: CellWrite[]) {
-    const rowPatches = new Map<string, { next: Partial<RowData>; prev: Partial<RowData> }>();
-    const cellPatches = new Map<string, { next: Partial<Prescription>; prev: Partial<Prescription> }>();
+    type Patch = { next: Record<string, unknown>; prev: Record<string, unknown> };
+    const rowPatches = new Map<string, Patch>();
+    const cellPatches = new Map<string, Patch>();
+    let dropped = 0;
 
     for (const { r, c, text, from } of writes) {
       const row = nav.slots.get(r)?.row;
-      if (!row) continue;
-
       const col = navKeys[c];
-      if (col === "target" || col === "exercise") {
-        const key = col;
-        const entry = rowPatches.get(row.id) ?? { next: {}, prev: {} };
-        // A cleared TARGET falls back as it does when typed away in the cell.
-        entry.next[key] = key === "target" ? text || "General" : text;
-        entry.prev[key] = row[key];
-        rowPatches.set(row.id, entry);
+      // Rules only travel with copied rows; typed or cleared text can't make one.
+      if (!row || col === undefined || col === "progression") continue;
+
+      const map = col === "target" || col === "exercise" ? rowPatches : cellPatches;
+      const entry = map.get(row.id) ?? { next: {}, prev: {} };
+      // A kind written earlier in the same block is the one a bare number is read against.
+      const kind = (cellPatches.get(row.id)?.next.intensityType as IntensityType | undefined) ?? row.intensityType;
+      const parsed: Record<string, unknown> | null = parseCell(col, text, kind);
+      if (!parsed) {
+        dropped++;
         continue;
       }
 
-      // Rules only travel with copied rows; typed or cleared text can't make one.
-      if (col === undefined || col === "progression") continue;
-      const entry = cellPatches.get(row.id) ?? { next: {}, prev: {} };
       const source = from === undefined ? undefined : nav.slots.get(from)?.row;
-
-      if (col === "kind") {
-        // A kind is only ever replaced, never cleared; filled from a row, its ramp comes too.
-        const kind = parseKind(text);
-        if (!kind) continue;
-        entry.next.intensityType = kind;
-        entry.prev.intensityType = row.intensityType;
-        if (source) {
-          entry.next.rampStep = source.rampStep;
-          entry.prev.rampStep = row.rampStep;
-        }
-      } else if (col === "notes" || col === "tempo" || col === "rest" || col === "video") {
-        const field = TEXT_FIELD[col];
-        entry.next[field] = text || null;
-        entry.prev[field] = row[field] ?? null;
-      } else if (col === "reps") {
-        const reps = parseReps(text);
-        if (!reps) continue;
-        entry.next.reps = reps.reps;
-        entry.next.repsMax = reps.repsMax;
-        entry.prev.reps = row.reps;
-        entry.prev.repsMax = row.repsMax ?? null;
-      } else if (col === "time") {
-        const seconds = parseDuration(text);
-        if (seconds === null && text !== "") continue;
-        entry.next.duration = seconds;
-        entry.prev.duration = row.duration ?? null;
-      } else {
-        const key = col;
-        const n = text === "" ? null : Number(text.replace(",", "."));
-        if (n !== null && !Number.isFinite(n)) continue;
-        entry.next[key] = n;
-        entry.prev[key] = row[key] ?? null;
-        // Filled from another row, intensity brings a range's top too — its kind is the
-        // next cell over and stays. The top is read off the DOM like the number, so one
-        // just typed and not yet in state comes along.
-        if (col === "intensity" && source) {
-          const max = gridRef.current
-            ?.querySelectorAll<HTMLInputElement>(`[data-nav="${from}-${c}"] input`)[1]
-            ?.value.trim();
-          entry.next.intensityMax =
-            max === undefined ? source.intensityMax : max === "" ? null : Number(max.replace(",", "."));
-          entry.prev.intensityMax = row.intensityMax;
-        }
+      // Filled from a row, a kind brings its ramp.
+      if (source && col === "kind" && parsed.intensityType) parsed.rampStep = source.rampStep;
+      // And intensity a range's top — its kind is the next cell over and stays. The top is
+      // read off the DOM like the number, so one just typed and not yet in state comes along.
+      if (source && col === "intensity") {
+        const max = gridRef.current
+          ?.querySelectorAll<HTMLInputElement>(`[data-nav="${from}-${c}"] input`)[1]
+          ?.value.trim();
+        parsed.intensityMax =
+          max === undefined ? source.intensityMax : max === "" ? null : Number(max.replace(",", "."));
       }
-      cellPatches.set(row.id, entry);
+
+      for (const [key, value] of Object.entries(parsed)) {
+        if (!(key in entry.prev)) entry.prev[key] = (row as unknown as Record<string, unknown>)[key] ?? null;
+        entry.next[key] = value;
+      }
+      if (Object.keys(entry.next).length > 0) map.set(row.id, entry);
     }
 
+    if (dropped > 0) notify(t("{n} cells could not take what was put in them", { n: dropped }));
     if (rowPatches.size === 0 && cellPatches.size === 0) return;
+    setCopied(null);
 
     const apply = (pick: "next" | "prev") => {
       setBlock((b) =>
         mapRows(b, (r) => {
           const rowPatch = rowPatches.get(r.id)?.[pick];
           const cellPatch = cellPatches.get(r.id)?.[pick];
-          return rowPatch || cellPatch ? { ...r, ...rowPatch, ...cellPatch } : r;
+          return rowPatch || cellPatch ? ({ ...r, ...rowPatch, ...cellPatch } as RowData) : r;
         }),
       );
 
-      return Promise.all([
-        ...[...rowPatches].map(([id, p]) => updateRow(id, p[pick])),
-        ...[...cellPatches].map(([id, p]) => updateCell(id, p[pick])),
-      ]);
+      return track(
+        Promise.all([
+          ...[...rowPatches].map(([id, p]) => updateRow(id, p[pick] as Parameters<typeof updateRow>[1])),
+          ...[...cellPatches].map(([id, p]) => updateCell(id, p[pick] as Partial<Prescription>)),
+        ]),
+      );
     };
 
-    apply("next");
-    history.push({ label, undo: () => apply("prev"), redo: () => apply("next") });
+    void apply("next");
+    const at = [...rowPatches.keys(), ...cellPatches.keys()][0];
+    history.push({ label, undo: () => apply("prev"), redo: () => apply("next"), at });
   }
 
   /**
    * Copies a block of cells: as tab-separated text for other programs, and as the rows
    * themselves for pasting back in here. Returns the text.
    */
-  function copyCells(box: { r1: number; r2: number; c1: number; c2: number }): string {
+  function copyCells(box: Box): string {
     const lines: string[] = [];
     const rows: RowTemplate[] = [];
     const whole = box.c1 === 0 && box.c2 === NAV_COLS - 1;
@@ -691,13 +867,14 @@ export function ProgrammingGrid({
       // Whole rows leave out the unnamed ones: a day only ever has one, at its end.
       if (!row || (whole && isBlank(row))) continue;
       const cols: string[] = [];
-      for (let c = box.c1; c <= box.c2; c++) cols.push(readCell(r, c));
+      for (let c = box.c1; c <= box.c2; c++) cols.push(readCell(r, c, true));
       lines.push(cols.join("\t"));
       rows.push(rowTemplate(row));
     }
     const text = lines.join("\n");
     if (rows.length > 0) {
       setClipboard({ rows, cols: whole ? null : (navKeys.slice(box.c1, box.c2 + 1) as NavKey[]), text });
+      setCopied({ week: activeWeek, box });
     }
     return text;
   }
@@ -722,43 +899,136 @@ export function ProgrammingGrid({
     e.clipboardData.setData("text/plain", copyCells(box));
   }
 
+  /** The rows of a block that are really there, for deleting them. */
+  function rowsIn(box: Box) {
+    const picked: { row: RowData; dayId: string }[] = [];
+    for (let r = box.r1; r <= box.r2; r++) {
+      const slot = nav.slots.get(r);
+      if (slot?.row && !isBlank(slot.row)) picked.push({ row: slot.row, dayId: slot.day.id });
+    }
+    return picked;
+  }
+
+  /** Empties a block of cells — or, when it is whole rows, takes the rows out. */
+  function clearBox(box: Box, label: string) {
+    if (box.c1 === 0 && box.c2 === NAV_COLS - 1) {
+      setSel(null);
+      deleteRows(rowsIn(box));
+      return;
+    }
+    const writes: CellWrite[] = [];
+    for (let r = box.r1; r <= box.r2; r++) for (let c = box.c1; c <= box.c2; c++) writes.push({ r, c, text: "" });
+    writeCells(label, writes);
+  }
+
   /** A cut of a block copies it and then empties its cells; one cell's text is the browser's. */
   function onGridCut(e: ClipboardEvent) {
     if (!ours() || !e.clipboardData || !spans || !rect) return;
     onGridCopy(e);
-    const writes: CellWrite[] = [];
-    for (let r = rect.r1; r <= rect.r2; r++)
-      for (let c = rect.c1; c <= rect.c2; c++) writes.push({ r, c, text: "" });
-    writeCells("cut", writes);
+    clearBox(rect, "cut");
   }
 
   function onGridPaste(e: ClipboardEvent) {
     if (!ours() || !e.clipboardData) return;
     const text = e.clipboardData.getData("text/plain");
-    // A single value is the browser's business — only a grid of them is ours, or a cell
-    // the browser has nowhere to paste into.
+    // A single value into one cell is the browser's business — ours is a grid of values,
+    // one value onto a selected block, or a cell the browser has nowhere to paste into.
     const one = buttonCell();
-    if (!text || (!/[\t\n]/.test(text) && !one)) return;
+    const block = spans && !editingText(document.activeElement);
+    if (!text || (!/[\t\n]/.test(text) && !one && !block)) return;
 
-    const start = spans && rect ? [rect.r1, rect.c1] : (one ?? (rect ? [rect.r1, rect.c1] : coordOf(document.activeElement)));
+    const start = spans && rect ? ([rect.r1, rect.c1] as Coord) : (one ?? (rect ? ([rect.r1, rect.c1] as Coord) : coordOf(document.activeElement)));
     if (!start) return;
     e.preventDefault();
+    pasteText(text, start);
+  }
 
-    // Rows copied out of this grid come back whole, not as the text they showed.
+  /**
+   * Pastes clipboard text at a cell. Rows copied out of this grid come back whole; one
+   * value fills the selection; a grid of values — a block out of a sheet — is written
+   * down the day from there, making the rows it needs rather than running into the next
+   * day, and reading each cell the way it is written ("3x5", "80%", "@8").
+   */
+  function pasteText(raw: string, start: Coord) {
+    const text = raw.replace(/\r/g, "").replace(/\n$/, "");
     const clip = rowClip;
-    if (clip && clip.text === text.replace(/\r/g, "").replace(/\n$/, "")) {
+    if (clip && clip.text === text) {
       if (clip.cols === null) return pasteClip(clip, start[0]);
       if (navKeys[start[1]] === clip.cols[0]) return pasteClip(clip, start[0]);
     }
 
-    const writes: CellWrite[] = [];
-    text.replace(/\r/g, "").replace(/\n$/, "").split("\n").forEach((line, dr) => {
-      line.split("\t").forEach((value, dc) => {
-        const c = start[1] + dc;
-        if (c < NAV_COLS) writes.push({ r: start[0] + dr, c, text: value.trim() });
+    if (!/[\t\n]/.test(text)) {
+      const box = spans && rect ? rect : { r1: start[0], r2: start[0], c1: start[1], c2: start[1] };
+      const writes: CellWrite[] = [];
+      for (let r = box.r1; r <= box.r2; r++) for (let c = box.c1; c <= box.c2; c++) writes.push({ r, c, text });
+      return writeCells("paste", writes);
+    }
+
+    const slot = nav.slots.get(start[0]);
+    if (!slot) return;
+    const { day } = slot;
+    const first = slot.row ? day.rows.indexOf(slot.row) : day.rows.length;
+    const { newRow } = activeSettings();
+    const update: Templated[] = [];
+    const before: Templated[] = [];
+    const create: Templated[] = [];
+    let dropped = 0;
+    let width = 1;
+
+    text.split("\n").forEach((line, i) => {
+      const target = day.rows[first + i];
+      const template = rowTemplate(target ?? blankRow("", day));
+      const values = line.split("\t");
+      width = Math.max(width, values.length);
+      let named = false;
+      let sorted = false;
+      const written = new Set<string>();
+      values.forEach((value, dc) => {
+        const col = navKeys[start[1] + dc];
+        if (col === undefined || col === "progression") return;
+        const parsed = parseCell(col, value, template.intensityType);
+        if (!parsed) return void dropped++;
+        // An empty cell clears its own field, but not one a cell before it wrote: the
+        // blank REPS beside a "4x6" in SETS.
+        if (value.trim() === "") for (const key of Object.keys(parsed)) if (written.has(key)) delete (parsed as Record<string, unknown>)[key];
+        Object.assign(template, parsed);
+        if (value.trim() !== "") {
+          for (const key of Object.keys(parsed)) written.add(key);
+          named ||= col === "exercise";
+          sorted ||= col === "target";
+        }
       });
+      // A name brings its target and tier, as typing it would, unless the paste or the coach set them.
+      if (named) {
+        template.exercise = resolveAlias(template.exercise);
+        const untouched = !target || (target.target === newRow.target && target.tier === newRow.tier);
+        if (!sorted && untouched) Object.assign(template, classifyExercise(template.exercise));
+      }
+      if (target) {
+        update.push({ id: target.id, template });
+        before.push({ id: target.id, template: rowTemplate(target) });
+      } else if (template.exercise.trim() !== "") {
+        create.push({ id: crypto.randomUUID(), template });
+      } else {
+        // Past the day's last row with no exercise to name a new one: nowhere to go.
+        dropped += values.filter((v) => v.trim() !== "").length;
+      }
     });
-    writeCells("paste", writes);
+
+    if (dropped > 0) notify(t("{n} cells could not take what was put in them", { n: dropped }));
+    if (!commitPaste("paste", day.id, update, before, create)) return;
+    const last = start[0] + update.length + create.length - 1;
+    setSel({ a: start, b: [last, Math.min(NAV_COLS - 1, start[1] + width - 1)] });
+  }
+
+  /** Reads the system clipboard for a paste from a menu, where no paste event comes. */
+  function pasteFromClipboard(start: Coord) {
+    navigator.clipboard
+      .readText()
+      .then((text) => {
+        if (text) pasteText(text, start);
+      })
+      .catch(() => notify(t("The clipboard can't be read from a menu here. Press {key} instead.", { key: keyLabel("mod+v") })));
   }
 
   // On the document, not the grid: a row number has the focus after it is clicked, and a
@@ -783,9 +1053,9 @@ export function ProgrammingGrid({
     const slot = nav.slots.get(start);
     if (!slot) return;
 
-    const update: { id: string; template: RowTemplate }[] = [];
-    const before: { id: string; template: RowTemplate }[] = [];
-    const create: { id: string; template: RowTemplate }[] = [];
+    const update: Templated[] = [];
+    const before: Templated[] = [];
+    const create: Templated[] = [];
     let dayId = slot.day.id;
 
     if (clip.cols === null) {
@@ -812,22 +1082,28 @@ export function ProgrammingGrid({
       });
       dayId = nav.slots.get(start)?.day.id ?? dayId;
     }
-    if (update.length === 0 && create.length === 0) return;
-
-    const redo = { update, create };
-    const undo = { update: before, remove: create.map((c) => c.id) };
-    const apply = (write: typeof redo | typeof undo) => {
-      setBlock((b) => pastedLocally(b, dayId, write));
-      return pasteRows(dayId, write);
-    };
-    startTransition(() => {
-      void apply(redo);
-    });
-    history.push({ label: "paste rows", undo: () => apply(undo), redo: () => apply(redo) });
+    if (!commitPaste("paste rows", dayId, update, before, create)) return;
 
     // The pasted rows stay selected, the way a sheet leaves them.
     const last = start + update.length + create.length - 1;
     setSel(clip.cols === null ? { a: [start, 0], b: [last, NAV_COLS - 1] } : null);
+  }
+
+  /** Writes pasted rows onto a day as one undoable edit: `before` is what `update` wrote over. */
+  function commitPaste(label: string, dayId: string, update: Templated[], before: Templated[], create: Templated[]) {
+    if (update.length === 0 && create.length === 0) return false;
+    setCopied(null);
+    const redo = { update, create };
+    const undo = { update: before, remove: create.map((c) => c.id) };
+    const apply = (write: typeof redo | typeof undo) => {
+      setBlock((b) => pastedLocally(b, dayId, write));
+      return track(pasteRows(dayId, write));
+    };
+    startTransition(() => {
+      void apply(redo);
+    });
+    history.push({ label, undo: () => apply(undo), redo: () => apply(redo), at: (update[0] ?? create[0]).id });
+    return true;
   }
 
   /**
@@ -860,15 +1136,28 @@ export function ProgrammingGrid({
   // Set before a row is added on the server, and consumed once it has rendered.
   const pendingFocus = useRef<string | null>(null);
 
+  // A row moved to another day gets a new place; the focus follows it by its id.
+  const pendingRow = useRef<string | null>(null);
+
   useEffect(() => {
+    const moved = pendingRow.current;
+    if (moved !== null) {
+      const el = document.querySelector<HTMLInputElement>(`[data-row="${moved}"] [data-nav$="-1"] input`);
+      if (el) {
+        pendingRow.current = null;
+        el.focus();
+        el.select();
+      }
+    }
+
     const slot = pendingFocus.current;
     if (slot === null) return;
 
     // A row can take two revalidations to settle (the edit that named the row above it,
     // then the insert). Hold the claim until the cell is actually there.
-    const el = document.querySelector<HTMLElement>(
-      `[data-nav="${slot}"] input, [data-nav="${slot}"] button`,
-    );
+    const el =
+      document.querySelector<HTMLElement>(`[data-nav="${slot}"] input`) ??
+      document.querySelector<HTMLElement>(`[data-nav="${slot}"] button`);
     if (!el) return;
 
     pendingFocus.current = null;
@@ -954,6 +1243,31 @@ export function ProgrammingGrid({
         );
       }
 
+      case "row-insert-above": {
+        if (!row) return false;
+        pendingFocus.current = `${index}-1`;
+        const id = crypto.randomUUID();
+        return tracked(
+          "insert row",
+          () => insertRow(day.id, row.order - 1, { id }),
+          () => deleteRow(id),
+        );
+      }
+
+      case "row-tier": {
+        // The next tier round, for a keyboard that can't reach the badge.
+        if (!row) return false;
+        const offered = TIERS.filter((x) => tiers[x].show || x === row.tier);
+        const tier = offered[(offered.indexOf(row.tier) + 1) % offered.length];
+        const was = row.tier;
+        if (tier === was) return false;
+        return tracked(
+          "tier",
+          () => updateRow(row.id, { tier }),
+          () => updateRow(row.id, { tier: was }),
+        );
+      }
+
       case "row-duplicate": {
         if (!row) return false;
         pendingFocus.current = `${index + 1}-1`;
@@ -986,7 +1300,10 @@ export function ProgrammingGrid({
             : [row];
         // Nearest the way they move goes first, and a block already at the day's edge stays.
         const order = up ? picked : [...picked].reverse();
-        if (order[0] === (up ? day.rows[0] : day.rows[day.rows.length - 1])) return false;
+        if (order[0] === (up ? day.rows[0] : day.rows[day.rows.length - 1])) {
+          // At the day's edge one row carries on into the next day that is trained.
+          return picked.length === 1 && !isBlank(row) ? moveAcross(row, day, index, up, handled) : false;
+        }
         if (sel && picked.length > 1) {
           const d = up ? -1 : 1;
           setSel({ a: [sel.a[0] + d, sel.a[1]], b: [sel.b[0] + d, sel.b[1]] });
@@ -1064,6 +1381,38 @@ export function ProgrammingGrid({
     }
   }
 
+  /**
+   * Carries a row over the edge of its day: to the end of the day before, or the top of
+   * the day after. It keeps its id, so what the athlete logged on it comes along.
+   */
+  function moveAcross(row: RowData, day: DayData, index: number, up: boolean, handled: () => void) {
+    const step = up ? -1 : 1;
+    let s = index;
+    while (nav.slots.get(s + step)?.day.id === day.id) s += step;
+    const target = nav.slots.get(s + step)?.day;
+    if (!target) return false;
+    handled();
+    // The end of a day is above its unnamed last row, which stays last.
+    moveRows([row.id], target.id, up ? target.rows.length - (isBlank(target.rows.at(-1)) ? 1 : 0) : 0);
+    return true;
+  }
+
+  /** Moves rows to `index` among the rest of a day's, as one undoable edit; the focus follows them. */
+  function moveRows(ids: string[], dayId: string, index: number) {
+    let placed: Awaited<ReturnType<typeof moveRowsTo>> | null = null;
+    pendingRow.current = ids[0];
+    setSel(null);
+    edit(
+      ids.length > 1 ? "move rows" : "move row",
+      async () => {
+        placed = await moveRowsTo(ids, dayId, index);
+      },
+      async () => {
+        if (placed) await placeRows(placed.was, placed.lost);
+      },
+    );
+  }
+
   // The row commands, for the keys and the palette: each acts on the row with focus,
   // which the palette hands back before it runs one.
   const latestRowAction = useRef(rowAction);
@@ -1086,9 +1435,83 @@ export function ProgrammingGrid({
     [],
   );
   useCommands("grid", readOnly ? NO_COMMANDS : rowCommands);
+  const findCommands = useMemo<Command[]>(
+    () => [{ id: "find-replace", group: "Edit", title: t("Find and replace"), run: () => setFinding(true) }],
+    [],
+  );
+  useCommands("grid-find", readOnly ? NO_COMMANDS : findCommands);
+
+  /** Every place the text is found, in the columns and weeks asked for: a row and which of its fields. */
+  function findHits(query: string, where: FindIn) {
+    const q = query.trim().toLowerCase();
+    if (q === "") return [];
+    return block.weeks
+      .filter((w) => where.scope === "phase" || w.order === activeWeek)
+      .flatMap((w) => w.days.flatMap((d) => d.rows))
+      .flatMap((row) => where.fields.filter((f) => (row[f] ?? "").toLowerCase().includes(q)).map((field) => ({ row, field })));
+  }
+
+  /** Lights up the next place the text is found in the week on screen, and scrolls to it. */
+  function findNext(query: string, where: FindIn) {
+    const cols = { exercise: navKeys.indexOf("exercise"), target: 0, coachNotes: navKeys.indexOf("notes") };
+    const here = findHits(query, where)
+      .flatMap(({ row, field }): Coord[] => {
+        const r = nav.rows.get(row.id);
+        return r === undefined || cols[field] < 0 ? [] : [[r, cols[field]]];
+      })
+      .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    if (here.length === 0) {
+      setFound(null);
+      if (query.trim() !== "") notify(t("Not in this week"));
+      return;
+    }
+    const after = found ? here.findIndex(([r, c]) => r > found[0] || (r === found[0] && c > found[1])) : 0;
+    const next = here[Math.max(0, after)];
+    setFound(next);
+    gridRef.current
+      ?.querySelector(`[data-nav="${next[0]}-${next[1]}"]`)
+      ?.scrollIntoView({ block: "center", inline: "nearest" });
+  }
+
+  /** Replaces the text wherever it is found, in the columns and weeks asked for, as one undoable edit. */
+  function replaceAll(query: string, replacement: string, where: FindIn) {
+    const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    const patches = new Map<string, { next: Record<string, string | null>; prev: Record<string, string | null> }>();
+    let cells = 0;
+    for (const { row, field } of findHits(query, where)) {
+      const now = (row[field] ?? "").replace(pattern, () => replacement).trim();
+      // A row can't lose its name or its target to a replace; a note can be emptied.
+      if (now === "" && field !== "coachNotes") continue;
+      const entry = patches.get(row.id) ?? { next: {}, prev: {} };
+      entry.next[field] = now === "" ? null : now;
+      entry.prev[field] = row[field];
+      patches.set(row.id, entry);
+      cells++;
+    }
+    if (cells === 0) return;
+
+    const apply = (pick: "next" | "prev") => {
+      setBlock((b) => mapRows(b, (r) => (patches.has(r.id) ? ({ ...r, ...patches.get(r.id)![pick] } as RowData) : r)));
+      return track(
+        (async () => {
+          // ponytail: one row at a time — a save syncs the weeks after it, and two at once
+          // would race. One server action for the lot if a big program feels slow.
+          for (const [id, patch] of patches) {
+            const { coachNotes, ...own } = patch[pick];
+            if (Object.keys(own).length > 0) await updateRow(id, own as Parameters<typeof updateRow>[1]);
+            if (coachNotes !== undefined) await updateCell(id, { coachNotes });
+          }
+        })(),
+      );
+    };
+    void apply("next");
+    history.push({ label: "replace", undo: () => apply("prev"), redo: () => apply("next") });
+    setFound(null);
+    notify(t("Replaced in {n} cells", { n: cells }));
+  }
 
   /** Whether the focus is in a cell being edited, whose caret owns Home, End and Ctrl+arrows. */
-  function editingText(target: EventTarget) {
+  function editingText(target: EventTarget | null) {
     return target instanceof HTMLInputElement && "editing" in target.dataset;
   }
 
@@ -1223,11 +1646,16 @@ export function ProgrammingGrid({
     }
 
     if (e.key === "Tab") {
-      const c = at[1] + (e.shiftKey ? -1 : 1);
-      if (c < 0 || c >= NAV_COLS) return false;
+      // Off the end of a row Tab wraps onto the next one, and Shift+Tab back onto the last.
+      let r = at[0];
+      let c = at[1] + (e.shiftKey ? -1 : 1);
+      if (c >= NAV_COLS) [r, c] = [r + 1, 0];
+      else if (c < 0) [r, c] = [r - 1, NAV_COLS - 1];
+      if (r < 0 || r >= nav.count) return false;
       e.preventDefault();
-      setSel({ a: [at[0], c], b: [at[0], c] });
-      focusNav(`${at[0]}-${c}`);
+      tabCol.current ??= at[1];
+      setSel({ a: [r, c], b: [r, c] });
+      focusNav(`${r}-${c}`);
       return true;
     }
 
@@ -1279,20 +1707,7 @@ export function ProgrammingGrid({
     if ((e.key === "Delete" || e.key === "Backspace") && spans && rect) {
       e.preventDefault();
       // Rows picked by their numbers go; a block of cells is only emptied.
-      if (wholeRows) {
-        const picked = [];
-        for (let r = rect.r1; r <= rect.r2; r++) {
-          const slot = nav.slots.get(r);
-          if (slot?.row && !isBlank(slot.row)) picked.push({ row: slot.row, dayId: slot.day.id });
-        }
-        setSel(null);
-        deleteRows(picked);
-        return true;
-      }
-      const writes: CellWrite[] = [];
-      for (let r = rect.r1; r <= rect.r2; r++)
-        for (let c = rect.c1; c <= rect.c2; c++) writes.push({ r, c, text: "" });
-      writeCells("clear cells", writes);
+      clearBox(rect, "clear cells");
       return true;
     }
 
@@ -1301,6 +1716,13 @@ export function ProgrammingGrid({
 
   /** Arrows walk the grid; left/right only jump once the caret is at the edge of the text. */
   function onNavKey(e: React.KeyboardEvent) {
+    // Escape puts away what is only pending: the copy's frame, a find, a picked-up day.
+    if (e.key === "Escape") {
+      setCopied(null);
+      setFound(null);
+      if (dayClip) setDayClip(null);
+      return;
+    }
     // A cell that already handled the key (a suggestion list, say) keeps it.
     if (e.defaultPrevented) return;
     // A key bound to a command (Alt+↑ moves the row) is the keyboard layer's, not a move.
@@ -1330,7 +1752,9 @@ export function ProgrammingGrid({
       if (typing) input.dataset.editing = "";
     }
 
-    if (e.key === "ArrowDown" || (e.key === "Enter" && !e.shiftKey)) next = [r + 1, c];
+    // After Tabbing along a row, Enter starts the next one where the Tabs began.
+    if (e.key === "Enter" && !e.shiftKey) next = [r + 1, tabCol.current ?? c];
+    else if (e.key === "ArrowDown") next = [r + 1, c];
     else if (e.key === "ArrowUp" || e.key === "Enter") next = [r - 1, c];
     else if (e.key === "ArrowLeft") {
       if (editing && (input.selectionStart ?? 0) > 0) return;
@@ -1339,6 +1763,7 @@ export function ProgrammingGrid({
       if (editing && (input.selectionEnd ?? 0) < input.value.length) return;
       next = [r, c + 1];
     } else return;
+    tabCol.current = null;
 
     const [nr, nc] = next;
     if (nr < 0 || nc < 0 || nc >= NAV_COLS) return;
@@ -1424,6 +1849,7 @@ export function ProgrammingGrid({
       () => updateCell(rowId, patch),
       () => updateCell(rowId, before),
       `${focusSession.current}:${rowId}:${Object.keys(patch).join()}`,
+      rowId,
     );
   }
 
@@ -1454,11 +1880,10 @@ export function ProgrammingGrid({
     pendingFocus.current = `${slot}-${col}`;
     focusNav(`${slot}-${col}`);
 
-    edit(
-      "new row",
-      () => addRow(day.id, { id, exercise: "" }),
-      () => deleteRow(id),
-    );
+    // Not an undo step: an unnamed last row is the day's blank line, there or not.
+    startTransition(() => {
+      void track(addRow(day.id, { id, exercise: "" }));
+    });
   }
 
   /**
@@ -1491,8 +1916,36 @@ export function ProgrammingGrid({
     );
   }
 
+  /** What the selection adds up to, where a sheet shows its sum. */
+  const summary = (() => {
+    if (!rect || !spans) return null;
+    const byDay = new Map<string, ReturnType<typeof resolveDay>>();
+    let rows = 0;
+    let sets = 0;
+    let reps = 0;
+    let tonnage = 0;
+    for (let r = rect.r1; r <= rect.r2; r++) {
+      const slot = nav.slots.get(r);
+      if (!slot?.row || isBlank(slot.row)) continue;
+      const { day, row } = slot;
+      if (!byDay.has(day.id)) byDay.set(day.id, resolveDay(day.rows, maxes));
+      const n = row.sets ?? 0;
+      rows++;
+      sets += n;
+      reps += n * (row.reps ?? 0);
+      tonnage += n * (row.reps ?? 0) * (byDay.get(day.id)!.get(row.id)?.weight ?? 0);
+    }
+    if (rows === 0) return null;
+    return [
+      t("{n} rows", { n: rows }),
+      `${sets} ${t("sets")}`,
+      `${reps} ${t("reps")}`,
+      ...(tonnage > 0 ? [`${Math.round(tonnage).toLocaleString()} ${athlete.unit === "LB" ? "lb" : "kg"}`] : []),
+    ].join(" · ");
+  })();
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       {weekLabel === "tabs" && (
         <WeekTabs
           weeks={block.weeks}
@@ -1508,9 +1961,11 @@ export function ProgrammingGrid({
         />
       )}
 
-      <div className="flex-1 overflow-auto" style={{ scrollbarGutter: "stable" }}>
+      <div className="flex-1 overflow-auto" style={{ scrollbarGutter: "stable" }} onScroll={() => paint.current()}>
         <div
           ref={gridRef}
+          role="grid"
+          aria-label={t("Programming")}
           inert={readOnly}
           style={{ minWidth: GRID_MIN_WIDTH, maxWidth: SHELL_MAX_WIDTH }}
           className={`quiet-placeholders relative mx-auto w-full pb-24 ${dragging ? "select-none" : ""}`}
@@ -1522,13 +1977,20 @@ export function ProgrammingGrid({
           }}
           onMouseDown={onGridMouseDown}
           onMouseOver={onGridMouseOver}
+          onMouseMove={onGridMouseMove}
           onDoubleClick={onGridDoubleClick}
+          // The browser's own drag of selected text would fight a drag across cells.
+          onDragStart={(e) => e.preventDefault()}
         >
+          <div ref={selFrame} className="pointer-events-none absolute z-20 hidden border border-accent bg-accent/10" />
+          <div ref={copyFrame} className="pointer-events-none absolute z-20 hidden border border-dashed border-accent" />
+          {/* Small to look at, with a wider ring round it to catch the mouse. */}
           <div
             ref={fillHandle}
             onMouseDown={onFillHandleDown}
-            title={t("Drag to fill down")}
-            className="absolute z-20 hidden h-[7px] w-[7px] cursor-crosshair border border-surface bg-accent"
+            onDoubleClick={onFillHandleDouble}
+            title={t("Drag to fill down or up. Double-click to fill to the end of the day.")}
+            className="absolute z-20 hidden h-[9px] w-[9px] cursor-crosshair border border-surface bg-accent after:absolute after:-inset-1.5 after:content-['']"
           />
           <Header
             template={template}
@@ -1540,6 +2002,7 @@ export function ProgrammingGrid({
             locked={activeWeekData?.locked ?? false}
             leftWidth={layout.leftWidth}
             weekSpan={cols.length}
+            layout={layout}
           />
 
           {hideRestDays && (
@@ -1630,7 +2093,7 @@ export function ProgrammingGrid({
               data-tour={tourDay ? "day" : undefined}
               id={`day-${day.id}`}
               onContextMenu={dayMenu}
-              className={`scroll-mt-12 ${compact ? "mt-1" : "mt-2"} ${paused ? "opacity-50" : ""}`}
+              className={`scroll-mt-20 ${compact ? "mt-1" : "mt-2"} ${paused ? "opacity-50" : ""}`}
             >
               {/* One slim line per day, rest days included, so the dates line up down the week. */}
               <div className="group/day sticky left-0 z-10 flex w-fit items-center gap-2 px-4 py-1">
@@ -1643,7 +2106,7 @@ export function ProgrammingGrid({
                   <span data-day-name className="contents">
                   <TextInput
                     value={day.label}
-                    className="!w-[150px] !text-[13px] font-semibold"
+                    className="!w-auto min-w-[150px] max-w-[360px] !text-[13px] font-semibold [field-sizing:content]"
                     onCommit={(v) => {
                       const label = v ?? "Untitled";
                       const was = day.label;
@@ -1689,9 +2152,18 @@ export function ProgrammingGrid({
                       )
                     }
                     title={t("Make it a training day")}
-                    className="rounded px-1.5 py-0.5 text-[10px] tracking-wider text-muted-2 opacity-0 hover:bg-surface-2 hover:text-foreground focus:opacity-100 group-hover/day:opacity-100"
+                    className="rounded px-1.5 py-0.5 text-[10px] tracking-wider text-muted-2 opacity-60 hover:bg-surface-2 hover:text-foreground focus:opacity-100 group-hover/day:opacity-100"
                   >
                     + {t("TRAIN")}
+                  </button>
+                )}
+                {dayClip && dayClip.id !== day.id && (
+                  <button
+                    type="button"
+                    onClick={() => dropDay(day)}
+                    className="rounded-full border border-accent/60 px-2 py-0.5 text-[11px] text-accent hover:bg-accent-soft"
+                  >
+                    {dayClip.move ? t("Move here") : t("Paste here")}
                   </button>
                 )}
                 <button
@@ -1699,52 +2171,14 @@ export function ProgrammingGrid({
                   onClick={dayMenu}
                   title={t("Day actions")}
                   aria-label={t("Day actions")}
-                  className="rounded px-1.5 text-[13px] leading-5 text-muted-2 opacity-0 hover:bg-surface-3 hover:text-foreground focus:opacity-100 group-hover/day:opacity-100"
+                  className="rounded px-1.5 text-[13px] leading-5 text-muted-2 opacity-60 hover:bg-surface-3 hover:text-foreground focus:opacity-100 group-hover/day:opacity-100"
                 >
                   ⋯
                 </button>
               </div>
 
               {!day.rest && (
-                <div className="rounded-lg border-y border-border bg-surface">
-                  <div className="grid items-stretch" style={{ gridTemplateColumns: template }}>
-                    <StickyCell left={0} width={layout.leftWidth} span={4} className="border-r border-border" />
-                    {weeks.map((w) => (
-                      <div
-                        key={w}
-                        style={{ gridColumn: `span ${cols.length}` }}
-                        className="flex items-center gap-1.5 border-r border-border px-2 pt-2 text-[10px] font-medium tracking-[0.16em] text-accent"
-                      >
-                        <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                        {t("TARGET")}
-                      </div>
-                    ))}
-                  </div>
-                  <div
-                    className="grid items-stretch border-b border-border text-[11px] tracking-[0.12em] text-muted-2"
-                    style={{ gridTemplateColumns: template }}
-                  >
-                    <StickyCell left={0} width={40} className="px-2 py-2">
-                      #
-                    </StickyCell>
-                    <StickyCell left={40} width={128} className="px-2 py-2">
-                      {t("TARGET")}
-                    </StickyCell>
-                    <StickyCell left={168} width={168} className="px-2 py-2">
-                      {t("EXERCISE")}
-                    </StickyCell>
-                    <StickyCell
-                      left={336}
-                      width={layout.leftWidth - 336}
-                      className={`overflow-hidden border-r border-border ${layout.showProgression ? "px-2 py-2" : ""}`}
-                    >
-                      {layout.showProgression && t("PROGRESSION")}
-                    </StickyCell>
-                    {weeks.map((w) => (
-                      <SubHeader key={w} cols={cols} />
-                    ))}
-                  </div>
-
+                <div role="rowgroup" className="rounded-lg border-y border-border bg-surface">
                   {day.rows.map((row, i) => {
                     const r = nav.rows.get(row.id)!;
                     // The trailing unnamed row is the day's ghost, already backed by a record.
@@ -1758,10 +2192,12 @@ export function ProgrammingGrid({
                     // alone, and an accessory keeps it out of the way.
                     const own = ghost ? null : colorOfTarget(targetColors, row.target);
                     const tint = own === null ? null : tierShade(own, row.tier);
-                    const quietBadge = !tint && row.tier === "ACCESSORY";
+                    const quietBadge = !tint && !ghost && row.tier === "ACCESSORY";
                     return (
                       <div
                         key={row.id}
+                        role="row"
+                        data-row={row.id}
                         data-slot={r}
                         onContextMenu={(e) => {
                           const k = (id: string) => {
@@ -1777,7 +2213,30 @@ export function ProgrammingGrid({
                                   return row !== undefined && !isBlank(row);
                                 }).length
                               : 1;
+                          // The cells the menu is about: the selection when the click is in it, else the cell.
+                          const cell = coordOf(e.target);
+                          const inSel =
+                            cell !== null && rect !== null && spans && cell[0] >= rect.r1 && cell[0] <= rect.r2 && cell[1] >= rect.c1 && cell[1] <= rect.c2;
+                          const box: Box | null = inSel ? rect : cell ? { r1: cell[0], r2: cell[0], c1: cell[1], c2: cell[1] } : null;
+                          const put = (text: string) => void navigator.clipboard?.writeText(text).catch(() => undefined);
                           rowMenu.open(e, [
+                            ...(box
+                              ? [
+                                  {
+                                    label: t("Cut"),
+                                    hint: keyLabel("mod+x"),
+                                    onSelect: () => {
+                                      put(copyCells(box));
+                                      clearBox(box, "cut");
+                                    },
+                                  },
+                                  { label: t("Copy"), hint: keyLabel("mod+c"), onSelect: () => put(copyCells(box)) },
+                                  { label: t("Paste"), hint: keyLabel("mod+v"), onSelect: () => pasteFromClipboard([box.r1, box.c1]) },
+                                  { label: t("Clear cells"), hint: keyLabel("delete"), onSelect: () => clearBox(box, "clear cells") },
+                                  "divider" as const,
+                                ]
+                              : []),
+                            { label: t("Insert a row above"), hint: k("row-insert-above"), onSelect: run("row-insert-above"), disabled: ghost },
                             { label: t("Insert a row below"), hint: k("row-insert"), onSelect: run("row-insert") },
                             { label: t("Duplicate the row"), hint: k("row-duplicate"), onSelect: run("row-duplicate"), disabled: ghost },
                             "divider",
@@ -1822,7 +2281,7 @@ export function ProgrammingGrid({
                           left={0}
                           width={40}
                           tinted={Boolean(tint)}
-                          className="flex items-center justify-center gap-0.5 text-[11px] text-muted-2"
+                          className="flex items-center justify-center text-[11px] text-muted-2"
                         >
                           <button
                             type="button"
@@ -1843,7 +2302,7 @@ export function ProgrammingGrid({
                               deleteRows([{ row, dayId: day.id }]);
                             }}
                             onMouseLeave={() => setArmed(null)}
-                            className={`hidden rounded px-0.5 ${ghost ? "" : "group-hover:block"} ${
+                            className={`absolute top-1/2 right-0 hidden w-2.5 -translate-y-1/2 rounded text-center ${ghost ? "" : "group-hover:block"} ${
                               armed === row.id ? "bg-miss text-white" : "text-muted-2 hover:text-miss"
                             }`}
                           >
@@ -1853,16 +2312,18 @@ export function ProgrammingGrid({
 
                         <StickyCell
                           left={40}
-                          width={128}
+                          width={layout.targetW}
+                          nav={`${r}-0`}
                           tinted={Boolean(tint)}
-                          className={`flex items-center gap-2 pl-2 ${compact ? "py-0.5" : "py-1.5"}`}
+                          // Sets the row's height: the field fills it, so all of the cell is the cell.
+                          className={`flex items-center gap-1.5 pl-2 ${compact ? "" : "min-h-[30px]"}`}
                         >
                           <TierPicker
                             tier={row.tier}
                             offered={TIERS.filter((t) => tiers[t].show || t === row.tier)}
                             colorOf={(t) => (own === null ? tierColors[t] : tierShade(own, t))}
                             className={`${ghostHide} ${
-                              quietBadge ? "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" : ""
+                              quietBadge ? "opacity-40 group-hover:opacity-100 group-focus-within:opacity-100" : ""
                             }`}
                             onPick={(tier) => {
                               const was = row.tier;
@@ -1874,11 +2335,11 @@ export function ProgrammingGrid({
                               );
                             }}
                           />
-                          <span data-nav={`${r}-0`} className={`block min-w-0 flex-1 ${ghostHide}`}>
+                          <span className={`h-full min-w-0 flex-1 ${ghostHide}`}>
                             <TextInput
                               value={row.target}
                               suggestions={targets}
-                              className="!px-0 !py-0 !text-[12px]"
+                              className="!pl-0.5 !text-[12px]"
                               onCommit={(v) => {
                                 const target = v ?? "General";
                                 const was = row.target;
@@ -1892,7 +2353,7 @@ export function ProgrammingGrid({
                           </span>
                         </StickyCell>
 
-                        <StickyCell left={168} width={168} nav={`${r}-1`} tinted={Boolean(tint)} className="flex items-center">
+                        <StickyCell left={layout.exLeft} width={layout.exW} nav={`${r}-1`} tinted={Boolean(tint)} className="flex items-center">
                           <ExerciseInput
                             value={row.exercise}
                             history={exerciseHistory}
@@ -1902,8 +2363,8 @@ export function ProgrammingGrid({
                         </StickyCell>
 
                         <StickyCell
-                          left={336}
-                          width={layout.leftWidth - 336}
+                          left={layout.progLeft}
+                          width={layout.leftWidth - layout.progLeft}
                           tinted={Boolean(tint)}
                           nav={layout.showProgression ? `${r}-2` : undefined}
                           tour={tourDay && i === 0 ? "progression" : undefined}
@@ -1922,6 +2383,8 @@ export function ProgrammingGrid({
                         {weeks.map((w) => {
                           const cell = row;
 
+                          // A note long enough to need it wraps, as the coach's view setting says.
+                          const wrapped = wrapNotes && Boolean(cell.coachNotes);
                           const resolved = resolvedDay.get(row.id) ?? {
                             label: "—",
                             weight: null,
@@ -1936,7 +2399,21 @@ export function ProgrammingGrid({
                                 if (col === "sets") {
                                   return (
                                     <GridCell key={col} nav={at} className={`${ghostHide} ${last}`}>
-                                      <NumberInput value={cell.sets} onCommit={(v) => patchCell(row.id, { sets: v })} />
+                                      <TextInput
+                                        value={cell.sets === null ? null : String(cell.sets)}
+                                        placeholder="—"
+                                        className="text-center !text-[12px] tabular-nums"
+                                        valid={(v) => parseCell("sets", v, cell.intensityType) !== null}
+                                        format={(v) => {
+                                          const sets = parseCell("sets", v, cell.intensityType)?.sets;
+                                          return sets == null ? "" : String(sets);
+                                        }}
+                                        onCommit={(v) => {
+                                          // "4", or "3x5", which is the reps as well.
+                                          const parsed = parseCell("sets", v ?? "", cell.intensityType);
+                                          if (parsed) patchCell(row.id, parsed as Partial<Prescription>);
+                                        }}
+                                      />
                                     </GridCell>
                                   );
                                 }
@@ -1947,11 +2424,15 @@ export function ProgrammingGrid({
                                         value={cell.reps === null ? null : repsText(cell)}
                                         placeholder="—"
                                         className="text-center !text-[12px] tabular-nums"
-                                        valid={(v) => parseReps(v) !== null}
+                                        valid={(v) => parseCell("reps", v, cell.intensityType) !== null}
+                                        format={(v) => {
+                                          const reps = parseCell("reps", v, cell.intensityType);
+                                          return reps?.reps == null ? "" : repsText({ reps: reps.reps, repsMax: reps.repsMax });
+                                        }}
                                         onCommit={(v) => {
-                                          // "8" or a range, "8-10".
-                                          const reps = parseReps(v ?? "");
-                                          if (reps) patchCell(row.id, reps);
+                                          // "8", a range, "8-10" — or "3x5", which is the sets as well.
+                                          const reps = parseCell("reps", v ?? "", cell.intensityType);
+                                          if (reps) patchCell(row.id, reps as Partial<Prescription>);
                                         }}
                                       />
                                     </GridCell>
@@ -1997,10 +2478,20 @@ export function ProgrammingGrid({
                                   // Shows what the intensity works out to; a number typed in wins (in the
                                   // accent), and clearing it goes back to the calculated weight.
                                   return (
-                                    <GridCell key={col} nav={at} className={`${ghostHide} ${last}`}>
+                                    <GridCell
+                                      key={col}
+                                      nav={at}
+                                      className={`${ghostHide} ${last}`}
+                                      title={
+                                        resolved.weight === null && cell.load === null && !ghost
+                                          ? t("No weight to work out: this exercise has no 1RM to go by. Type a weight here to set one.")
+                                          : undefined
+                                      }
+                                    >
                                       <NumberInput
                                         value={cell.load}
-                                        placeholder={resolved.weight === null ? "—" : resolved.label}
+                                        // The unit is in the column's name, so a typed weight and a worked-out one read alike.
+                                        placeholder={resolved.weight === null ? "—" : resolved.label.replace(/ (kg|lb)$/, "")}
                                         className={`tabular-nums ${cell.load === null ? "placeholder:!text-foreground" : "font-medium text-accent"}`}
                                         onCommit={(v) => patchCell(row.id, { load: v })}
                                       />
@@ -2008,24 +2499,41 @@ export function ProgrammingGrid({
                                   );
                                 }
                                 const field = TEXT_FIELD[col];
+                                const input = (
+                                  <TextInput
+                                    value={cell[field]}
+                                    placeholder={col === "notes" ? t("add note") : col === "video" ? t("link") : "—"}
+                                    className={
+                                      col === "notes"
+                                        ? `!text-[11px] italic text-muted ${wrapped ? "peer absolute inset-0 opacity-0 focus:opacity-100" : ""}`
+                                        : col === "video"
+                                          ? "!text-[11px] text-muted"
+                                          : "text-center !text-[12px]"
+                                    }
+                                    onCommit={(v) => patchCell(row.id, { [field]: v })}
+                                  />
+                                );
                                 return (
                                   <GridCell
                                     key={col}
                                     nav={at}
                                     className={`${col === "notes" ? "" : ghostHide} ${last}`}
                                   >
-                                    <TextInput
-                                      value={cell[field]}
-                                      placeholder={col === "notes" ? t("add note") : col === "video" ? t("link") : "—"}
-                                      className={
-                                        col === "notes"
-                                          ? "!text-[11px] italic text-muted"
-                                          : col === "video"
-                                            ? "!text-[11px] text-muted"
-                                            : "text-center !text-[12px]"
-                                      }
-                                      onCommit={(v) => patchCell(row.id, { [field]: v })}
-                                    />
+                                    {wrapped && col === "notes" ? (
+                                      // The note shown whole, setting the row's height; the field
+                                      // over it shows on one line again while it is edited.
+                                      <div className="relative w-full self-stretch">
+                                        {input}
+                                        <div
+                                          aria-hidden
+                                          className="text-[11px] italic text-muted whitespace-pre-wrap break-words px-2 py-1.5 peer-focus:invisible"
+                                        >
+                                          {cell.coachNotes}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      input
+                                    )}
                                     {col === "video" && cell.videoUrl && (
                                       <a
                                         href={cell.videoUrl}
@@ -2052,7 +2560,7 @@ export function ProgrammingGrid({
                     <GhostRow
                       template={template}
                       cols={cols}
-                      progressionWidth={layout.leftWidth - 336}
+                      layout={layout}
                       slot={nav.ghosts.get(day.id)!}
                       onEnter={(col) => materialize(day, col)}
                     />
@@ -2064,7 +2572,136 @@ export function ProgrammingGrid({
         })}
         </div>
       </div>
+      {finding && !readOnly && (
+        <FindBar
+          count={(query, where) => findHits(query, where).length}
+          onNext={findNext}
+          onReplace={replaceAll}
+          onClose={() => {
+            setFinding(false);
+            setFound(null);
+          }}
+        />
+      )}
+      {(notice || summary || dayClip || saving > 0 || saved) && (
+        <div className="pointer-events-none absolute right-6 bottom-3 z-30 flex max-w-[80%] items-center gap-3 rounded-full border border-border bg-surface-2 px-3 py-1 text-[11px] text-muted shadow-lg shadow-black/30">
+          {notice && (
+            <span role="status" className="flex items-center gap-1.5 text-foreground">
+              <span className="size-1.5 shrink-0 rounded-full bg-warn" aria-hidden />
+              {notice}
+            </span>
+          )}
+          {dayClip && (
+            <span className="pointer-events-auto flex items-center gap-2 text-foreground">
+              {dayClip.move ? t("Moving “{name}”", { name: dayClip.label }) : t("Copying “{name}”", { name: dayClip.label })}
+              <button type="button" onClick={() => setDayClip(null)} className="text-muted-2 hover:text-accent">
+                {t("Cancel")}
+              </button>
+            </span>
+          )}
+          {summary && <span className="tabular-nums">{summary}</span>}
+          {(saving > 0 || saved) && <span>{saving > 0 ? t("Saving…") : t("Saved")}</span>}
+        </div>
+      )}
       {rowMenu.menu}
+    </div>
+  );
+}
+
+/** Find and replace, over the grid's corner: Enter finds the next, Escape puts it away. */
+function FindBar({
+  count,
+  onNext,
+  onReplace,
+  onClose,
+}: {
+  count: (query: string, where: FindIn) => number;
+  onNext: (query: string, where: FindIn) => void;
+  onReplace: (query: string, replacement: string, where: FindIn) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [replacement, setReplacement] = useState("");
+  const [where, setWhere] = useState<FindIn>({ fields: FIND_FIELDS.map(([f]) => f), scope: "phase" });
+  const n = count(query, where);
+  const chip = (on: boolean) =>
+    `h-6 rounded-full border px-2 text-[11px] ${on ? "border-accent/60 bg-accent-soft text-accent" : "border-border text-muted-2 hover:text-foreground"}`;
+  const toggle = (f: FindField) =>
+    setWhere((w) => {
+      const fields = w.fields.includes(f) ? w.fields.filter((x) => x !== f) : [...w.fields, f];
+      // Always at least one column to look in.
+      return fields.length === 0 ? w : { ...w, fields };
+    });
+  const field = "h-7 w-[150px] rounded border border-border bg-surface px-2 text-[12px] outline-none focus:border-accent";
+  const button = "h-7 rounded border border-border px-2 text-[11px] text-muted hover:border-accent hover:text-accent disabled:opacity-40";
+  return (
+    <div
+      role="search"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        e.stopPropagation();
+        onClose();
+      }}
+      className="absolute top-11 right-6 z-30 flex flex-col gap-1.5 rounded-lg border border-border bg-surface-2 p-1.5 shadow-xl shadow-black/40"
+    >
+      <div className="flex items-center gap-1.5">
+      <input
+        autoFocus
+        value={query}
+        placeholder={t("Find")}
+        aria-label={t("Find")}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onNext(query, where);
+        }}
+        className={field}
+      />
+      <input
+        value={replacement}
+        placeholder={t("Replace with")}
+        aria-label={t("Replace with")}
+        onChange={(e) => setReplacement(e.target.value)}
+        className={field}
+      />
+      <span className="min-w-[70px] text-center text-[11px] tabular-nums text-muted-2">
+        {query.trim() === "" ? "" : t("{n} found", { n })}
+      </span>
+      <button type="button" disabled={n === 0} onClick={() => onNext(query, where)} className={button}>
+        {t("Next")}
+      </button>
+      <button
+        type="button"
+        disabled={n === 0}
+        onClick={() => onReplace(query, replacement, where)}
+        className={button}
+      >
+        {t("Replace all")}
+      </button>
+      <button type="button" aria-label={t("Close")} onClick={onClose} className="px-1.5 text-[13px] text-muted-2 hover:text-foreground">
+        ×
+      </button>
+      </div>
+      {/* What it looks through: the columns, and this week or the whole phase. */}
+      <div className="flex items-center gap-1 px-0.5">
+        <span className="mr-1 text-[10px] tracking-[0.12em] text-muted-2">{t("SEARCH IN")}</span>
+        {FIND_FIELDS.map(([f, name]) => (
+          <button key={f} type="button" aria-pressed={where.fields.includes(f)} onClick={() => toggle(f)} className={chip(where.fields.includes(f))}>
+            {t(name)}
+          </button>
+        ))}
+        <span className="mx-1 h-4 w-px bg-border" />
+        {(["week", "phase"] as const).map((scope) => (
+          <button
+            key={scope}
+            type="button"
+            aria-pressed={where.scope === scope}
+            onClick={() => setWhere((w) => ({ ...w, scope }))}
+            className={chip(where.scope === scope)}
+          >
+            {scope === "week" ? t("This week") : t("Whole phase")}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2207,18 +2844,18 @@ function blankRow(id: string, day: DayData): RowData {
 function GhostRow({
   template,
   cols,
-  progressionWidth,
+  layout,
   slot,
   onEnter,
 }: {
   template: string;
   cols: WeekCol[];
-  progressionWidth: number;
+  layout: ReturnType<typeof gridLayout>;
   slot: number;
   onEnter: (col: number) => void;
 }) {
   // PROGRESSION is a keyboard column only while it shows.
-  const start = progressionWidth > 0 ? 3 : 2;
+  const start = layout.weekStart;
 
   function cell(col: number, placeholder: string, align = "text-center") {
     return (
@@ -2234,6 +2871,7 @@ function GhostRow({
 
   return (
     <div
+      role="row"
       data-slot={slot}
       className="group grid items-stretch border-t border-dashed border-border opacity-60 focus-within:opacity-100 hover:opacity-100"
       style={{ gridTemplateColumns: template }}
@@ -2241,17 +2879,15 @@ function GhostRow({
       <StickyCell left={0} width={40} className="grid place-items-center text-[13px] text-muted-2">
         +
       </StickyCell>
-      <StickyCell left={40} width={128} className="flex items-center py-1.5 pl-2">
-        <span data-nav={`${slot}-0`} className="block w-full">
-          {cell(0, t("target"), "text-left")}
-        </span>
+      <StickyCell left={40} width={layout.targetW} nav={`${slot}-0`} className="flex items-center pl-2">
+        {cell(0, t("target"), "text-left")}
       </StickyCell>
-      <StickyCell left={168} width={168} nav={`${slot}-1`} className="flex items-center">
+      <StickyCell left={layout.exLeft} width={layout.exW} nav={`${slot}-1`} className="flex items-center">
         {cell(1, t("add exercise"), "text-left")}
       </StickyCell>
       <StickyCell
-        left={336}
-        width={progressionWidth}
+        left={layout.progLeft}
+        width={layout.leftWidth - layout.progLeft}
         nav={start === 3 ? `${slot}-2` : undefined}
         className="flex items-center border-r border-border"
       >
@@ -2423,6 +3059,17 @@ function WeekTabs({
               <LockIcon locked size={11} />
             </span>
           )}
+          {!readOnly && w === active && (
+            <button
+              type="button"
+              title={t("Week actions")}
+              aria-label={t("Week actions")}
+              onClick={(e) => menuFor(e, weeks.find((x) => x.order === w)!)}
+              className="py-2 pl-1.5 text-[13px] leading-none text-muted-2 hover:text-foreground"
+            >
+              ⋯
+            </button>
+          )}
           {!readOnly && weeks.length > 1 && (
             <button
               ref={(el) => {
@@ -2511,23 +3158,43 @@ export function addWeekUndoable(history: History, blockId: string, order: number
 /** The column toggle and undo / redo, beside whichever tab strip is showing. */
 export function GridTools() {
   const tightIntensity = usePref("tightIntensity");
+  const columns = usePref("columns");
+  const hideRestDays = usePref("hideRestDays");
+  const wrapNotes = usePref("wrapNotes");
+  const columnWidths = usePref("columnWidths");
   const history = useHistory();
+  const menu = useContextMenu();
+  const mark = (on: boolean) => (on ? "✓" : undefined);
   return (
     <div data-tour="undo" className="flex shrink-0 items-center gap-1">
       <button
         type="button"
-        onClick={() => togglePref("tightIntensity")}
-        title={
-          tightIntensity
-            ? t("Intensity sits beside reps — click to spread it across the week")
-            : t("Keep intensity beside reps, notes take the extra width")
+        aria-haspopup="menu"
+        title={t("Columns")}
+        aria-label={t("Columns")}
+        onClick={(e) =>
+          menu.open(e, [
+            ...COLUMN_NAMES.map(([c, name]) => ({
+              label: t(name),
+              hint: mark(columns[c]),
+              onSelect: () => setPref("columns", { ...columns, [c]: !columns[c] }),
+            })),
+            "divider" as const,
+            { label: t("Keep intensity beside reps"), hint: mark(tightIntensity), onSelect: () => togglePref("tightIntensity") },
+            { label: t("Hide rest days"), hint: mark(hideRestDays), onSelect: () => togglePref("hideRestDays") },
+            { label: t("Wrap long coach notes"), hint: mark(wrapNotes), onSelect: () => togglePref("wrapNotes") },
+            {
+              label: t("Reset column widths"),
+              disabled: Object.keys(columnWidths).length === 0,
+              onSelect: () => resetPref("columnWidths"),
+            },
+          ])
         }
-        className={`grid size-8 place-items-center rounded-md border hover:border-accent hover:text-accent ${
-          tightIntensity ? "border-accent/50 text-accent" : "border-border text-muted"
-        }`}
+        className="grid size-8 place-items-center rounded-md border border-border text-muted hover:border-accent hover:text-accent"
       >
         <ColumnsIcon tight={tightIntensity} />
       </button>
+      {menu.menu}
       <span className="mx-1 h-5 w-px bg-border" />
       <button
         type="button"
@@ -2561,7 +3228,9 @@ function Header({
   locked,
   leftWidth,
   weekSpan,
+  layout,
 }: {
+  layout: ReturnType<typeof gridLayout>;
   leftWidth: number;
   weekSpan: number;
   template: string;
@@ -2575,10 +3244,45 @@ function Header({
   const [pending, startTransition] = useTransition();
   const history = useHistory();
   const nameInput = "!w-auto min-w-[4ch] max-w-[48%] !px-1 !py-0.5 [field-sizing:content]";
+  const unit = athlete.unit === "LB" ? "lb" : "kg";
 
   function rename(label: string, apply: (name: string) => Promise<unknown>, was: string, next: string) {
     void apply(next);
     history.push({ label, undo: () => apply(was), redo: () => apply(next) });
+  }
+
+  /** A drag of a column's right edge: which column, and where the drag and its width began. */
+  const resizing = useRef<{ key: NavKey; x: number; w: number } | null>(null);
+
+  /** The strip on a column header's right edge that drags its width; a double-click gives it back. */
+  function grip(key: NavKey) {
+    return (
+      <span
+        aria-hidden
+        title={t("Drag to resize. Double-click to reset.")}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          resizing.current = { key, x: e.clientX, w: e.currentTarget.parentElement!.getBoundingClientRect().width };
+        }}
+        onPointerMove={(e) => {
+          const drag = resizing.current;
+          if (!drag || drag.key !== key) return;
+          const w = Math.round(Math.min(480, Math.max(48, drag.w + e.clientX - drag.x)));
+          setPref("columnWidths", { ...getPref("columnWidths"), [key]: w });
+        }}
+        onPointerUp={() => {
+          resizing.current = null;
+        }}
+        onDoubleClick={() => {
+          const rest = { ...getPref("columnWidths") };
+          delete rest[key];
+          setPref("columnWidths", rest);
+        }}
+        className="absolute top-0 right-0 bottom-0 z-10 w-1.5 cursor-col-resize hover:bg-accent/40"
+      />
+    );
   }
 
   function lock(next: boolean) {
@@ -2594,11 +3298,9 @@ function Header({
   }
 
   return (
-    <div
-      className="sticky top-0 z-20 grid border-b border-border bg-background"
-      style={{ gridTemplateColumns: template }}
-    >
-      <StickyCell left={0} width={leftWidth} span={4} className="flex items-center gap-1 px-3 py-1.5">
+    <div className="sticky top-0 z-20 border-b border-border bg-background">
+     <div className="grid" style={{ gridTemplateColumns: template }}>
+      <StickyCell role="none" left={0} width={leftWidth} span={4} className="flex items-center gap-1 px-3 py-1.5">
         <span data-tour="names" className="flex min-w-0 flex-1 items-center gap-1">
         {/* data-focus: where the palette's rename commands put the caret. */}
         <span data-focus="program-name" className="contents">
@@ -2684,8 +3386,50 @@ function Header({
               />
             </label>
           ))}
-          <span className="text-[11px] text-muted-2">{athlete.unit === "LB" ? "lb" : "kg"}</span>
+          <span className="text-[11px] text-muted-2">{unit}</span>
         </div>
+      </div>
+     </div>
+      {/* The columns, named once for every day below. */}
+      <div
+        role="row"
+        className="grid items-stretch border-t border-border text-[11px] tracking-[0.12em] text-muted-2"
+        style={{ gridTemplateColumns: template }}
+      >
+        <StickyCell role="columnheader" left={0} width={40} className="px-2 py-1.5">
+          #
+        </StickyCell>
+        <StickyCell role="columnheader" left={40} width={layout.targetW} className="px-2 py-1.5">
+          <span data-col-head={0}>{t("TARGET")}</span>
+          {grip("target")}
+        </StickyCell>
+        <StickyCell role="columnheader" left={layout.exLeft} width={layout.exW} className="px-2 py-1.5">
+          <span data-col-head={1}>{t("EXERCISE")}</span>
+          {grip("exercise")}
+        </StickyCell>
+        <StickyCell
+          role="columnheader"
+          left={layout.progLeft}
+          width={leftWidth - layout.progLeft}
+          className={`overflow-hidden border-r border-border ${layout.showProgression ? "px-2 py-1.5" : ""}`}
+        >
+          {layout.showProgression && <span data-col-head={2}>{t("PROGRESSION")}</span>}
+          {layout.showProgression && grip("progression")}
+        </StickyCell>
+        {layout.cols.map((col, k) => (
+          <div
+            key={col}
+            role="columnheader"
+            data-col-head={k + layout.weekStart}
+            className={`relative flex items-center bg-surface px-2 py-1.5 ${col === "notes" || col === "video" ? "justify-start" : "justify-center"} ${
+              k === layout.cols.length - 1 ? "border-r border-border" : ""
+            }`}
+          >
+            {t(WEEK_COL_LABEL[col])}
+            {col === "load" ? ` (${unit})` : ""}
+            {grip(col)}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -2794,40 +3538,21 @@ function DayStrip({
   );
 }
 
-function SubHeader({ cols }: { cols: WeekCol[] }) {
-  return (
-    <>
-      {cols.map((col, k) => (
-        <HeadCell
-          key={col}
-          className={`${col === "notes" || col === "video" ? "!justify-start" : ""} ${
-            k === cols.length - 1 ? "border-r border-border" : ""
-          }`}
-        >
-          {t(WEEK_COL_LABEL[col])}
-        </HeadCell>
-      ))}
-    </>
-  );
-}
-
-function HeadCell({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={`flex items-center justify-center px-2 py-2 ${className}`}>{children}</div>;
-}
-
 function GridCell({
   children,
   className = "",
   nav,
   tour,
+  title,
 }: {
   children: React.ReactNode;
   className?: string;
   nav?: string;
   tour?: string;
+  title?: string;
 }) {
   return (
-    <div data-nav={nav} data-tour={tour} className={`flex items-center ${className}`}>
+    <div role="gridcell" data-nav={nav} data-tour={tour} title={title} className={`flex items-center ${className}`}>
       {children}
     </div>
   );
@@ -2842,7 +3567,9 @@ function StickyCell({
   nav,
   tour,
   tinted = false,
+  role = "gridcell",
 }: {
+  role?: string;
   children?: React.ReactNode;
   left: number;
   width: number;
@@ -2855,6 +3582,7 @@ function StickyCell({
 }) {
   return (
     <div
+      role={role}
       data-nav={nav}
       data-tour={tour}
       className={`sticky z-10 ${tinted ? "bg-[color-mix(in_srgb,var(--tint)_9%,var(--surface))]" : "bg-surface"} ${className}`}

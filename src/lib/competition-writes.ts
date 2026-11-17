@@ -25,28 +25,106 @@ import { prisma } from "@/lib/prisma";
  * Who may is the caller's to check.
  */
 
-/** A meet is created with its nine empty attempts, so the card is never half-built. */
+/**
+ * The fields a competition and every entry in it share. Each `Meet` keeps a copy, so they are
+ * written only through `applyShared`, which writes the competition and all its entries together.
+ */
+export const SHARED_FIELDS = ["name", "date", "federation", "venue", "weighInDay", "weighInTime", "startTime", "rackBrand"] as const;
+
+type SharedPatch = {
+  name?: string;
+  date?: string;
+  federation?: string | null;
+  venue?: string | null;
+  weighInDay?: string | null;
+  weighInTime?: string | null;
+  startTime?: string | null;
+  rackBrand?: string | null;
+  reminders?: string | null;
+};
+
+/** A touched entry: what the phone logs and whose counter it moves. */
+export type Entry = { id: string; athleteId: string };
+
+/**
+ * Writes shared fields onto the competition and each of its entries, or, with `only`, onto those
+ * entries alone (a coach editing a shared athlete's meet in someone else's competition).
+ * The competition may not be here at all (a shared athlete's, on another coach's desktop): updateMany.
+ */
+async function applyShared(competitionId: string, patch: SharedPatch, only?: string[]): Promise<Entry[]> {
+  const { date, rackBrand: brand, ...rest } = patch;
+  const entries = await prisma.meet.findMany({
+    where: { competitionId, ...(only ? { id: { in: only } } : {}) },
+    select: { id: true, athleteId: true, athlete: { select: { racks: true } } },
+  });
+  const ids = entries.map((e) => e.id);
+  const data = { ...rest, ...(date ? { date: new Date(date) } : {}) };
+  if (!only) {
+    await prisma.competition.updateMany({
+      where: { id: competitionId },
+      data: { ...data, ...(brand !== undefined ? { rackBrand: brand?.trim() || null } : {}) },
+    });
+  }
+  if (Object.keys(data).length) await prisma.meet.updateMany({ where: { id: { in: ids } }, data });
+  // Spelled the way each athlete's profile already has it, so "eleiko" finds their Eleiko heights.
+  if (brand !== undefined) {
+    for (const e of entries) await prisma.meet.update({ where: { id: e.id }, data: { rackBrand: rackBrand(parseRacks(e.athlete.racks), brand) } });
+  }
+  // The checklist is dated by the meet, as every row the athlete app merges is.
+  if (date) await prisma.meetTask.updateMany({ where: { meetId: { in: ids } }, data: { day: date.slice(0, 10) } });
+  return entries.map((e) => ({ id: e.id, athleteId: e.athleteId }));
+}
+
+/**
+ * A meet is created with its nine empty attempts, so the card is never half-built. Without a
+ * competition it starts one of its own; with one it takes that competition's shared fields.
+ */
 export async function createMeet(input: {
+  coachId: string;
   athleteId: string;
   name: string;
   date: string;
   federation?: string;
   weightClass?: string;
+  competitionId?: string;
+  shared?: boolean;
 }) {
-  // Most meets in a federation lift on the same racks: start from the last brand named.
-  const last = await prisma.meet.findFirst({
-    where: { athleteId: input.athleteId, rackBrand: { not: null } },
-    orderBy: { date: "desc" },
-    select: { rackBrand: true },
-  });
+  const athlete = await prisma.athlete.findUniqueOrThrow({ where: { id: input.athleteId }, select: { racks: true } });
+  let competition;
+  if (input.competitionId) {
+    competition = await prisma.competition.findUniqueOrThrow({ where: { id: input.competitionId } });
+  } else {
+    // Most meets in a federation lift on the same racks: start from the last brand named.
+    const last = await prisma.meet.findFirst({
+      where: { athleteId: input.athleteId, rackBrand: { not: null } },
+      orderBy: { date: "desc" },
+      select: { rackBrand: true },
+    });
+    competition = await prisma.competition.create({
+      data: {
+        coachId: input.coachId,
+        name: input.name.trim() || "Meet",
+        date: new Date(input.date),
+        federation: input.federation?.trim() || null,
+        rackBrand: last?.rackBrand ?? null,
+      },
+    });
+  }
   const meet = await prisma.meet.create({
     data: {
       athleteId: input.athleteId,
-      name: input.name.trim() || "Meet",
-      date: new Date(input.date),
-      federation: input.federation?.trim() || null,
+      competitionId: competition.id,
+      name: competition.name,
+      date: competition.date,
+      federation: competition.federation,
+      venue: competition.venue,
+      weighInDay: competition.weighInDay,
+      weighInTime: competition.weighInTime,
+      startTime: competition.startTime,
+      rackBrand: rackBrand(parseRacks(athlete.racks), competition.rackBrand),
+      reminders: competition.reminders,
+      shared: input.shared ?? competition.shared,
       weightClass: input.weightClass?.trim() || null,
-      rackBrand: last?.rackBrand ?? null,
       attempts: {
         create: MEET_LIFTS.flatMap((lift) =>
           [1, 2, 3].map((number) => ({ lift, number })),
@@ -58,41 +136,33 @@ export async function createMeet(input: {
   return meet.id;
 }
 
+/**
+ * One athlete's entry: their own fields on it alone, the shared ones on the whole competition
+ * (or, with `entryOnly`, on this entry alone). Returns the entries touched.
+ */
 export async function updateMeet(
   meetId: string,
-  patch: {
-    name?: string;
-    date?: string;
-    federation?: string | null;
+  patch: Omit<SharedPatch, "reminders"> & {
     weightClass?: string | null;
     bodyweight?: number | null;
     goal?: number | null;
-    venue?: string | null;
-    weighInDay?: string | null;
-    weighInTime?: string | null;
-    startTime?: string | null;
     session?: string | null;
-    rackBrand?: string | null;
     shared?: boolean;
     shareAttempts?: boolean;
   },
-) {
-  const { date, rackBrand: brand, ...rest } = patch;
-  const meet = await prisma.meet.update({
-    where: { id: meetId },
-    data: {
-      ...rest,
-      ...(date ? { date: new Date(date) } : {}),
-    },
-    select: { athleteId: true },
-  });
-  // Spelled the way the athlete's profile already has it, so "eleiko" finds their Eleiko heights.
-  if (brand !== undefined) {
-    const athlete = await prisma.athlete.findUniqueOrThrow({ where: { id: meet.athleteId }, select: { racks: true } });
-    await prisma.meet.update({ where: { id: meetId }, data: { rackBrand: rackBrand(parseRacks(athlete.racks), brand) } });
+  entryOnly = false,
+): Promise<Entry[]> {
+  const own: Record<string, unknown> = { ...patch };
+  const shared: Record<string, unknown> = {};
+  for (const k of SHARED_FIELDS) {
+    if (k in own) {
+      shared[k] = own[k];
+      delete own[k];
+    }
   }
-  // The checklist is dated by the meet, as every row the athlete app merges is.
-  if (date) await prisma.meetTask.updateMany({ where: { meetId }, data: { day: date.slice(0, 10) } });
+  const meet = await prisma.meet.update({ where: { id: meetId }, data: own, select: { athleteId: true, competitionId: true } });
+  if (Object.keys(shared).length === 0) return [{ id: meetId, athleteId: meet.athleteId }];
+  return applyShared(meet.competitionId, shared as SharedPatch, entryOnly ? [meetId] : undefined);
 }
 
 /**
@@ -117,13 +187,69 @@ export async function setRack(athleteId: string, brand: string, patch: Partial<R
 }
 
 /** One reminder switched on or off, or reworded; null text puts back the words it starts with. */
-export async function setReminder(meetId: string, kind: ReminderKind, patch: { on?: boolean; text?: ReminderText | null }) {
-  const meet = await prisma.meet.findUniqueOrThrow({ where: { id: meetId }, select: { reminders: true } });
+export async function setReminder(
+  meetId: string,
+  kind: ReminderKind,
+  patch: { on?: boolean; text?: ReminderText | null },
+  entryOnly = false,
+): Promise<Entry[]> {
+  const meet = await prisma.meet.findUniqueOrThrow({ where: { id: meetId }, select: { reminders: true, competitionId: true } });
   const settings = parseReminders(meet.reminders);
   if (patch.on !== undefined) settings.on[kind] = patch.on;
   if (patch.text === null) delete settings.text[kind];
   else if (patch.text) settings.text[kind] = { title: patch.text.title.trim().slice(0, 120), body: patch.text.body.trim().slice(0, 300) };
-  await prisma.meet.update({ where: { id: meetId }, data: { reminders: serializeReminders(settings) } });
+  return applyShared(meet.competitionId, { reminders: serializeReminders(settings) }, entryOnly ? [meetId] : undefined);
+}
+
+/** A competition with nobody entered yet. */
+export async function createCompetition(input: { coachId: string; name: string; date: string; federation?: string }) {
+  const competition = await prisma.competition.create({
+    data: {
+      coachId: input.coachId,
+      name: input.name.trim() || "Meet",
+      date: new Date(input.date),
+      federation: input.federation?.trim() || null,
+    },
+  });
+  return competition.id;
+}
+
+/** The shared fields, on the competition and every entry; `shared` is only the default for new entries. */
+export async function updateCompetition(id: string, patch: Omit<SharedPatch, "reminders"> & { shared?: boolean }) {
+  const { shared, ...rest } = patch;
+  if (shared !== undefined) await prisma.competition.updateMany({ where: { id }, data: { shared } });
+  return applyShared(id, rest);
+}
+
+/** The competition and every entry in it. */
+export async function deleteCompetition(id: string) {
+  // The checklists hang off the meets by id alone; tombstones carry the delete to the phones.
+  const meets = await prisma.meet.findMany({ where: { competitionId: id }, select: { id: true } });
+  await prisma.meetTask.updateMany({ where: { meetId: { in: meets.map((m) => m.id) }, deletedAt: null }, data: { deletedAt: new Date() } });
+  await prisma.competition.delete({ where: { id } });
+}
+
+/** Enters athletes, each with their class; anyone already entered is left as they are. Returns the new meets' ids. */
+export async function addEntries(competitionId: string, athletes: { athleteId: string; weightClass: string | null }[], shared: boolean) {
+  const competition = await prisma.competition.findUniqueOrThrow({ where: { id: competitionId } });
+  const entered = new Set((await prisma.meet.findMany({ where: { competitionId }, select: { athleteId: true } })).map((m) => m.athleteId));
+  const ids: string[] = [];
+  for (const a of athletes) {
+    if (entered.has(a.athleteId)) continue;
+    entered.add(a.athleteId);
+    ids.push(
+      await createMeet({
+        coachId: competition.coachId,
+        athleteId: a.athleteId,
+        name: competition.name,
+        date: competition.date.toISOString(),
+        weightClass: a.weightClass ?? undefined,
+        competitionId,
+        shared,
+      }),
+    );
+  }
+  return ids;
 }
 
 async function taskOrder(meetId: string) {

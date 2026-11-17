@@ -5,7 +5,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { createClient, type Client } from "@libsql/client";
 import { migrateRemote } from "@/lib/cloud";
-import { applyPush, athleteData, pushNews } from "@/lib/sync-server";
+import { applyPush, athleteData, planData, pushNews } from "@/lib/sync-server";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "topset-sync-server-"));
 let client: Client;
@@ -303,4 +303,22 @@ test("rows that trade places in one push don't trip over each other's slots", as
   const index = await client.execute(`SELECT "id", "index" FROM "Day" WHERE "id" IN ('d2', 'd3') ORDER BY "index"`);
   assert.deepEqual(index.rows.map((r) => [r.id, r.index]), [["d3", 1], ["d2", 2]]);
   assert.equal((await client.execute(`SELECT "fromId" FROM "ExerciseRow" WHERE "id" = 's3'`)).rows[0].fromId, "s0");
+});
+
+test("a competition goes up before its entries, comes down to the coach's other computers, and is no one else's", async () => {
+  const competition = { id: "comp1", coachId: "me", name: "Nationals", federation: "IPF", date: "2026-12-05T00:00:00.000Z", shared: 1 };
+  const meet = { id: "meet1", athleteId: "a1", name: "Nationals", federation: "IPF", date: "2026-12-05T00:00:00.000Z", competitionId: "comp1" };
+  const push = { tables: { Competition: { upsert: [competition], remove: [] }, Meet: { upsert: [meet], remove: [] } }, athlete: [] };
+  assert.equal(await applyPush(client, "me", push, pushNews(), "desk-1"), null);
+
+  const other = await planData(client, "me", "desk-2", 0);
+  assert.deepEqual(other.rows.Competition?.map((r) => r.id), ["comp1"]);
+  assert.deepEqual(other.rows.Meet?.map((r) => [r.id, r.competitionId]), [["meet1", "comp1"]]);
+  assert.equal((await planData(client, "me", "desk-1", 0)).rows.Competition, undefined, "not back to the computer that sent it");
+
+  await client.execute(`INSERT OR IGNORE INTO "Coach" ("id", "username", "name") VALUES ('rival', 'rival', 'Rival')`);
+  const taken = { tables: { Competition: { upsert: [{ ...competition, coachId: "rival", name: "Mine now" }], remove: [] } }, athlete: [] };
+  assert.equal(await applyPush(client, "rival", taken), "Competition comp1 belongs to someone else.");
+  const own = { tables: { Competition: { upsert: [{ ...competition, id: "comp2" }], remove: [] } }, athlete: [] };
+  assert.equal(await applyPush(client, "rival", own), "Competition comp2 points at a Coach that isn't yours.");
 });

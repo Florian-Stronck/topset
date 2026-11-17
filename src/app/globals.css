@@ -129,8 +129,9 @@ body {
   color: var(--muted-2);
 }
 
-/* Whole rows picked in the programming grid: one band across the row, the sticky cells included. */
-.row-picked > *,
-.row-picked > .contents > * {
-  background-color: color-mix(in srgb, var(--accent) 13%, var(--surface)) !important;
+/* A block of cells selected in the programming grid: its frame is the border, so the active
+   cell inside it draws no ring of its own. */
+[data-range] [data-nav],
+[data-range] [data-nav] * {
+  box-shadow: none !important;
 }

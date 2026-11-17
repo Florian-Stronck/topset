@@ -3,6 +3,8 @@
 import { assertCoach } from "@/lib/role";
 import { revalidatePath } from "next/cache";
 import * as meets from "@/lib/competition-writes";
+import { myCoach } from "@/lib/me";
+import { prisma } from "@/lib/prisma";
 
 /** The desktop app's Competition actions; the writes themselves are in `competition-writes.ts`. */
 
@@ -14,16 +16,17 @@ function revalidateAll() {
 
 type Args<F extends (...args: never[]) => unknown> = Parameters<F>;
 
-export async function createMeet(...args: Args<typeof meets.createMeet>) {
+export async function createMeet(input: Omit<Args<typeof meets.createMeet>[0], "coachId">) {
   assertCoach();
-  const id = await meets.createMeet(...args);
+  const coach = await prisma.coach.findFirstOrThrow({ where: await myCoach(), select: { id: true } });
+  const id = await meets.createMeet({ ...input, coachId: coach.id });
   revalidateAll();
   return id;
 }
 
-export async function updateMeet(...args: Args<typeof meets.updateMeet>) {
+export async function updateMeet(meetId: string, patch: Args<typeof meets.updateMeet>[1]) {
   assertCoach();
-  await meets.updateMeet(...args);
+  await meets.updateMeet(meetId, patch);
   revalidateAll();
 }
 
@@ -34,9 +37,9 @@ export async function setRack(...args: Args<typeof meets.setRack>) {
   revalidatePath("/athletes");
 }
 
-export async function setReminder(...args: Args<typeof meets.setReminder>) {
+export async function setReminder(meetId: string, kind: Args<typeof meets.setReminder>[1], patch: Args<typeof meets.setReminder>[2]) {
   assertCoach();
-  await meets.setReminder(...args);
+  await meets.setReminder(meetId, kind, patch);
   revalidateAll();
 }
 

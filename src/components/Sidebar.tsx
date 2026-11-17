@@ -66,7 +66,7 @@ const NAV = [
   { label: "Athletes", href: "/athletes", key: "athletes" },
   { label: "Programming", href: "/programming", key: "programming" },
   { label: "Tracking", href: "/tracking", key: "tracking" },
-  { label: "Competition", href: "/competition", key: "competition" },
+  { label: "Competitions", href: "/competition", key: "competition" },
 ];
 
 /** Switching athlete keeps you on the screen you are on. */
@@ -129,7 +129,7 @@ export function Sidebar({
       go("go-tracking", "Tracking", withAthlete("/tracking"), "logged rpe e1rm compliance"),
       go("go-schedule", "Schedule", "/overview?tab=schedule", "meetings moved sessions calendar"),
       go("go-chat", "Chat", `/overview?tab=chat${activeAthleteId ? `&athlete=${activeAthleteId}` : ""}`, "messages inbox athlete"),
-      go("go-competition", "Competition", withAthlete("/competition"), "meet attempts openers total"),
+      go("go-competition", "Competitions", "/competition", "meet attempts openers total"),
       go("go-settings", "Settings", "/settings", "preferences options"),
       {
         id: "athlete-new",

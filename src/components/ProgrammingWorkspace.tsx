@@ -23,7 +23,7 @@ import { describeGap, phaseGaps, today, ymdOf } from "@/lib/dates";
 import { dateOfDay, programOn, weekOn } from "@/lib/schedule";
 import { pickFile, restoreBackup } from "@/lib/pick-file";
 import { fresh, useCommands, type Command } from "@/lib/commands";
-import { setPref, togglePref, usePref, type Column } from "@/lib/prefs";
+import { resetPref, setPref, togglePref, usePref, type Column } from "@/lib/prefs";
 import type { ProgramSummary } from "@/lib/queries";
 import type { AthleteData, BlockData } from "@/lib/types";
 import { t } from "@/lib/i18n";
@@ -135,6 +135,7 @@ export function ProgrammingWorkspace({
   const tightIntensity = usePref("tightIntensity");
   const columns = usePref("columns");
   const hideRest = usePref("hideRestDays");
+  const wrapNotes = usePref("wrapNotes");
   const copied = usePref("clipboard");
 
   // The whole-program view opens where the phase view is, until a week is picked in it.
@@ -302,6 +303,20 @@ export function ProgrammingWorkspace({
         title: hideRest ? t("Show rest days") : t("Hide rest days"),
         keywords: "off days strip collapse",
         run: () => togglePref("hideRestDays"),
+      },
+      {
+        id: "view-wrap-notes",
+        group: "View",
+        title: wrapNotes ? t("Keep coach notes on one line") : t("Wrap long coach notes"),
+        keywords: "notes wrap lines row height",
+        run: () => togglePref("wrapNotes"),
+      },
+      {
+        id: "view-reset-widths",
+        group: "View",
+        title: t("Reset column widths"),
+        keywords: "columns width resize size",
+        run: () => resetPref("columnWidths"),
       },
       {
         id: "program-rename",
@@ -702,7 +717,7 @@ export function ProgrammingWorkspace({
     // Pushed in several passes; keep each group together under one heading.
     const groups = [...new Set(list.map((c) => c.group))];
     return list.sort((a, b) => groups.indexOf(a.group) - groups.indexOf(b.group));
-  }, [activeWeek, athlete, tightIntensity, columns, hideRest, copied, view, programOpen, wholeProgram, block, history, program, programs, router]);
+  }, [activeWeek, athlete, tightIntensity, columns, hideRest, wrapNotes, copied, view, programOpen, wholeProgram, block, history, program, programs, router]);
 
   // Above the sidebar's: "Tracking" here knows which phase to open. Read-only, only what
   // looks, moves or copies out.

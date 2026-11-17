@@ -2,14 +2,15 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { inputBase, useSelectOnFocus } from "@/components/cells";
+import { inputBase, titleWhenCut, useSelectOnFocus } from "@/components/cells";
 import { completionFor, suggestExercises } from "@/lib/exercises";
 import { t } from "@/lib/i18n";
 
 /**
  * The EXERCISE cell: a text input with a suggestion list and a greyed inline
- * completion (Tab accepts). `picked` tells the caller the name came from the list
- * rather than free text, which is when the TARGET and tier are worth deriving.
+ * completion. Enter and Tab take the completion — or the suggestion the arrows moved to —
+ * and move on, as a sheet's autocomplete does. `picked` tells the caller the name came
+ * from the list rather than free text, which is when the TARGET and tier are worth deriving.
  */
 export function ExerciseInput({
   value,
@@ -27,15 +28,9 @@ export function ExerciseInput({
   const [draft, setDraft] = useState(value ?? "");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
-  /**
-   * Tab walks the list. The query it filters on is the text that was typed, kept here
-   * while the input itself shows whichever suggestion is being tried — otherwise the
-   * first Tab would narrow the list to the one name it had just written.
-   */
-  const [cycling, setCycling] = useState<{ query: string; index: number } | null>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const dirty = useRef(false);
-  /** Set by Escape: the blur it causes must not save the text it just threw away. */
+  /** Set when a name is taken: the blur that follows must not save the half-typed text over it. */
   const discard = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const select = useSelectOnFocus();
@@ -46,9 +41,8 @@ export function ExerciseInput({
 
   // The list opens on typing, never on focus alone: a focused cell has to leave the
   // arrow keys to the grid, or a coach can no longer walk down a column.
-  const options = open ? suggestExercises(cycling?.query ?? draft, history, 8) : [];
-  const completion =
-    open && active < 0 && cycling === null ? completionFor(draft, history) : "";
+  const options = open ? suggestExercises(draft, history, 8) : [];
+  const completion = open && active < 0 ? completionFor(draft, history) : "";
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -66,7 +60,6 @@ export function ExerciseInput({
   function close() {
     setOpen(false);
     setActive(-1);
-    setCycling(null);
   }
 
   function commit(next: string, picked: boolean) {
@@ -100,60 +93,28 @@ export function ExerciseInput({
       return;
     }
 
-    if (e.key === "Tab" && options.length > 0) {
-      // Ours while there are suggestions — the grid would otherwise take Tab to move on.
-      e.preventDefault();
-      e.stopPropagation();
-      const query = cycling?.query ?? draft;
-      const list = suggestExercises(query, history, 8);
-      if (list.length === 0) return;
-
-      const step = e.shiftKey ? -1 : 1;
-      const index =
-        cycling === null
-          ? e.shiftKey
-            ? list.length - 1
-            : 0
-          : (cycling.index + step + list.length) % list.length;
-
-      // Cycling is browsing, not typing: nothing is saved until one is taken.
-      dirty.current = true;
-      setCycling({ query, index });
-      setActive(index);
-      setDraft(list[index]);
-      return;
-    }
-
-    if (e.key === "Enter") {
-      // Enter only picks when the highlight was moved on purpose; otherwise it
-      // commits what was typed and lets the grid move down, like every other cell.
-      if (open && active >= 0 && options[active]) {
-        e.preventDefault();
-        e.stopPropagation();
-        take(options[active]);
-        return;
-      }
-      e.currentTarget.blur();
+    if ((e.key === "Enter" || e.key === "Tab") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // The suggestion the arrows moved to, else the greyed completion, else what was
+      // typed. Not swallowed either way: the grid still moves down, or across.
+      const name = open && active >= 0 ? options[active] : completion ? suggestExercises(draft, history, 1)[0] : undefined;
+      if (name) take(name);
+      else if (e.key === "Enter") e.currentTarget.blur();
       return;
     }
 
     if (e.key === "Escape") {
-      // Backing out of a cycle puts what was typed back before closing anything.
-      if (cycling !== null) {
-        e.stopPropagation();
-        setDraft(cycling.query);
-        close();
-        return;
-      }
       if (open && options.length > 0) {
         e.stopPropagation();
         close();
         return;
       }
+      // What was there comes back, and the cell stays selected for the arrow keys.
       dirty.current = false;
-      discard.current = true;
       setDraft(value ?? "");
-      e.currentTarget.blur();
+      close();
+      const input = e.currentTarget;
+      delete input.dataset.editing;
+      requestAnimationFrame(() => input.select());
     }
   }
 
@@ -169,20 +130,19 @@ export function ExerciseInput({
           dirty.current = true;
           setDraft(typed);
           setActive(-1);
-          setCycling(null);
           setOpen(true);
           // No saving mid-word here, unlike the other cells: a half-typed name would
           // become a suggestion of its own and fill in the wrong tier and target. The
           // name is saved when it is taken — Enter, a click, or leaving the cell.
         }}
-        // A name reached with Tab counts as picked from the list, like a click would.
+        onMouseEnter={titleWhenCut}
         onBlur={() => {
           if (discard.current) {
             discard.current = false;
             close();
             return;
           }
-          commit(draft, cycling !== null);
+          commit(draft, false);
         }}
         onKeyDown={onKeyDown}
         className={`${inputBase} truncate ${className}`}
@@ -196,7 +156,7 @@ export function ExerciseInput({
           <span className="invisible">{draft}</span>
           {/* Clicking the greyed rest takes it, like Tab or a click in the list. */}
           <span
-            title={t("Click or Tab to take it")}
+            title={t("Click, Enter or Tab to take it")}
             // Mousedown would blur the input first and close the list.
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => take(options[0])}

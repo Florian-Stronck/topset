@@ -3,8 +3,8 @@
  * older copies unsafe to sync (a changed table they would write wrong); they are then told
  * to update instead. Copies from before the version was sent count as 0.0.0.
  */
-// 0.5.0: older copies delete, on starting, whatever another computer added to the server.
-export const MIN_DESKTOP_VERSION = "0.5.0";
+// 0.13.0: older copies create meets without a competition, which the server refuses.
+export const MIN_DESKTOP_VERSION = "0.13.0";
 
 export const VERSION_HEADER = "X-Topset-Version";
 

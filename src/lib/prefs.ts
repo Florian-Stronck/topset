@@ -19,6 +19,10 @@ export type Prefs = {
   density: "comfortable" | "compact";
   columns: Record<Column, boolean>;
   hideRestDays: boolean;
+  /** A long coach note wraps onto more lines, and its row grows to fit. */
+  wrapNotes: boolean;
+  /** Grid columns the coach dragged to a width of their own, in px, by column key. */
+  columnWidths: Record<string, number>;
   sidebarCollapsed: boolean;
   fontSize: "small" | "medium" | "large";
   /** "system" follows the device's own light or dark setting. */
@@ -78,6 +82,8 @@ export const PREF_DEFAULTS: Prefs = {
   density: "comfortable",
   columns: { progression: true, notes: true, time: false, weight: true, tempo: false, rest: false, video: false },
   hideRestDays: false,
+  wrapNotes: true,
+  columnWidths: {},
   sidebarCollapsed: false,
   fontSize: "medium",
   theme: "dark",

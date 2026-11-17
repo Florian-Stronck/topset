@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { currentAttempt, meetScore, parseRacks, projectedTotal, rackBrand, rackFor, ratesByNumber, thirdFor, thirdsByLift, totalOf, weightOf, type AttemptData } from "@/lib/competition";
+import { currentAttempt, meetScore, openersSet, parseRacks, projectedTotal, rackBrand, rackFor, ratesByNumber, thirdFor, thirdsByLift, totalOf, weightOf, type AttemptData } from "@/lib/competition";
 
 const attempt = (lift: AttemptData["lift"], number: number, weight: number | null, result: AttemptData["result"] = "PENDING"): AttemptData => ({
   id: `${lift}${number}`,
@@ -99,5 +99,13 @@ describe("rack heights", () => {
     assert.equal(rackBrand(racks, "  "), null);
     assert.equal(rackFor(racks, "ELEIKO").squat, "12");
     assert.deepEqual(rackFor(racks, null), { squat: null, bench: null, safety: null });
+  });
+});
+
+describe("openers set", () => {
+  test("counts lifts whose first attempt has a weight", () => {
+    assert.equal(openersSet([]), 0);
+    assert.equal(openersSet([attempt("SQUAT", 1, 200), attempt("BENCH", 1, null), attempt("BENCH", 2, 130), attempt("DEADLIFT", 1, 250)]), 2);
+    assert.equal(openersSet([attempt("SQUAT", 1, 200), attempt("BENCH", 1, 120), attempt("DEADLIFT", 1, 250)]), 3);
   });
 });

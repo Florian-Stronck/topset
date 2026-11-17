@@ -49,15 +49,18 @@ test("phone writes reach the coaches' desktop apps", async () => {
 
   // A meet changed on the phone comes down with its attempts; deleted, it comes down as removed.
   await client.executeMultiple(`
-    INSERT INTO "Meet" ("id", "athleteId", "name", "date") VALUES ('m1', 'a1', 'Nationals', 0);
+    INSERT INTO "Competition" ("id", "coachId", "name", "date") VALUES ('c1', 'anna', 'Nationals', 0);
+    INSERT INTO "Meet" ("id", "athleteId", "name", "date", "competitionId") VALUES ('m1', 'a1', 'Nationals', 0, 'c1');
     INSERT INTO "Attempt" ("id", "meetId", "lift", "number") VALUES ('at1', 'm1', 'SQUAT', 1);
   `);
   const since = desk.rev;
   const logMeet = () =>
     prisma.$transaction([logPlan(phone, "Meet", [{ id: "m1", athleteId: "a1" }]), logPlan(phone, "Attempt", [{ id: "at1", athleteId: "a1" }])]);
   await logMeet();
+  await logPlan(phone, "Competition", [{ id: "c1", athleteId: null }]);
   const meet = await planData(client, "anna", "anna-desk", since, undefined, true);
   assert.deepEqual([meet.rows.Meet?.map((r) => r.id), meet.rows.Attempt?.map((r) => r.id)], [["m1"], ["at1"]]);
+  assert.deepEqual(meet.rows.Competition?.map((r) => r.id), ["c1"], "the competition, under no athlete, comes down too");
   await prisma.meet.delete({ where: { id: "m1" } });
   await logMeet();
   const gone = await planData(client, "anna", "anna-desk", meet.rev, undefined, true);

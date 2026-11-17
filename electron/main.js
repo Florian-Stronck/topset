@@ -623,5 +623,31 @@ app.whenReady().then(() =>
   }),
 );
 
+/** How long a closed app stays behind, out of sight, to get the last edits up on slow wifi. */
+const LAST_SYNC_WAIT_MS = 20000;
+let lastSyncDone = false;
+
+/**
+ * Closing right after an edit used to kill the server before its next push. Now the windows go
+ * at once, the server sends what's left, and only then does the app really quit. Offline or
+ * past the wait, the rest goes up at the next start, as before.
+ */
+app.on("before-quit", (event) => {
+  if (lastSyncDone || !server || server.exitCode !== null || !server.connected) return;
+  event.preventDefault();
+  lastSyncDone = true;
+  for (const w of BrowserWindow.getAllWindows()) w.hide();
+  const done = () => {
+    clearTimeout(timer);
+    server.off("message", onMessage);
+    app.quit();
+  };
+  const onMessage = (m) => m === "quit-ready" && done();
+  const timer = setTimeout(done, LAST_SYNC_WAIT_MS);
+  server.on("message", onMessage);
+  server.once("exit", done);
+  server.send("quit");
+});
+
 app.on("window-all-closed", () => app.quit());
 app.on("quit", () => server?.kill());

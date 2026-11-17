@@ -2,9 +2,10 @@
 
 import { useRef, useState } from "react";
 import type { IntensityType } from "@prisma/client";
-import { NumberInput } from "@/components/cells";
+import { NumberInput, TextInput } from "@/components/cells";
 import { MenuOptions } from "@/components/Select";
 import { Popover } from "@/components/Popover";
+import { parseIntensity } from "@/lib/intensity";
 import { t } from "@/lib/i18n";
 
 export type IntensityValue = {
@@ -81,7 +82,7 @@ export function IntensityKind({
           setOpen((o) => !o);
         }}
         onKeyDown={onKeyDown}
-        title={t("Kind of intensity, range and ramp")}
+        title={t("Kind of intensity, range and ramp. Or type it in the next cell: 80%, @8, 2 rir, 100kg, +2.5 for a ramp.")}
         aria-haspopup="menu"
         aria-expanded={open}
         className={`flex h-[22px] shrink-0 items-center gap-0.5 rounded px-1.5 text-[10px] font-medium ${
@@ -165,7 +166,20 @@ export function IntensityAmount({
   return (
     <div className="flex h-full w-full min-w-0 items-center rounded-[3px] focus-within:bg-surface-3 focus-within:ring-1 focus-within:ring-accent/60">
       <div className="h-full min-w-0 flex-1">
-        <NumberInput value={value.intensity} align="center" placeholder="—" className={quiet} onCommit={(v) => onCommit({ intensity: v })} />
+        <TextInput
+          value={value.intensity === null ? null : String(value.intensity)}
+          placeholder="—"
+          className={`text-center ${quiet}`}
+          valid={(v) => parseIntensity(v, value.intensityType) !== null}
+          format={(v) => {
+            const n = parseIntensity(v, value.intensityType)?.intensity;
+            return n == null ? "" : String(n);
+          }}
+          onCommit={(v) => {
+            const parsed = parseIntensity(v ?? "", value.intensityType);
+            if (parsed) onCommit(parsed);
+          }}
+        />
       </div>
       {range && (
         <>

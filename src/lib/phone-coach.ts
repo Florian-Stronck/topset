@@ -76,8 +76,9 @@ export async function signedInFor(athleteIds: string[], need: Need): Promise<Ses
 /** Plan rows changed on the phone, for the desktop apps to pull (see `planData`). */
 export function logPlan(
   coach: SessionCoach,
-  table: "Athlete" | "Meet" | "Attempt" | "Program" | "Block" | "Week" | "Day" | "ExerciseRow" | "ProgressionRule" | "CheckinQuestion",
-  rows: { id: string; athleteId: string }[]) {
+  table: "Athlete" | "Competition" | "Meet" | "Attempt" | "Program" | "Block" | "Week" | "Day" | "ExerciseRow" | "ProgressionRule" | "CheckinQuestion",
+  // A competition is under no athlete: null.
+  rows: { id: string; athleteId: string | null }[]) {
   return prisma.planChange.createMany({
     data: rows.map((r) => ({ coachId: coach.id, table, rowId: r.id, sessionId: coach.sessionId, athleteId: r.athleteId })),
   });

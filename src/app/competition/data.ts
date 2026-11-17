@@ -182,6 +182,7 @@ export async function plannerData(athlete: AthleteData, picked: string | undefin
 
   const data: MeetData[] = meets.map((meet) => ({
     id: meet.id,
+    competitionId: meet.competitionId,
     name: meet.name,
     federation: meet.federation,
     weightClass: meet.weightClass,

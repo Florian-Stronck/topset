@@ -29,6 +29,7 @@ model Coach {
   athletes Athlete[]
   sessions CoachSession[]
   shares   AthleteShare[]
+  competitions Competition[]
 }
 
 /// One athlete shared with another coach. The athlete's own coach (`Athlete.coachId`) stays
@@ -206,8 +207,37 @@ model Meet {
   reminders   String?
   createdAt   DateTime  @default(now())
   attempts    Attempt[]
+  /// The competition this is one athlete's entry in. name/date/federation/venue/weighIn*/startTime/
+  /// rackBrand/reminders are copies of the competition's (rackBrand spelled as this athlete's racks).
+  competitionId String
+  competition   Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
 
   @@index([athleteId])
+  @@index([competitionId])
+}
+
+/// A meet the coach takes athletes to: what is the same for all of them. Each athlete's entry is a
+/// `Meet`, which keeps a copy of these fields, written together by `competition-writes.ts`, so
+/// everything that reads a meet reads it alone (the athlete app, reminders, sync to shared coaches).
+model Competition {
+  id          String   @id @default(cuid())
+  coachId     String
+  coach       Coach    @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  name        String
+  federation  String?
+  date        DateTime
+  venue       String?
+  weighInDay  String?
+  weighInTime String?
+  startTime   String?
+  rackBrand   String?
+  reminders   String?
+  /// Whether a new entry shows in the athlete app; each entry then has its own `Meet.shared`.
+  shared      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  meets       Meet[]
+
+  @@index([coachId])
 }
 
 /// One thing to sort before a meet, the athlete's or the coach's. The athlete ticks theirs off

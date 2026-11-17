@@ -100,6 +100,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
 
   { id: "undo", group: "Edit", title: "Undo", keys: ["mod+z"] },
   { id: "redo", group: "Edit", title: "Redo", keys: ["mod+y", "mod+shift+z"] },
+  { id: "find-replace", group: "Edit", title: "Find and replace", keys: ["mod+f", "mod+h"] },
 
   // Each screen's own, listed early so they lead that screen's palette.
   // The inbox takes bare keys, like a mail client: they never fire while typing.
@@ -207,6 +208,15 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "competition-tab-attempts", group: "Competition", title: "Attempts" },
   { id: "competition-tab-road", group: "Competition", title: "Road to the meet" },
   { id: "competition-tab-history", group: "Competition", title: "History" },
+  { id: "competitions-new", group: "Competition", title: "New competition…" },
+  { id: "competitions-view-upcoming", group: "Competition", title: "Competitions: upcoming" },
+  { id: "competitions-view-past", group: "Competition", title: "Competitions: past" },
+  { id: "competitions-view-all", group: "Competition", title: "Competitions: all" },
+  { id: "competition-edit", group: "Competition", title: "Edit competition details" },
+  { id: "competition-add-athletes", group: "Competition", title: "Add athletes to the competition…" },
+  { id: "competition-add-shared", group: "Competition", title: "Add athletes: show on their phones on / off" },
+  { id: "competition-delete", group: "Competition", title: "Delete competition" },
+  { id: "competition-back", group: "Competition", title: "Back to competitions" },
 
   { id: "week-prev", group: "Week", title: "Previous week", keys: ["alt+arrowleft"] },
   { id: "week-next", group: "Week", title: "Next week", keys: ["alt+arrowright"] },
@@ -238,7 +248,9 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "program-active", group: "Program", title: "Make this program the active one" },
   { id: "whole-program", group: "Program", title: "Whole program" },
 
+  { id: "row-insert-above", group: "Row", title: "Insert a row above", keys: ["alt+shift+enter"], when: "grid" },
   { id: "row-insert", group: "Row", title: "Insert a row below", keys: ["alt+enter"], when: "grid" },
+  { id: "row-tier", group: "Row", title: "Change the row's tier", keys: ["alt+g"], when: "grid" },
   { id: "row-duplicate", group: "Row", title: "Duplicate the row", keys: ["alt+d"], when: "grid" },
   // ⌥⌫ deletes a word on a Mac, and the grid is all text fields.
   { id: "row-delete", group: "Row", title: "Delete the row", keys: [IS_MAC ? "mod+shift+backspace" : "alt+backspace"], when: "grid" },
@@ -266,6 +278,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "view-video", group: "View", title: "Show / hide the VIDEO column" },
   { id: "view-notes", group: "View", title: "Show / hide the COACH NOTES column" },
   { id: "view-rest-days", group: "View", title: "Show / hide rest days" },
+  { id: "view-wrap-notes", group: "View", title: "Wrap / cut long coach notes" },
+  { id: "view-reset-widths", group: "View", title: "Reset column widths" },
   { id: "view-density", group: "View", title: "Compact / comfortable row spacing" },
   { id: "view-text-small", group: "View", title: "Small text" },
   { id: "view-text-medium", group: "View", title: "Medium text" },
@@ -307,7 +321,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "go-tracking", group: "Go", title: "Tracking" },
   { id: "go-schedule", group: "Go", title: "Schedule", keys: ["alt+4"] },
   { id: "go-chat", group: "Go", title: "Chat", keys: ["alt+5"] },
-  { id: "go-competition", group: "Go", title: "Competition" },
+  { id: "go-competition", group: "Go", title: "Competitions" },
   { id: "go-settings", group: "Go", title: "Settings" },
   { id: "pr-highlight", group: "Settings", title: "Highlight PRs: on / off" },
   { id: "language-en", group: "Settings", title: "Language: English" },

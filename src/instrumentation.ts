@@ -6,6 +6,10 @@
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs" || !process.env.TOPSET_CLOUD_FILE) return;
-  const { startSync } = await import("@/lib/sync");
+  const { finalSync, startSync } = await import("@/lib/sync");
   void startSync().finally(() => process.send?.("synced"));
+  // The window is closing: the shell keeps this process alive until the last edits are up.
+  process.on("message", (m) => {
+    if (m === "quit") void finalSync().finally(() => process.send?.("quit-ready"));
+  });
 }

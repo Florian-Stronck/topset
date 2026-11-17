@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export const inputBase =
-  "h-full w-full rounded-[3px] bg-transparent px-2 py-1.5 text-[12px] outline-none placeholder:text-muted-2 focus:bg-surface-3 focus:ring-1 focus:ring-accent/60";
+  "h-full w-full rounded-[3px] bg-transparent px-2 py-1.5 text-[12px] outline-none placeholder:text-muted-2 focus:bg-surface-3 focus:ring-1 focus:ring-accent/60 aria-invalid:text-miss aria-invalid:ring-1 aria-invalid:ring-miss";
 
 /** How long a cell sits still before it saves itself. */
 export const COMMIT_DELAY = 500;
@@ -74,27 +74,28 @@ export function useSelectOnFocus() {
 
 /**
  * Escape backs out of everything typed since the cell took the focus — saves made at the
- * pauses included. `focus` notes what was there; `escape` hands it back, or undefined
- * when nothing changed, and swallows the save the blur that follows would make.
+ * pauses included. `focus` notes what was there; `escape` hands it back. The cell keeps
+ * the focus, selected again, the way a sheet leaves it: the arrow keys go on working.
  */
 export function useEscape<T>(value: T) {
   const original = useRef(value);
-  const escaping = useRef(false);
   return {
     focus: () => {
       original.current = value;
     },
-    /** Call from the blur: true when this blur is Escape's and must not save. */
-    blurred: () => {
-      const was = escaping.current;
-      escaping.current = false;
-      return was;
-    },
-    escape: () => {
-      escaping.current = true;
+    escape: (input: HTMLInputElement) => {
+      delete input.dataset.editing;
+      // Selected once React has put the old text back.
+      requestAnimationFrame(() => input.select());
       return original.current;
     },
   };
+}
+
+/** A cell's text as its tooltip, only while the cell is too narrow to show all of it. */
+export function titleWhenCut(e: React.MouseEvent<HTMLInputElement>) {
+  const el = e.currentTarget;
+  el.title = el.scrollWidth > el.clientWidth ? el.value : "";
 }
 
 /**
@@ -168,7 +169,6 @@ export function NumberInput({
     // The blur path sends the same draft itself, so the pending one is dropped.
     auto.cancel();
     dirty.current = false;
-    if (esc.blurred()) return;
     const trimmed = draft.trim();
     const next = trimmed === "" ? null : Number(trimmed.replace(",", "."));
     if (next !== null && Number.isNaN(next)) {
@@ -192,6 +192,7 @@ export function NumberInput({
         select.onFocus(e);
       }}
       inputMode="decimal"
+      aria-invalid={draft.trim() !== "" && Number.isNaN(Number(draft.trim().replace(",", "."))) ? true : undefined}
       value={draft}
       placeholder={placeholder}
       onChange={(e) => {
@@ -206,10 +207,9 @@ export function NumberInput({
         if (e.key === "Escape") {
           auto.cancel();
           dirty.current = false;
-          const was = esc.escape();
+          const was = esc.escape(e.currentTarget);
           setDraft(was === null ? "" : String(was));
           if (was !== value) onCommit(was);
-          e.currentTarget.blur();
         }
       }}
       className={`${inputBase} ${alignClass} ${className}`}
@@ -225,11 +225,14 @@ export function TextInput({
   list,
   suggestions,
   valid,
+  format,
 }: {
   value: string | null;
   onCommit: (v: string | null) => void;
   /** Text this cell can't take is never saved, and leaving the cell puts back what was there. */
   valid?: (text: string) => boolean;
+  /** How the saved text reads back once the cell is left: "3x5" in REPS shows as "5". */
+  format?: (text: string) => string;
   placeholder?: string;
   className?: string;
   /** Id of a <datalist> to suggest from. */
@@ -267,6 +270,8 @@ export function TextInput({
         select.onFocus(e);
       }}
       value={draft}
+      aria-invalid={valid && !valid(draft) ? true : undefined}
+      onMouseEnter={titleWhenCut}
       placeholder={placeholder}
       list={list}
       onChange={(e) => {
@@ -292,11 +297,11 @@ export function TextInput({
       onBlur={() => {
         auto.cancel();
         dirty.current = false;
-        if (esc.blurred()) return;
         if (valid && !valid(draft)) {
           setDraft(value ?? "");
           return;
         }
+        if (format) setDraft(format(draft));
         const next = draft.trim() === "" ? null : draft;
         if (next !== value) onCommit(next);
       }}
@@ -305,10 +310,9 @@ export function TextInput({
         if (e.key === "Escape") {
           auto.cancel();
           dirty.current = false;
-          const was = esc.escape();
+          const was = esc.escape(e.currentTarget);
           setDraft(was ?? "");
           if (was !== value) onCommit(was);
-          e.currentTarget.blur();
         }
       }}
       className={`${inputBase} truncate ${className}`}

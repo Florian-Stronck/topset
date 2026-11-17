@@ -392,7 +392,15 @@ async function main() {
   });
 
   const nationals = await prisma.meet.create({
-    data: { athleteId: athlete.id, name: "Nationals 2026", federation: "IPF", weightClass: "93", bodyweight: 92.4, date: NATIONALS },
+    data: {
+      athlete: { connect: { id: athlete.id } },
+      competition: { create: { coachId: coach.id, name: "Nationals 2026", federation: "IPF", date: NATIONALS } },
+      name: "Nationals 2026",
+      federation: "IPF",
+      weightClass: "93",
+      bodyweight: 92.4,
+      date: NATIONALS,
+    },
   });
   const ATTEMPTS: [("SQUAT" | "BENCH" | "DEADLIFT"), number, number, "GOOD" | "MISS"][] = [
     ["SQUAT", 1, 235, "GOOD"], ["SQUAT", 2, 247.5, "GOOD"], ["SQUAT", 3, 255, "MISS"],
@@ -400,7 +408,16 @@ async function main() {
     ["DEADLIFT", 1, 280, "GOOD"], ["DEADLIFT", 2, 292.5, "GOOD"], ["DEADLIFT", 3, 302.5, "GOOD"],
   ];
   await prisma.attempt.createMany({ data: ATTEMPTS.map(([lift, number, weight, result]) => ({ meetId: nationals.id, lift, number, weight, result })) });
-  await prisma.meet.create({ data: { athleteId: athlete.id, name: "Worlds 2026", federation: "IPF", weightClass: "93", date: WORLDS } });
+  await prisma.meet.create({
+    data: {
+      athlete: { connect: { id: athlete.id } },
+      competition: { create: { coachId: coach.id, name: "Worlds 2026", federation: "IPF", date: WORLDS } },
+      name: "Worlds 2026",
+      federation: "IPF",
+      weightClass: "93",
+      date: WORLDS,
+    },
+  });
 
   console.log(
     `Added ${NAME}: ${rows} rows, ${sets} sets, ${weighIns.length} weigh-ins, ${nutrition.length} nutrition days, ${answers.length} check-in answers. Nationals ${ymd(NATIONALS)}, Worlds ${ymd(WORLDS)}.`,

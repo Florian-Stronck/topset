@@ -323,6 +323,7 @@ async function seed(config: CloudConfig): Promise<void> {
         if (current && current.id !== config.coachId) {
           db.prepare(`UPDATE "Coach" SET "id" = ?, "username" = ? WHERE "id" = ?`).run(config.coachId, config.username, current.id);
           db.prepare(`UPDATE "Athlete" SET "coachId" = ?`).run(config.coachId);
+          db.prepare(`UPDATE "Competition" SET "coachId" = ?`).run(config.coachId);
         } else if (!current) {
           db.prepare(`INSERT INTO "Coach" ("id", "username", "name") VALUES (?, ?, ?)`).run(config.coachId, config.username, config.name);
         }
@@ -414,7 +415,7 @@ async function pullPlan(config: CloudConfig): Promise<void> {
     const sent = s.sent;
     db.transaction(() => {
       const before: Sent = new Map([...sent].map(([t, m]) => [t, new Map(m)]));
-      applyPlan(db, data, sent);
+      applyPlan(db, data, sent, config.coachId);
       saveSent(db, before, sent);
       writeMeta(db, PLAN_REV, String(data.rev));
     })();
@@ -555,8 +556,16 @@ export function readOnlyAthletes(db: Database.Database, me: string): { readOnly:
 }
 
 /** The pure-database half of `pullPlan`, apart for testing. Changes `sent` to match. */
-export function applyPlan(db: Database.Database, data: Pick<PlanData, "rows" | "removed">, sent: Sent): void {
+export function applyPlan(db: Database.Database, data: Pick<PlanData, "rows" | "removed">, sent: Sent, me?: string): void {
   const names = new Set(tables(db));
+  // A meet of an athlete shared with this coach comes without the owner's competition, which
+  // stays theirs: one is made here from the meet, to point at, and never goes up (see `push`).
+  const stubCompetition = names.has("Competition")
+    ? db.prepare(
+        `INSERT OR IGNORE INTO "Competition" ("id", "coachId", "name", "federation", "date", "venue", "weighInDay", "weighInTime", "startTime", "rackBrand", "reminders", "shared") ` +
+          `SELECT ?, "coachId", ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM "Athlete" WHERE "id" = ? AND "coachId" != ?`,
+      )
+    : null;
   for (const { table } of [...SCOPE].reverse()) {
     const ids = data.removed[table];
     if (!ids || !names.has(table) || table === "Coach") continue;
@@ -585,6 +594,14 @@ export function applyPlan(db: Database.Database, data: Pick<PlanData, "rows" | "
           const set = given.filter((c) => c !== "id");
           if (set.length) db.prepare(`UPDATE ${quote(table)} SET ${set.map((c) => `${quote(c)} = ?`).join(", ")} WHERE "id" = ?`).run(...set.map((c) => row[c] ?? null), row.id);
         } else if (table !== "Coach") {
+          if (table === "Meet" && stubCompetition && me) {
+            const r = (c: string) => row[c] ?? null;
+            stubCompetition.run(
+              ...["competitionId", "name", "federation", "date", "venue", "weighInDay", "weighInTime", "startTime", "rackBrand", "reminders", "shared"].map(r),
+              r("athleteId"),
+              me,
+            );
+          }
           db.prepare(`INSERT INTO ${quote(table)} (${given.map(quote).join(", ")}) VALUES (${given.map(() => "?").join(", ")})`).run(...given.map((c) => row[c] ?? null));
         } else continue;
       } catch {
@@ -712,7 +729,8 @@ async function push(config: CloudConfig, force: boolean): Promise<void> {
     const sentCols = syncedColumns(t, cols);
     // Other coaches' rows are here to name them; only the coach's own goes up.
     const all = db.prepare(`SELECT * FROM ${quote(t)}`).all() as Row[];
-    const rows = t === "Coach" ? all.filter((r) => r.id === config.coachId) : all;
+    const rows =
+      t === "Coach" ? all.filter((r) => r.id === config.coachId) : t === "Competition" ? all.filter((r) => r.coachId === config.coachId) : all;
     const changes = tableChanges(t, rows, cols, s.sent.get(t) ?? new Map());
     next.set(t, changes.signatures);
     if (locked.size) changes.upsert = changes.upsert.filter((r) => !keepBack(t, String(r.id)));
@@ -795,7 +813,7 @@ async function push(config: CloudConfig, force: boolean): Promise<void> {
   s.dataVersion = version;
 }
 
-const ORDER = ["Coach", "Athlete", "Program", "Meet", "Block", "Attempt", "Week", "Day", "ExerciseRow", "ProgressionRule"];
+const ORDER = ["Coach", "Competition", "Athlete", "Program", "Meet", "Block", "Attempt", "Week", "Day", "ExerciseRow", "ProgressionRule"];
 
 function split(payload: Push): Push[] {
   const count = Object.values(payload.tables).reduce((n, t) => n + t.upsert.length + t.remove.length, 0);
@@ -1021,6 +1039,20 @@ export function stopSync(): void {
   s.lastSync = null;
   s.merged = null;
   s.error = null;
+}
+
+/**
+ * The app is closing: no more ticks, and whatever the coach changed since the last push goes
+ * up now (after a sync already running). Nothing to send is one local pragma. Failing is
+ * fine: what didn't go up is still marked unsent on disk and goes at the next start.
+ */
+export async function finalSync(): Promise<void> {
+  const s = state();
+  if (s.timer) clearInterval(s.timer);
+  s.timer = null;
+  const config = readConfig();
+  if (!config || !s.sent) return;
+  await s.queue.run(() => push(config, false)).catch(() => {});
 }
 
 /** Refresh: bring athlete logs down and changes up, now. */
