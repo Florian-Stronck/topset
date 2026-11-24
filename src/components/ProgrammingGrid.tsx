@@ -6,7 +6,10 @@ import type { IntensityType, Tier } from "@prisma/client";
 import {
   addRow,
   addWeek,
+  fillForward,
   fillMeetDay,
+  fillWeekForward,
+  undoFill,
   unfillMeetDay,
   swapDays,
   deleteRow,
@@ -27,6 +30,7 @@ import {
   updateDay,
   updateProgram,
   updateRow,
+  type FillResult,
   type LoggedRow,
   type RowTemplate,
 } from "@/app/programming/actions";
@@ -208,6 +212,26 @@ function gridLayout(
   };
 }
 
+
+type FillField = NonNullable<Parameters<typeof fillForward>[1]>[number];
+
+/** The row fields each column holds, for filling it into later weeks. */
+const FILL_FIELDS: Record<NavKey, FillField[]> = {
+  target: ["target"],
+  exercise: ["exercise", "tier"],
+  progression: [],
+  sets: ["sets"],
+  reps: ["reps", "repsMax"],
+  time: ["duration"],
+  kind: ["intensityType", "rampStep"],
+  // A number means nothing without its kind, so the kind always comes along.
+  intensity: ["intensityType", "intensity", "intensityMax"],
+  load: ["load"],
+  tempo: ["tempo"],
+  rest: ["restTime"],
+  video: ["videoUrl"],
+  notes: ["coachNotes"],
+};
 
 /**
  * What text typed or pasted into a column means for its row, read the way a sheet's cell
@@ -464,6 +488,8 @@ export function ProgrammingGrid({
   }
 
   const activeWeek = Math.min(week, block.weeks.length);
+  /** No week after this one to fill into. */
+  const lastWeek = activeWeek >= block.weeks.length;
   const weeks = [activeWeek];
   const maxes = maxesOf(block, athlete);
 
@@ -1268,6 +1294,17 @@ export function ProgrammingGrid({
         );
       }
 
+      case "row-fill-next":
+      case "row-fill-later": {
+        if (!row || lastWeek) return false;
+        handled();
+        // From the keys, with nothing selected, the cell with focus is the box.
+        const at = coordOf(document.activeElement);
+        const box = rect ?? (at ? { r1: at[0], r2: at[0], c1: at[1], c2: at[1] } : null);
+        fillWeeks(id === "row-fill-next" ? "next" : "later", box, index);
+        return true;
+      }
+
       case "row-duplicate": {
         if (!row) return false;
         pendingFocus.current = `${index + 1}-1`;
@@ -1409,6 +1446,35 @@ export function ProgrammingGrid({
       },
       async () => {
         if (placed) await placeRows(placed.was, placed.lost);
+      },
+    );
+  }
+
+  /**
+   * Fills rows into the next week, or every later week, as one undo step. Inside `box` it
+   * takes the box's rows and only its columns' fields (whole rows when the box spans every
+   * column); outside it, the one row whole. Rule-driven fields step on from this week.
+   */
+  function fillWeeks(scope: "next" | "later", box: Box | null, index: number) {
+    const inBox = box !== null && index >= box.r1 && index <= box.r2;
+    const span = inBox ? Array.from({ length: box.r2 - box.r1 + 1 }, (_, k) => box.r1 + k) : [index];
+    const ids = span.flatMap((r) => {
+      const row = nav.slots.get(r)?.row;
+      return row && !isBlank(row) ? [row.id] : [];
+    });
+    const whole = !inBox || (box.c1 === 0 && box.c2 === NAV_COLS - 1);
+    const fields = whole ? null : [...new Set(navKeys.slice(box.c1, box.c2 + 1).flatMap((k) => FILL_FIELDS[k]))];
+    if (ids.length === 0 || fields?.length === 0) return;
+
+    let done: FillResult | null = null;
+    edit(
+      scope === "next" ? "fill next week" : "fill later weeks",
+      async () => {
+        done = await fillForward(ids, fields, scope);
+        if (done && done.skipped > 0) notify(t("{n} locked weeks left as they were", { n: done.skipped }));
+      },
+      async () => {
+        if (done) await undoFill(done);
       },
     );
   }
@@ -2234,6 +2300,19 @@ export function ProgrammingGrid({
                                   { label: t("Paste"), hint: keyLabel("mod+v"), onSelect: () => pasteFromClipboard([box.r1, box.c1]) },
                                   { label: t("Clear cells"), hint: keyLabel("delete"), onSelect: () => clearBox(box, "clear cells") },
                                   "divider" as const,
+                                  {
+                                    label: t("Fill next week"),
+                                    hint: k("row-fill-next"),
+                                    onSelect: () => fillWeeks("next", box, r),
+                                    disabled: lastWeek || ghost,
+                                  },
+                                  {
+                                    label: t("Fill later weeks"),
+                                    hint: k("row-fill-later"),
+                                    onSelect: () => fillWeeks("later", box, r),
+                                    disabled: lastWeek || ghost,
+                                  },
+                                  "divider" as const,
                                 ]
                               : []),
                             { label: t("Insert a row above"), hint: k("row-insert-above"), onSelect: run("row-insert-above"), disabled: ghost },
@@ -2992,6 +3071,11 @@ function WeekTabs({
           });
         },
       },
+      {
+        label: t("Fill later weeks from week {n}", { n: w }),
+        onSelect: () => fillWeekUndoable(history, week.id),
+        disabled: w === weeks.length,
+      },
       "divider",
       {
         label: week.locked ? t("Unlock week {n}", { n: w }) : t("Lock week {n}", { n: w }),
@@ -3142,11 +3226,40 @@ function WeekTabs({
         + {t("add week")}
       </button>
       )}
+      {!readOnly && active < weeks.length && (
+        <button
+          type="button"
+          title={t("Copy week {n} into every later week, rules stepping on from it", { n: active })}
+          onClick={() => {
+            const from = weeks.find((x) => x.order === active);
+            if (from) fillWeekUndoable(history, from.id);
+          }}
+          className="shrink-0 whitespace-nowrap px-2 py-2 text-[12px] text-muted hover:text-accent"
+        >
+          {t("Fill later weeks")}
+        </button>
+      )}
       </div>
 
       {weekMenu.menu}
     </div>
   );
+}
+
+/** Fills a whole week into every later one as one undoable edit. */
+function fillWeekUndoable(history: History, weekId: string) {
+  let done: FillResult | null = null;
+  const run = async () => {
+    done = await fillWeekForward(weekId);
+  };
+  void run();
+  history.push({
+    label: "fill later weeks",
+    undo: async () => {
+      if (done) await undoFill(done);
+    },
+    redo: run,
+  });
 }
 
 /** Adds a week to the end of a phase as one undoable edit; `order` is the number it gets. */

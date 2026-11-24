@@ -267,6 +267,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { id: "day-paste", group: "Row", title: "Paste day here", when: "grid" },
   { id: "day-rename", group: "Row", title: "Rename the day", when: "grid" },
   { id: "row-recalc", group: "Row", title: "Recalculate the weight", when: "grid" },
+  { id: "row-fill-next", group: "Row", title: "Fill next week", keys: ["alt+e"], when: "grid" },
+  { id: "row-fill-later", group: "Row", title: "Fill later weeks", keys: ["alt+shift+e"], when: "grid" },
   { id: "meet-fill", group: "Row", title: "Fill a meet day with its attempts", keys: ["alt+m"], when: "grid" },
 
   { id: "view-tight-intensity", group: "View", title: "Intensity beside reps / across the week" },

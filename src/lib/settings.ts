@@ -132,6 +132,11 @@ export type CoachSettings = {
   progressionPresets: ProgressionPreset[];
   /** An edit in one week is made in every other unlocked week of the phase too. */
   syncWeeks: boolean;
+  /**
+   * Progression rules rewrite the weeks after their row whenever the plan changes. Off,
+   * later weeks only change when the coach fills them forward.
+   */
+  autoRules: boolean;
   /** 0 = Monday … 6 = Sunday. */
   weekStart: number;
   /** Snap program and phase start dates to `weekStart`. */
@@ -223,7 +228,9 @@ export const DEFAULTS: CoachSettings = {
     { label: "+1 set every 2 weeks", field: "SETS", op: "ADD", amount: 1, everyWeeks: 2, startWeek: 2, endWeek: null },
     { label: "Deload: −40% sets, last week", field: "SETS", op: "MULTIPLY", amount: 0.6, everyWeeks: 1, startWeek: 4, endWeek: 4 },
   ],
-  syncWeeks: true,
+  // Later weeks only change when the coach fills them forward, unless they turn these on.
+  syncWeeks: false,
+  autoRules: false,
   weekStart: 0,
   snapStart: true,
 

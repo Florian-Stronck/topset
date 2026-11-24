@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, Tray, shell, dialog, ipcMain } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -9,6 +9,17 @@ const { fork } = require("node:child_process");
 const { migrate, ensureCoach } = require("./migrate");
 
 const dev = !app.isPackaged;
+
+/** Started by Windows at sign-in: runs in the tray, synced and ready, until the coach opens it. */
+const startHidden = process.argv.includes("--hidden");
+
+/**
+ * One Topset at a time: two would run two servers on one database. A second launch (the
+ * Start menu while it sits in the tray) brings the running one forward instead.
+ */
+const primary = app.requestSingleInstanceLock();
+if (!primary) app.quit();
+app.on("second-instance", () => showWindow());
 
 
 /**
@@ -77,24 +88,47 @@ function wakeServer() {
   } catch {}
 }
 
-/** Zoom is remembered beside the database, so the app opens the size it was left at. */
-function zoomFile() {
+/**
+ * The shell's own settings — zoom, starting with Windows — beside the database, so the app
+ * opens the way it was left. Each write keeps the others.
+ */
+function shellSettingsFile() {
   return path.join(path.dirname(databaseFile()), "topset-settings.json");
 }
 
-function readZoom() {
+function readShellSettings() {
   try {
-    const { zoom } = JSON.parse(fs.readFileSync(zoomFile(), "utf8"));
-    return typeof zoom === "number" ? zoom : 0;
+    const parsed = JSON.parse(fs.readFileSync(shellSettingsFile(), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
-    return 0;
+    return {};
   }
 }
 
-function writeZoom(zoom) {
+function writeShellSettings(patch) {
   try {
-    fs.writeFileSync(zoomFile(), JSON.stringify({ zoom }));
+    fs.writeFileSync(shellSettingsFile(), JSON.stringify({ ...readShellSettings(), ...patch }));
   } catch {}
+}
+
+function readZoom() {
+  const { zoom } = readShellSettings();
+  return typeof zoom === "number" ? zoom : 0;
+}
+
+function writeZoom(zoom) {
+  writeShellSettings({ zoom });
+}
+
+/** On unless the coach turned it off in the tray menu. */
+function startsWithWindows() {
+  return readShellSettings().startWithWindows !== false;
+}
+
+/** Signs Topset in to start with Windows, in the tray. Dev runs leave Windows alone. */
+function applyStartWithWindows(on) {
+  if (dev) return;
+  app.setLoginItemSettings({ openAtLogin: on, args: ["--hidden"] });
 }
 
 /**
@@ -411,13 +445,47 @@ async function prepareDatabase(file) {
 
 let server = null;
 let window = null;
+let tray = null;
+/** Set once the app is really going: until then, closing the window only hides it. */
+let quitting = false;
 
-/** The window, on screen immediately, with the splash in it. */
+function showWindow() {
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
+/** The tray icon: Topset keeps running and syncing there while its window is closed. */
+function makeTray() {
+  tray = new Tray(path.join(__dirname, "icon.ico"));
+  tray.setToolTip("Topset");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Open Topset", click: showWindow },
+      { type: "separator" },
+      {
+        label: "Start with Windows",
+        type: "checkbox",
+        checked: startsWithWindows(),
+        click: (item) => {
+          writeShellSettings({ startWithWindows: item.checked });
+          applyStartWithWindows(item.checked);
+        },
+      },
+      { type: "separator" },
+      { label: "Quit Topset", click: () => app.quit() },
+    ]),
+  );
+  tray.on("click", showWindow);
+}
+
+/** The window, on screen immediately with the splash in it — or hidden, when Windows started it. */
 function openWindow() {
   window = new BrowserWindow({
     width: 1440,
     height: 900,
-    show: true,
+    show: !startHidden,
     backgroundColor: "#0a0a0c",
     title: "Topset",
     icon: path.join(__dirname, "icon.ico"),
@@ -435,12 +503,25 @@ function openWindow() {
     return { action: "deny" };
   });
 
+  // The X puts Topset in the tray; it keeps syncing there and opens again at once.
+  window.on("close", (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    window.hide();
+  });
+  // Shutting down or signing out: let Windows close it rather than hiding and holding things up.
+  window.on("session-end", () => {
+    quitting = true;
+  });
+
   return window;
 }
 
 async function start() {
   wakeServer();
   openWindow();
+  makeTray();
+  applyStartWithWindows(startsWithWindows());
 
   // Window is on screen (backgroundColor painted) the instant it's created; the splash
   // loads into it after. Waiting on show() first would leave the screen empty for as
@@ -487,7 +568,8 @@ async function start() {
 
   await waitForServer(port, server, () => output);
   await firstSync(server);
-  await window.loadURL(`http://127.0.0.1:${port}/programming`);
+  // The root picks the screen: Settings' "Open on start", or wherever the coach left off.
+  await window.loadURL(`http://127.0.0.1:${port}/`);
 
   watchForUpdates();
 }
@@ -503,9 +585,11 @@ const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "
  */
 function showDialog({ message, detail, buttons = ["OK"] }) {
   return new Promise((resolve) => {
+    // Over the app when it is on screen; on its own when Topset sits in the tray.
+    const over = window?.isVisible() ? window : undefined;
     const win = new BrowserWindow({
-      parent: window ?? undefined,
-      modal: !!window,
+      parent: over,
+      modal: !!over,
       width: 420,
       height: 180,
       useContentSize: true,
@@ -572,7 +656,7 @@ function watchForUpdates() {
     const response = await showDialog({
       buttons: ["Restart now", "Later"],
       message: `Topset ${version} is ready`,
-      detail: "Restart to update now, or it installs the next time you close Topset.",
+      detail: "Restart to update now, or it installs the next time you quit Topset from the tray.",
     });
     // Silent, then reopen: without these the wizard (oneClick is off) would pop up.
     if (response === 0) autoUpdater.quitAndInstall(true, true);
@@ -608,6 +692,8 @@ ipcMain.handle("check-for-updates", () =>
 );
 
 app.whenReady().then(() =>
+  // A second launch only hands over to the first one (second-instance above).
+  primary &&
   start().catch((error) => {
     const detail = String(error?.stack || error);
     // Written as well as shown: a dialog is gone the moment it is dismissed, and this
@@ -633,6 +719,7 @@ let lastSyncDone = false;
  * past the wait, the rest goes up at the next start, as before.
  */
 app.on("before-quit", (event) => {
+  quitting = true;
   if (lastSyncDone || !server || server.exitCode !== null || !server.connected) return;
   event.preventDefault();
   lastSyncDone = true;

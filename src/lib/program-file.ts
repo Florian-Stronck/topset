@@ -48,7 +48,6 @@ export type ProgramRow = Prescription & {
   tier: Tier;
   target: string;
   exercise: string;
-  session?: string | null;
   rules: ProgramRule[];
 };
 
@@ -160,7 +159,6 @@ function toPhase(block: SourcePhase): ProgramPhase {
           videoUrl: row.videoUrl,
           duration: row.duration ?? null,
           load: row.load ?? null,
-          session: row.session ?? null,
           rules: row.rules.map((rule) => ({
             order: rule.order,
             field: rule.field,
@@ -324,7 +322,6 @@ function parseRow(value: unknown, r: number, where: string) {
     tier: pick(row.tier, TIERS, `${where} tier`),
     target: text(row.target, `${where} target`),
     exercise: text(row.exercise, `${where} exercise`),
-    session: optionalText(row.session, `${where} session`, 40),
     rules: list(row.rules ?? [], `${where} rules`, LIMITS.rulesPerRow).map((rule, i) =>
       parseRule(rule, i, where),
     ),

@@ -245,6 +245,12 @@ function Programming({ settings, update }: Props) {
       >
         <Switch on={settings.syncWeeks} onChange={(v) => update({ syncWeeks: v })} />
       </Row>
+      <Row
+        label="Apply progression rules automatically"
+        hint="Rules rewrite the weeks after their row on every change. Off, later weeks only change when you fill them forward: right-click cells, or Fill later weeks on the week bar."
+      >
+        <Switch on={settings.autoRules} onChange={(v) => update({ autoRules: v })} />
+      </Row>
       <Row label="Phases in a new program">
         <NumberField value={settings.programPhases} min={1} max={12} onCommit={(v) => update({ programPhases: v ?? 1 })} width={60} />
       </Row>

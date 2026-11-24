@@ -19,7 +19,7 @@ import {
 } from "@/lib/competition";
 import { maxesOf, resolveDay } from "@/lib/intensity";
 import { parseProgramFile } from "@/lib/program-file";
-import { project, type Rule } from "@/lib/progression";
+import { advance, project, type Rule } from "@/lib/progression";
 
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
@@ -725,7 +725,7 @@ export async function addWeek(blockId: string) {
     }
   });
 
-  await applyAllProgressions(blockId);
+  if (await rulesRunThemselves()) await applyAllProgressions(blockId);
   revalidatePath("/programming");
 }
 
@@ -820,6 +820,23 @@ export async function applyProgression(rowId: string) {
   revalidatePath("/programming");
 }
 
+/**
+ * Whether rules rewrite later weeks on their own after a change. Off, the coach fills
+ * weeks forward by hand (`fillForward`, `fillWeekForward`) and nothing moves otherwise.
+ */
+async function rulesRunThemselves() {
+  return (await loadSettings()).autoRules;
+}
+
+/**
+ * After a rule is added, changed or removed: the weeks after it follow when rules run
+ * themselves, and the grid shows the rule either way — it reads rules from the page.
+ */
+async function ruleChanged(rowId: string) {
+  if (await rulesRunThemselves()) await applyProgression(rowId);
+  else revalidatePath("/programming");
+}
+
 export async function applyAllProgressions(blockId: string) {
   assertCoach();
   // Only chain heads carry rules; a row copied into a later week inherits by its link.
@@ -838,7 +855,7 @@ export async function addRule(rowId: string, rule: Omit<Rule, "id" | "order" | "
   const created = await prisma.progressionRule.create({
     data: { rowId, order: (last?.order ?? -1) + 1, ...rule },
   });
-  await applyProgression(rowId);
+  await ruleChanged(rowId);
   return created.id;
 }
 
@@ -846,7 +863,7 @@ export async function addRule(rowId: string, rule: Omit<Rule, "id" | "order" | "
 export async function restoreRule(rule: Rule & { rowId: string; order: number }) {
   assertCoach();
   await prisma.progressionRule.create({ data: rule });
-  await applyProgression(rule.rowId);
+  await ruleChanged(rule.rowId);
 }
 
 export async function updateRule(
@@ -855,13 +872,13 @@ export async function updateRule(
 ) {
   assertCoach();
   const rule = await prisma.progressionRule.update({ where: { id: ruleId }, data: patch });
-  await applyProgression(rule.rowId);
+  await ruleChanged(rule.rowId);
 }
 
 export async function deleteRule(ruleId: string) {
   assertCoach();
   const rule = await prisma.progressionRule.delete({ where: { id: ruleId } });
-  await applyProgression(rule.rowId);
+  await ruleChanged(rule.rowId);
   return rule;
 }
 
@@ -1257,6 +1274,154 @@ export async function restoreWeek(blockId: string, { week, rules }: WeekSnapshot
   revalidatePath("/programming");
 }
 
+type PlanField = (typeof PLAN_FIELDS)[number];
+
+/** What a fill changed: the weeks it wrote into, as they were before, so it can be undone. */
+export type FillResult = {
+  blockId: string;
+  snapshot: WeekSnapshot["week"][];
+  /** Rows written, counted once per week. */
+  filled: number;
+  /** Locked weeks the fill went past without touching. */
+  skipped: number;
+};
+
+/**
+ * Fills rows of one week forward by hand: into the week after it, or into every later
+ * week. Fields a rule drives step on from this week's own value (`advance`), so an edit
+ * made here travels on; every other field picked is copied. A slot with no row gets one.
+ * Locked weeks and meet attempts are left alone, and logged results are never touched.
+ */
+export async function fillForward(
+  rowIds: string[],
+  fields: PlanField[] | null,
+  scope: "next" | "later",
+): Promise<FillResult | null> {
+  assertCoach();
+  if (rowIds.length === 0) return null;
+  const first = await prisma.exerciseRow.findUnique({ where: { id: rowIds[0] }, select: { day: { select: { weekId: true } } } });
+  if (!first) return null;
+  return fillFrom(first.day.weekId, new Set(rowIds), fields ?? [...PLAN_FIELDS], scope);
+}
+
+/**
+ * The whole week into every later week: its days and rows, everything written on them,
+ * rows the source no longer has dropped — what "Carry edits into later weeks" does on its
+ * own, on a click instead. Rule-driven fields step on from this week.
+ */
+export async function fillWeekForward(weekId: string): Promise<FillResult | null> {
+  assertCoach();
+  return fillFrom(weekId, null, [...PLAN_FIELDS], "later");
+}
+
+/** Undoes a fill: the weeks it wrote into go back as they were, rows it made gone. */
+export async function undoFill({ blockId, snapshot }: Pick<FillResult, "blockId" | "snapshot">) {
+  assertCoach();
+  if (snapshot.length === 0) return;
+  await prisma.$transaction(async (tx) => {
+    await tx.week.deleteMany({ where: { id: { in: snapshot.map((w) => w.id) } } });
+    await recreateWeeks(tx, snapshot);
+  });
+  await relinkChain(blockId);
+  revalidatePath("/programming");
+}
+
+/** `only` null is the whole week, structure included. */
+async function fillFrom(
+  weekId: string,
+  only: Set<string> | null,
+  fields: PlanField[],
+  scope: "next" | "later",
+): Promise<FillResult | null> {
+  const source = await prisma.week.findUnique({
+    where: { id: weekId },
+    include: {
+      block: { select: { athlete: { select: { unit: true } } } },
+      days: { include: { rows: { orderBy: { order: "asc" } } } },
+    },
+  });
+  if (!source) return null;
+  const whole = only === null;
+  const later = await prisma.week.findMany({
+    where: { blockId: source.blockId, order: { gt: source.order } },
+    orderBy: { order: "asc" },
+    include: { days: { include: { rows: true } } },
+  });
+  const reach = scope === "next" ? later.filter((w) => w.order === source.order + 1) : later;
+  const open = reach.filter((w) => !w.locked);
+  const result: FillResult = { blockId: source.blockId, snapshot: [], filled: 0, skipped: reach.length - open.length };
+  if (open.length === 0) return result;
+  result.snapshot = await prisma.week.findMany({ where: { id: { in: open.map((w) => w.id) } }, include: WEEK_TREE });
+
+  // A row's rules sit on the nearest row up its chain that carries any; weeks count from there.
+  const chain = await prisma.exerciseRow.findMany({
+    where: { day: { week: { blockId: source.blockId } } },
+    select: { id: true, fromId: true, rules: true, day: { select: { week: { select: { order: true } } } } },
+  });
+  const byId = new Map(chain.map((r) => [r.id, r]));
+  const rulesOf = (rowId: string) => {
+    const seen = new Set<string>();
+    for (let r = byId.get(rowId); r && !seen.has(r.id); r = r.fromId ? byId.get(r.fromId) : undefined) {
+      seen.add(r.id);
+      if (r.rules.length > 0) return { rules: r.rules, head: r.day.week.order };
+    }
+    return { rules: [], head: source.order };
+  };
+
+  const unit = source.block.athlete.unit;
+  const isAttempt = (exercise: string) => ATTEMPT_PATTERN.test(exercise);
+
+  await prisma.$transaction(async (tx) => {
+    for (const week of open) {
+      for (const sDay of source.days) {
+        const sources = sDay.rows.filter((r) => !isAttempt(r.exercise) && (whole || only.has(r.id)));
+        if (sources.length === 0 && !whole) continue;
+
+        let tDay = week.days.find((d) => d.index === sDay.index);
+        if (!tDay) {
+          const made = await tx.day.create({ data: { weekId: week.id, index: sDay.index, label: sDay.label, rest: sDay.rest } });
+          tDay = { ...made, rows: [] };
+        } else if (whole && (tDay.label !== sDay.label || tDay.rest !== sDay.rest)) {
+          await tx.day.update({ where: { id: tDay.id }, data: { label: sDay.label, rest: sDay.rest } });
+        }
+
+        if (whole) {
+          // Rows the source no longer has go, so their slots are free.
+          const keep = new Set(sources.map((r) => r.order));
+          for (const r of tDay.rows) {
+            if (!keep.has(r.order) && !isAttempt(r.exercise)) await tx.exerciseRow.delete({ where: { id: r.id } });
+          }
+        }
+
+        for (const s of sources) {
+          const target = tDay.rows.find((r) => r.order === s.order);
+          if (target && isAttempt(target.exercise)) continue;
+          const { rules, head } = rulesOf(s.id);
+          const moved: Record<string, unknown> = advance(s, rules, source.order - head + 1, week.order - head + 1, unit);
+          const data: Record<string, unknown> = {};
+          for (const f of fields) {
+            const value = f in moved ? moved[f] : s[f];
+            if (!target || target[f] !== value) data[f] = value;
+          }
+          if (target) {
+            if (Object.keys(data).length > 0) await tx.exerciseRow.update({ where: { id: target.id }, data });
+          } else {
+            const base = Object.fromEntries(PLAN_FIELDS.map((f) => [f, s[f]]));
+            await tx.exerciseRow.create({
+              data: { ...base, ...data, dayId: tDay.id, order: s.order } as Parameters<typeof tx.exerciseRow.create>[0]["data"],
+            });
+          }
+          result.filled++;
+        }
+      }
+    }
+  });
+
+  await relinkChain(source.blockId);
+  revalidatePath("/programming");
+  return result;
+}
+
 /**
  * Locks or unlocks a week. A locked week is left alone by progression rules. Unlocking
  * it re-applies progressions, so it catches back up with whatever it missed.
@@ -1264,7 +1429,7 @@ export async function restoreWeek(blockId: string, { week, rules }: WeekSnapshot
 export async function setWeekLock(weekId: string, locked: boolean) {
   assertCoach();
   const week = await prisma.week.update({ where: { id: weekId }, data: { locked } });
-  if (!locked) await applyAllProgressions(week.blockId);
+  if (!locked && (await rulesRunThemselves())) await applyAllProgressions(week.blockId);
   revalidatePath("/programming");
 }
 
@@ -1616,7 +1781,9 @@ const RULED: Record<ProgField, readonly (typeof PLAN_FIELDS)[number][]> = {
 async function syncWeeks(weekId: string) {
   const settings = await loadSettings();
   if (!settings.syncWeeks) {
-    // The weeks aren't copied across, but rules still carry an edit to week 1 forward.
+    // The weeks aren't copied across, but rules still carry an edit to week 1 forward —
+    // unless the coach fills weeks forward by hand.
+    if (!settings.autoRules) return;
     const week = await prisma.week.findUnique({ where: { id: weekId }, select: { blockId: true } });
     const writes = week ? await progressionWrites(week.blockId) : [];
     if (writes.length > 0) await prisma.$transaction(writes);
@@ -1695,6 +1862,7 @@ async function syncWeeks(weekId: string) {
   });
 
   await relinkChain(source.blockId);
+  if (!settings.autoRules) return;
   // Rule-driven fields were left alone above; this writes them from the rules again.
   const writes = await progressionWrites(source.blockId);
   if (writes.length > 0) await prisma.$transaction(writes);

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { Prisma } from "@prisma/client";
 import { parseProgramFile, toProgramFile, type ProgramRow } from "@/lib/program-file";
 
 const row = (order: number, exercise: string, sets: number | null, rules: ProgramRow["rules"] = []): ProgramRow => ({
@@ -82,6 +83,22 @@ describe("program file", () => {
   test("round trip loses nothing", () => {
     const once = toProgramFile(program);
     assert.deepEqual(parseProgramFile(JSON.stringify(once)), once);
+  });
+
+  test("every row field read from a file is a column the import can write", () => {
+    // importProgram spreads the parsed row straight into the create, so a field the
+    // table lacks fails every import.
+    const columns = new Set<string>(Object.values(Prisma.ExerciseRowScalarFieldEnum));
+    const file = JSON.parse(JSON.stringify(toProgramFile(program)));
+    file.phases[0].weeks[0].days[0].rows[0].session = "AM"; // older exports carried this
+    const rows = parseProgramFile(JSON.stringify(file)).phases.flatMap((p) =>
+      p.weeks.flatMap((w) => w.days.flatMap((d) => d.rows)),
+    );
+    for (const row of rows) {
+      for (const key of Object.keys(row).filter((k) => k !== "rules")) {
+        assert.ok(columns.has(key), `${key} is not an ExerciseRow column`);
+      }
+    }
   });
 
   test("rules stay on the row they were written on", () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { applications, describeRule, project, type BaseValues, type Rule } from "@/lib/progression";
+import { advance, applications, describeRule, project, type BaseValues, type Rule } from "@/lib/progression";
 
 function rule(patch: Partial<Rule>): Rule {
   return {
@@ -176,5 +176,45 @@ describe("rep ranges", () => {
     const p = project(ranged, [rule({ field: "REPS", amount: 1 })], 3, "KG");
     assert.equal(p.reps, 10);
     assert.equal(p.repsMax, 12);
+  });
+});
+
+describe("advance", () => {
+  const rpe: BaseValues = { sets: 1, reps: 5, intensity: 7.5, intensityMax: null, intensityType: "RPE" };
+  const plusHalf = rule({ field: "INTENSITY", amount: 0.5 });
+
+  test("steps from the week's own value, so a hand edit carries on", () => {
+    // Week 2 was typed as 8.5 instead of the rule's 8: week 3 follows the edit.
+    assert.equal(advance({ ...rpe, intensity: 8.5 }, [plusHalf], 2, 3, "KG").intensity, 9);
+    assert.equal(advance({ ...rpe, intensity: 8.5 }, [plusHalf], 2, 4, "KG").intensity, 9.5);
+  });
+
+  test("matches project when nothing was edited", () => {
+    const week2 = project(rpe, [plusHalf], 2, "KG");
+    assert.equal(advance({ ...rpe, ...week2 }, [plusHalf], 2, 4, "KG").intensity, project(rpe, [plusHalf], 4, "KG").intensity);
+  });
+
+  test("fires only where the rule's window and cadence say", () => {
+    const everyOther = rule({ field: "SETS", amount: 1, everyWeeks: 2 });
+    assert.equal(advance(base, [everyOther], 2, 3, "KG").sets, 3); // fired in week 2, next in week 4
+    assert.equal(advance(base, [everyOther], 3, 4, "KG").sets, 4);
+    const window = rule({ field: "SETS", amount: 1, startWeek: 2, endWeek: 3 });
+    assert.equal(advance(base, [window], 1, 2, "KG").sets, 4);
+    assert.equal(advance(base, [window], 3, 4, "KG").sets, 3); // ended
+  });
+
+  test("multiplies from the week's value", () => {
+    const deload = rule({ field: "SETS", op: "MULTIPLY", amount: 0.5 });
+    assert.equal(advance({ ...base, sets: 4 }, [deload], 2, 3, "KG").sets, 2);
+  });
+
+  test("a field with no rule is carried over as it is", () => {
+    const p = advance({ ...base, sets: 5, intensity: 140 }, [plusHalf], 1, 2, "KG");
+    assert.equal(p.sets, 5);
+    assert.equal(p.reps, 5);
+  });
+
+  test("a disabled rule does nothing", () => {
+    assert.equal(advance(rpe, [{ ...plusHalf, enabled: false }], 1, 2, "KG").intensity, 7.5);
   });
 });

@@ -66,6 +66,16 @@ export type ProjectedValues = {
 
 /** Applies every enabled rule, in order, to the base week's values. */
 export function project(base: BaseValues, rules: Rule[], week: number, unit: Unit): ProjectedValues {
+  // No rule fires before week 1, so projecting is advancing from nothing.
+  return advance(base, rules, 0, week, unit);
+}
+
+/**
+ * Carries one week's values on to a later week: each rule fires as often between the two
+ * as its window and cadence say, stepping from what `base` holds now rather than from the
+ * head — a hand edit in week 2 travels on to week 3. Weeks count from the chain's head.
+ */
+export function advance(base: BaseValues, rules: Rule[], fromWeek: number, toWeek: number, unit: Unit): ProjectedValues {
   let sets = base.sets;
   let reps = base.reps;
   let intensity = base.intensity;
@@ -74,7 +84,7 @@ export function project(base: BaseValues, rules: Rule[], week: number, unit: Uni
 
   for (const rule of [...rules].sort((a, b) => a.order - b.order)) {
     if (!rule.enabled) continue;
-    const times = applications(rule, week);
+    const times = applications(rule, toWeek) - applications(rule, fromWeek);
     if (times === 0) continue;
 
     if (rule.field === "SETS" && sets !== null) {

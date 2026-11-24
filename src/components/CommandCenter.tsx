@@ -197,6 +197,22 @@ export function CommandCenter() {
         keywords: "personal record best",
         run: () => update({ pr: { ...settings.pr, highlight: !settings.pr.highlight } }),
       },
+      {
+        id: "sync-weeks",
+        group: "Settings",
+        title: settings.syncWeeks ? t("Stop carrying edits into later weeks") : t("Carry edits into later weeks"),
+        keywords: "sync copy weeks propagate auto update",
+        run: () => update({ syncWeeks: !settings.syncWeeks }),
+      },
+      {
+        id: "auto-rules",
+        group: "Settings",
+        title: settings.autoRules
+          ? t("Stop applying progression rules automatically")
+          : t("Apply progression rules automatically"),
+        keywords: "progression rules auto update weeks fill forward",
+        run: () => update({ autoRules: !settings.autoRules }),
+      },
       ...LANGUAGES.filter((l) => l.id !== settings.language).map(
         (l): Command => ({
           id: `language-${l.id}`,
