@@ -9,7 +9,12 @@ const nextConfig: NextConfig = {
   output: "standalone",
   // A tab the athlete just visited answers from the phone for 30 s instead of a server
   // round trip. Writes drop it (`WriteSync`); the coach app's actions revalidate their pages.
-  experimental: { staleTimes: { dynamic: 30 } },
+  experimental: {
+    staleTimes: { dynamic: 30 },
+    // Local builds (the desktop app) run beside the coach's other programs: one worker per
+    // core for page data ran a 32 GB machine out of memory. Vercel builds keep every core.
+    cpus: process.env.VERCEL ? undefined : 4,
+  },
   // Native modules — they must be required at runtime, not bundled.
   serverExternalPackages: [
     "better-sqlite3",
